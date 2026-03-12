@@ -469,4 +469,58 @@ mod tests {
             build_with_sancov(Path::new("/nonexistent/path"), None, Some(shim.as_path())).await;
         assert!(result.is_err());
     }
+
+    // ------------------------------------------------------------------
+    // build_with_sancov — bin_name Some + shim path (covers both branches)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn build_with_sancov_bin_name_and_shim_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shim = tmp.path().join("libapex_cov.a");
+        std::fs::write(&shim, b"fake").unwrap();
+        let result = build_with_sancov(
+            Path::new("/nonexistent/path"),
+            Some("my_bin"),
+            Some(shim.as_path()),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — with_runner variant also always Ok
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_with_runner_always_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let mock = MockCmd::new();
+        // No expectations — run_command must NOT be called for Rust
+        let runner = RustRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — stderr captured correctly
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_stderr_captured() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command().times(1).returning(|_| {
+            Ok(CommandOutput {
+                exit_code: 0,
+                stdout: b"".to_vec(),
+                stderr: b"warning: unused variable".to_vec(),
+            })
+        });
+
+        let runner = RustRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert!(result.stderr.contains("unused variable"));
+    }
 }

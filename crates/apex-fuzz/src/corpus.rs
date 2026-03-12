@@ -399,6 +399,109 @@ mod tests {
     }
 
     #[test]
+    fn power_schedule_eq_and_copy() {
+        let a = PowerSchedule::Explore;
+        let b = a; // Copy
+        assert_eq!(a, b);
+        assert_ne!(PowerSchedule::Explore, PowerSchedule::Fast);
+        assert_ne!(PowerSchedule::Fast, PowerSchedule::Rare);
+    }
+
+    #[test]
+    fn power_schedule_debug() {
+        let debug = format!("{:?}", PowerSchedule::Rare);
+        assert_eq!(debug, "Rare");
+    }
+
+    #[test]
+    fn explore_schedule_sets_uniform_energy() {
+        let mut c = Corpus::new(10);
+        c.add(vec![1], 5);
+        c.add(vec![2], 1);
+        c.set_power_schedule(PowerSchedule::Explore);
+        // All entries should have energy 1.0
+        for e in c.entries.iter() {
+            assert!((e.energy - 1.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn rare_schedule_empty_covered_edges_gets_one() {
+        let mut c = Corpus::new(10);
+        c.add(vec![1], 1); // no covered_edges
+        c.set_power_schedule(PowerSchedule::Rare);
+        assert!((c.entries[0].energy - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn corpus_entry_distance_to_target_default_none() {
+        let mut c = Corpus::new(10);
+        c.add(vec![1], 1);
+        assert!(c.entries[0].distance_to_target.is_none());
+    }
+
+    #[test]
+    fn minimize_entries_with_no_edges() {
+        let mut c = Corpus::new(10);
+        c.add(vec![1], 1); // no covered_edges
+        c.add(vec![2], 1); // no covered_edges
+        let minimized = c.minimize();
+        // No edges to cover, so result should be empty
+        assert!(minimized.is_empty());
+    }
+
+    #[test]
+    fn minimize_preserves_schedule() {
+        let mut c = Corpus::new(100);
+        c.set_power_schedule(PowerSchedule::Fast);
+        c.entries.push_back(CorpusEntry {
+            data: vec![0],
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 0,
+            covered_edges: vec![1],
+            distance_to_target: None,
+        });
+        let minimized = c.minimize();
+        assert_eq!(minimized.schedule, PowerSchedule::Fast);
+    }
+
+    #[test]
+    fn sample_increments_fuzz_count() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+        let mut c = Corpus::new(10);
+        c.add(vec![0xAA], 1);
+        let _ = c.sample(&mut rng);
+        assert_eq!(c.entries[0].fuzz_count, 1);
+        let _ = c.sample(&mut rng);
+        assert_eq!(c.entries[0].fuzz_count, 2);
+    }
+
+    #[test]
+    fn fast_schedule_smaller_input_higher_energy() {
+        let mut c = Corpus::new(10);
+        c.entries.push_back(CorpusEntry {
+            data: vec![1], // len=1
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 1,
+            covered_edges: vec![],
+            distance_to_target: None,
+        });
+        c.entries.push_back(CorpusEntry {
+            data: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], // len=10
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 1,
+            covered_edges: vec![],
+            distance_to_target: None,
+        });
+        c.set_power_schedule(PowerSchedule::Fast);
+        // Smaller input should have higher energy
+        assert!(c.entries[0].energy > c.entries[1].energy);
+    }
+
+    #[test]
     fn minimize_covers_all_edges() {
         let mut c = Corpus::new(100);
         c.entries.push_back(CorpusEntry {
@@ -436,5 +539,102 @@ mod tests {
         for edge in 1..=5u64 {
             assert!(all_edges.contains(&edge), "missing edge {edge}");
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn sample_pair_both_results_are_from_corpus() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(77);
+        let mut c = Corpus::new(10);
+        c.add(vec![0xAA], 1);
+        c.add(vec![0xBB], 1);
+        c.add(vec![0xCC], 1);
+        for _ in 0..50 {
+            let (a, b) = c.sample_pair(&mut rng).unwrap();
+            // Both should be from the known set of entries
+            assert!(a.data == vec![0xAA] || a.data == vec![0xBB] || a.data == vec![0xCC]);
+            assert!(b.data == vec![0xAA] || b.data == vec![0xBB] || b.data == vec![0xCC]);
+        }
+    }
+
+    #[test]
+    fn corpus_max_size_exactly_reached() {
+        let mut c = Corpus::new(2);
+        c.add(vec![1], 1);
+        c.add(vec![2], 1);
+        assert_eq!(c.len(), 2);
+        // Adding one more evicts the oldest
+        c.add(vec![3], 1);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c.entries.front().unwrap().data, vec![2]);
+        assert_eq!(c.entries.back().unwrap().data, vec![3]);
+    }
+
+    #[test]
+    fn rare_schedule_two_entries_more_edges_wins() {
+        let mut c = Corpus::new(10);
+        // Entry 0: covers two edges each seen once => energy = 1/1 + 1/1 = 2.0
+        c.entries.push_back(CorpusEntry {
+            data: vec![1],
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 0,
+            covered_edges: vec![1, 2],
+            distance_to_target: None,
+        });
+        // Entry 1: covers one unique edge => energy = 1/1 = 1.0
+        c.entries.push_back(CorpusEntry {
+            data: vec![2],
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 0,
+            covered_edges: vec![3],
+            distance_to_target: None,
+        });
+        c.set_power_schedule(PowerSchedule::Rare);
+        // Entry 0 covers more edges, so its energy is higher
+        assert!(c.entries[0].energy > c.entries[1].energy);
+    }
+
+    #[test]
+    fn fast_schedule_high_fuzz_count_has_lower_energy_than_low() {
+        let mut c = Corpus::new(10);
+        c.entries.push_back(CorpusEntry {
+            data: vec![1],
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 1000,
+            covered_edges: vec![],
+            distance_to_target: None,
+        });
+        c.entries.push_back(CorpusEntry {
+            data: vec![2],
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 1,
+            covered_edges: vec![],
+            distance_to_target: None,
+        });
+        c.set_power_schedule(PowerSchedule::Fast);
+        assert!(c.entries[1].energy > c.entries[0].energy);
+    }
+
+    #[test]
+    fn corpus_entry_covered_edges_can_be_set() {
+        let mut c = Corpus::new(10);
+        c.add(vec![1], 1);
+        c.entries[0].covered_edges = vec![100, 200, 300];
+        assert_eq!(c.entries[0].covered_edges.len(), 3);
+    }
+
+    #[test]
+    fn corpus_entry_distance_can_be_set() {
+        let mut c = Corpus::new(10);
+        c.add(vec![1], 1);
+        c.entries[0].distance_to_target = Some(3.14);
+        assert!((c.entries[0].distance_to_target.unwrap() - 3.14).abs() < 1e-9);
     }
 }

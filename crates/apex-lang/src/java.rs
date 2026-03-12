@@ -334,4 +334,293 @@ mod tests {
             .unwrap();
         assert_eq!(result.exit_code, 0);
     }
+
+    // ------------------------------------------------------------------
+    // default() constructor
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn default_creates_runner() {
+        let runner = JavaRunner::default();
+        assert_eq!(runner.language(), Language::Java);
+    }
+
+    // ------------------------------------------------------------------
+    // detect — nonexistent dir
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn detect_nonexistent_dir_returns_false() {
+        let runner = JavaRunner::new();
+        assert!(!runner.detect(Path::new("/nonexistent/path/that/does/not/exist")));
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — gradle nonzero exit is just a warning
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_gradle_nonzero_exit_still_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "./gradlew")
+            .times(1)
+            .returning(|_| Ok(CommandOutput::failure(1, b"BUILD FAILED".to_vec())));
+
+        let runner = JavaRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_ok(), "nonzero gradle exit should be a warning");
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — gradle kts variant
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_gradle_kts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle.kts"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "./gradlew")
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let runner = JavaRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — gradle with extra args
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_gradle_with_extra_args() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| {
+                spec.program == "./gradlew"
+                    && spec.args.contains(&"test".to_string())
+                    && spec.args.iter().any(|a| a == "--info")
+            })
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let runner = JavaRunner::with_runner(mock);
+        let result = runner
+            .run_tests(dir.path(), &["--info".into()])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — duration is populated
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_duration_populated() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let runner = JavaRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert!(result.duration_ms < u64::MAX);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — gradle kts uses gradle path
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_gradle_kts_uses_gradlew() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle.kts"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "./gradlew" && spec.args.contains(&"test".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let runner = JavaRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — maven nonzero exit is not an Err
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_maven_nonzero_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pom.xml"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command().times(1).returning(|_| {
+            Ok(CommandOutput::failure(1, b"BUILD FAILURE".to_vec()))
+        });
+
+        let runner = JavaRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 1);
+    }
+
+    // ------------------------------------------------------------------
+    // detect — only unrelated files
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn detect_unrelated_files_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.py"), "").unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+        assert!(!JavaRunner::new().detect(dir.path()));
+    }
+
+    // ------------------------------------------------------------------
+    // detect — multiple markers
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn detect_pom_and_gradle() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pom.xml"), "").unwrap();
+        std::fs::write(dir.path().join("build.gradle"), "").unwrap();
+        assert!(JavaRunner::new().detect(dir.path()));
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — maven spawn error
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_maven_command_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pom.xml"), "<project/>").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "mvn")
+            .times(1)
+            .returning(|_| {
+                Err(ApexError::Subprocess {
+                    exit_code: -1,
+                    stderr: "spawn mvn: No such file or directory".into(),
+                })
+            });
+
+        let runner = JavaRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("spawn mvn"), "unexpected: {msg}");
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — maven with extra args passes them
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_maven_with_extra_args() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pom.xml"), "<project/>").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| {
+                spec.program == "mvn"
+                    && spec.args.contains(&"test".to_string())
+                    && spec.args.iter().any(|a| a == "-Dtest=FooTest")
+            })
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"BUILD SUCCESS".to_vec())));
+
+        let runner = JavaRunner::with_runner(mock);
+        let result = runner
+            .run_tests(dir.path(), &["-Dtest=FooTest".into()])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — gradle spawn error
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_gradle_command_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "./gradlew")
+            .times(1)
+            .returning(|_| {
+                Err(ApexError::Subprocess {
+                    exit_code: -1,
+                    stderr: "spawn ./gradlew: not found".into(),
+                })
+            });
+
+        let runner = JavaRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await;
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("run tests"), "unexpected: {msg}");
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — duration is populated (maven path)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_duration_populated_maven() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let runner = JavaRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert!(result.duration_ms < u64::MAX);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — stderr captured correctly
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_stderr_captured() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command().times(1).returning(|_| {
+            Ok(CommandOutput {
+                exit_code: 0,
+                stdout: b"BUILD SUCCESS".to_vec(),
+                stderr: b"[WARNING] deprecated API".to_vec(),
+            })
+        });
+
+        let runner = JavaRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert!(result.stderr.contains("deprecated API"));
+    }
 }

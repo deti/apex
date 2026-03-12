@@ -167,4 +167,91 @@ clippy_extra_args = ["-W", "clippy::pedantic"]
         assert_eq!(cfg.enabled.len(), 6);
         assert_eq!(cfg.severity_threshold, "low");
     }
+
+    #[test]
+    fn sanitizer_config_defaults() {
+        let sc = SanitizerConfig::default();
+        assert_eq!(sc.replay_top_percent, 1);
+        assert_eq!(sc.sanitizers, vec!["address", "undefined"]);
+    }
+
+    #[test]
+    fn llm_config_defaults() {
+        let lc = LlmConfig::default();
+        assert!(!lc.enabled);
+        assert_eq!(lc.batch_size, 10);
+        assert_eq!(lc.model, "claude-sonnet-4-6");
+    }
+
+    #[test]
+    fn diff_config_defaults() {
+        let dc = DiffConfig::default();
+        assert_eq!(dc.base_ref, "");
+    }
+
+    #[test]
+    fn static_analysis_config_defaults() {
+        let sac = StaticAnalysisConfig::default();
+        assert!(sac.clippy_extra_args.is_empty());
+        assert!(sac.sarif_paths.is_empty());
+    }
+
+    #[test]
+    fn property_config_serializes() {
+        let pc = PropertyConfig {
+            name: "no-panic".into(),
+            check: "assert!(true)".into(),
+            target: "src/lib.rs".into(),
+        };
+        let json = serde_json::to_string(&pc).unwrap();
+        assert!(json.contains("no-panic"));
+    }
+
+    #[test]
+    fn detect_config_with_properties() {
+        let toml_str = r#"
+enabled = ["panic"]
+
+[[properties]]
+name = "no-panic"
+check = "assert_no_panic()"
+target = "src/lib.rs"
+
+[[properties]]
+name = "idempotent"
+check = "assert_idempotent()"
+target = "src/api.rs"
+"#;
+        let cfg: DetectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.properties.len(), 2);
+        assert_eq!(cfg.properties[0].name, "no-panic");
+        assert_eq!(cfg.properties[1].target, "src/api.rs");
+    }
+
+    #[test]
+    fn detect_config_with_llm_and_diff() {
+        let toml_str = r#"
+[llm]
+enabled = true
+batch_size = 20
+model = "gpt-4"
+
+[diff]
+base_ref = "main"
+"#;
+        let cfg: DetectConfig = toml::from_str(toml_str).unwrap();
+        assert!(cfg.llm.enabled);
+        assert_eq!(cfg.llm.batch_size, 20);
+        assert_eq!(cfg.llm.model, "gpt-4");
+        assert_eq!(cfg.diff.base_ref, "main");
+    }
+
+    #[test]
+    fn detect_config_serializes_roundtrip() {
+        let cfg = DetectConfig::default();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let cfg2: DetectConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(cfg2.enabled.len(), 6);
+        assert_eq!(cfg2.severity_threshold, "low");
+    }
 }

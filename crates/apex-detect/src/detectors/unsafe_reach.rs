@@ -140,4 +140,81 @@ mod tests {
     fn uses_cargo_subprocess_returns_true() {
         assert!(UnsafeReachabilityDetector.uses_cargo_subprocess());
     }
+
+    #[test]
+    fn parse_geiger_invalid_json() {
+        let result = parse_geiger_output("not json", "pkg");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_geiger_no_packages_key() {
+        let json = r#"{"status": "ok"}"#;
+        let findings = parse_geiger_output(json, "pkg").unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn parse_geiger_skips_non_matching_package() {
+        let json = r#"{
+            "packages": [{
+                "package": {"name": "other-lib", "version": "1.0.0"},
+                "unsafety": {
+                    "used": {"functions": {"unsafe_": 5}, "exprs": {"unsafe_": 3}},
+                    "unused": {"functions": {"unsafe_": 0}, "exprs": {"unsafe_": 0}}
+                }
+            }]
+        }"#;
+        let findings = parse_geiger_output(json, "mylib").unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn parse_geiger_empty_target_pkg_includes_all() {
+        let json = r#"{
+            "packages": [{
+                "package": {"name": "any-lib", "version": "1.0.0"},
+                "unsafety": {
+                    "used": {"functions": {"unsafe_": 1}, "exprs": {"unsafe_": 0}},
+                    "unused": {"functions": {"unsafe_": 0}, "exprs": {"unsafe_": 0}}
+                }
+            }]
+        }"#;
+        // Empty target_pkg: !name.eq_ignore_ascii_case("") is true, but !target_pkg.is_empty() is false
+        // So the skip condition is false → package is included
+        let findings = parse_geiger_output(json, "").unwrap();
+        assert_eq!(findings.len(), 1);
+    }
+
+    #[test]
+    fn parse_geiger_only_unsafe_exprs() {
+        let json = r#"{
+            "packages": [{
+                "package": {"name": "mylib", "version": "0.1.0"},
+                "unsafety": {
+                    "used": {"functions": {"unsafe_": 0}, "exprs": {"unsafe_": 3}},
+                    "unused": {"functions": {"unsafe_": 0}, "exprs": {"unsafe_": 0}}
+                }
+            }]
+        }"#;
+        let findings = parse_geiger_output(json, "mylib").unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].title.contains("0 unsafe fn(s)"));
+        assert!(findings[0].title.contains("3 unsafe expr(s)"));
+    }
+
+    #[test]
+    fn parse_geiger_case_insensitive_match() {
+        let json = r#"{
+            "packages": [{
+                "package": {"name": "MyLib", "version": "1.0.0"},
+                "unsafety": {
+                    "used": {"functions": {"unsafe_": 1}, "exprs": {"unsafe_": 0}},
+                    "unused": {"functions": {"unsafe_": 0}, "exprs": {"unsafe_": 0}}
+                }
+            }]
+        }"#;
+        let findings = parse_geiger_output(json, "mylib").unwrap();
+        assert_eq!(findings.len(), 1);
+    }
 }

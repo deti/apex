@@ -409,4 +409,325 @@ mod tests {
             .unwrap();
         assert_eq!(result.exit_code, 0);
     }
+
+    // ------------------------------------------------------------------
+    // default() constructor
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn default_creates_runner() {
+        let runner = JavaScriptRunner::default();
+        assert_eq!(runner.language(), Language::JavaScript);
+    }
+
+    // ------------------------------------------------------------------
+    // detect_test_runner — no package.json at all (String::new() path)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn detect_test_runner_no_package_json() {
+        let dir = tempfile::tempdir().unwrap();
+        // No package.json, so pkg_content will be String::new()
+        let (bin, args) = JavaScriptRunner::<RealCommandRunner>::detect_test_runner(dir.path());
+        // Falls through to default: npx jest --passWithNoTests
+        assert_eq!(bin, "npx");
+        assert_eq!(args, vec!["jest", "--passWithNoTests"]);
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — pnpm variant
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_pnpm_success() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        std::fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "pnpm" && spec.args.contains(&"install".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"done".to_vec())));
+
+        let runner = JavaScriptRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — command spawn error
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_command_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command().times(1).returning(|_| {
+            Err(ApexError::Subprocess {
+                exit_code: -1,
+                stderr: "spawn npm: not found".into(),
+            })
+        });
+
+        let runner = JavaScriptRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("install"), "unexpected: {msg}");
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — duration is populated
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_duration_populated() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let runner = JavaScriptRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert!(result.duration_ms < u64::MAX);
+    }
+
+    // ------------------------------------------------------------------
+    // detect — nonexistent dir
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn detect_nonexistent_dir_returns_false() {
+        let runner = JavaScriptRunner::new();
+        assert!(!runner.detect(Path::new("/nonexistent/path/that/does/not/exist")));
+    }
+
+    // ------------------------------------------------------------------
+    // detect_test_runner — jest takes priority over mocha
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn detect_test_runner_jest_over_mocha() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"devDependencies": {"jest": "^29", "mocha": "^10"}}"#,
+        )
+        .unwrap();
+        let (bin, args) = JavaScriptRunner::<RealCommandRunner>::detect_test_runner(dir.path());
+        assert_eq!(bin, "npx");
+        assert_eq!(args[0], "jest");
+    }
+
+    // ------------------------------------------------------------------
+    // detect_test_runner — mocha takes priority over vitest
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn detect_test_runner_mocha_over_vitest() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"devDependencies": {"mocha": "^10", "vitest": "^1"}}"#,
+        )
+        .unwrap();
+        let (bin, args) = JavaScriptRunner::<RealCommandRunner>::detect_test_runner(dir.path());
+        assert_eq!(bin, "npx");
+        assert_eq!(args[0], "mocha");
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — picks up test runner from package.json
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_uses_mocha_when_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"devDependencies": {"mocha": "^10"}}"#,
+        )
+        .unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "npx" && spec.args.contains(&"mocha".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"2 passing".to_vec())));
+
+        let runner = JavaScriptRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — npm test script path
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_uses_npm_test_when_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"scripts": {"test": "node test.js"}}"#,
+        )
+        .unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "npm" && spec.args.contains(&"test".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"pass".to_vec())));
+
+        let runner = JavaScriptRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — vitest path
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_uses_vitest_when_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"devDependencies": {"vitest": "^1"}}"#,
+        )
+        .unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| {
+                spec.program == "npx"
+                    && spec.args.contains(&"vitest".to_string())
+                    && spec.args.contains(&"run".to_string())
+            })
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"pass".to_vec())));
+
+        let runner = JavaScriptRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — yarn command error (spawn fails)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_yarn_command_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        std::fs::write(dir.path().join("yarn.lock"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "yarn")
+            .times(1)
+            .returning(|_| {
+                Err(ApexError::Subprocess {
+                    exit_code: -1,
+                    stderr: "spawn yarn: not found".into(),
+                })
+            });
+
+        let runner = JavaScriptRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("install"), "unexpected: {msg}");
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — pnpm command error (spawn fails)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_pnpm_command_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        std::fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "pnpm")
+            .times(1)
+            .returning(|_| {
+                Err(ApexError::Subprocess {
+                    exit_code: -1,
+                    stderr: "spawn pnpm: not found".into(),
+                })
+            });
+
+        let runner = JavaScriptRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — pnpm nonzero exit → Err
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_pnpm_nonzero_exit_is_err() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        std::fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "pnpm")
+            .times(1)
+            .returning(|_| Ok(CommandOutput::failure(1, b"ERR_PNPM_META_FETCH_FAIL".to_vec())));
+
+        let runner = JavaScriptRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("install failed"), "unexpected: {msg}");
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — yarn nonzero exit → Err
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_yarn_nonzero_exit_is_err() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        std::fs::write(dir.path().join("yarn.lock"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "yarn")
+            .times(1)
+            .returning(|_| Ok(CommandOutput::failure(1, b"error Couldn't find package".to_vec())));
+
+        let runner = JavaScriptRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("install failed"), "unexpected: {msg}");
+    }
+
+    // ------------------------------------------------------------------
+    // detect_test_runner — package.json read error falls back to String::new()
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn detect_test_runner_package_json_exists_but_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), "").unwrap();
+        // Empty file → no jest/mocha/vitest/scripts found → default fallback
+        let (bin, args) = JavaScriptRunner::<RealCommandRunner>::detect_test_runner(dir.path());
+        assert_eq!(bin, "npx");
+        assert_eq!(args[0], "jest");
+    }
 }

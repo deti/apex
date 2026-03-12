@@ -129,4 +129,101 @@ mod tests {
         assert!(json.contains("\"critical\":1"));
         assert!(json.contains("\"top_risk\""));
     }
+
+    #[test]
+    fn security_summary_top_risk_selects_highest_severity() {
+        let report = AnalysisReport {
+            findings: vec![
+                {
+                    let mut f = make_finding(Severity::Medium);
+                    f.file = PathBuf::from("src/a.rs");
+                    f.title = "medium issue".into();
+                    f
+                },
+                {
+                    let mut f = make_finding(Severity::Critical);
+                    f.file = PathBuf::from("src/b.rs");
+                    f.title = "critical issue".into();
+                    f
+                },
+                {
+                    let mut f = make_finding(Severity::High);
+                    f.file = PathBuf::from("src/c.rs");
+                    f.title = "high issue".into();
+                    f
+                },
+            ],
+            detector_status: vec![("test".into(), true)],
+        };
+        let summary = report.security_summary();
+        assert!(summary.top_risk.is_some());
+        let risk = summary.top_risk.unwrap();
+        assert!(risk.contains("critical issue"));
+    }
+
+    #[test]
+    fn security_summary_info_only_has_no_top_risk() {
+        let report = AnalysisReport {
+            findings: vec![make_finding(Severity::Info)],
+            detector_status: vec![("test".into(), true)],
+        };
+        let summary = report.security_summary();
+        assert_eq!(summary.critical, 0);
+        assert_eq!(summary.high, 0);
+        assert_eq!(summary.medium, 0);
+        assert_eq!(summary.low, 0);
+        assert!(summary.top_risk.is_none());
+    }
+
+    #[test]
+    fn security_summary_detectors_run_list() {
+        let report = AnalysisReport {
+            findings: vec![],
+            detector_status: vec![
+                ("panic".into(), true),
+                ("deps".into(), false),
+                ("unsafe".into(), true),
+            ],
+        };
+        let summary = report.security_summary();
+        assert_eq!(summary.detectors_run.len(), 3);
+        assert_eq!(summary.detectors_run[0], "panic");
+        assert_eq!(summary.detectors_run[1], "deps");
+        assert_eq!(summary.detectors_run[2], "unsafe");
+    }
+
+    #[test]
+    fn security_summary_top_risk_prefers_uncovered() {
+        let mut f1 = make_finding(Severity::Critical);
+        f1.covered = true;
+        f1.file = PathBuf::from("src/a.rs");
+        f1.title = "covered critical".into();
+
+        let mut f2 = make_finding(Severity::Critical);
+        f2.covered = false;
+        f2.file = PathBuf::from("src/b.rs");
+        f2.title = "uncovered critical".into();
+
+        let report = AnalysisReport {
+            findings: vec![f1, f2],
+            detector_status: vec![],
+        };
+        let summary = report.security_summary();
+        let risk = summary.top_risk.unwrap();
+        // min_by_key sorts by (severity.rank(), covered as u8)
+        // covered=false → 0, covered=true → 1, so uncovered comes first
+        assert!(risk.contains("uncovered critical"));
+    }
+
+    #[test]
+    fn analysis_report_serde_roundtrip() {
+        let report = AnalysisReport {
+            findings: vec![make_finding(Severity::High)],
+            detector_status: vec![("test".into(), true)],
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        let report2: AnalysisReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(report2.findings.len(), 1);
+        assert_eq!(report2.detector_status.len(), 1);
+    }
 }

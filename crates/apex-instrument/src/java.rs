@@ -697,4 +697,209 @@ mod tests {
         let result = inst.instrument(&target).await.unwrap();
         assert_eq!(result.branch_ids.len(), 10);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_attr_with_special_characters() {
+        assert_eq!(
+            attr(r#"package name="com/example/inner"/>"#, "name"),
+            Some("com/example/inner")
+        );
+    }
+
+    #[test]
+    fn test_attr_multiple_attributes() {
+        let tag = r#"line nr="10" mi="0" ci="5" mb="1" cb="3"/>"#;
+        assert_eq!(attr(tag, "nr"), Some("10"));
+        assert_eq!(attr(tag, "mi"), Some("0"));
+        assert_eq!(attr(tag, "ci"), Some("5"));
+        assert_eq!(attr(tag, "mb"), Some("1"));
+        assert_eq!(attr(tag, "cb"), Some("3"));
+    }
+
+    #[test]
+    fn test_attr_not_present_at_all() {
+        assert_eq!(attr(r#"line nr="42"/>"#, "missing"), None);
+    }
+
+    #[tokio::test]
+    async fn test_instrument_gradle_no_report_at_either_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        // Gradle project but no report at either path
+        std::fs::write(repo_root.join("build.gradle"), "").unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::Java,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("JaCoCo XML report not found"));
+    }
+
+    #[tokio::test]
+    async fn test_instrument_gradle_kts_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        std::fs::write(repo_root.join("build.gradle.kts"), "").unwrap();
+
+        let report_dir = repo_root.join("build/reports/jacoco/test");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::fs::write(report_dir.join("jacocoTestReport.xml"), sample_jacoco_xml()).unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::Java,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await.unwrap();
+        assert_eq!(result.branch_ids.len(), 10);
+    }
+
+    #[test]
+    fn test_parse_jacoco_xml_missing_mb_cb_defaults_to_zero() {
+        // Lines without mb/cb attributes should default to 0
+        let xml = r#"<?xml version="1.0"?>
+<report name="test">
+  <package name="com/foo">
+    <sourcefile name="A.java">
+      <line nr="1" mi="0" ci="1"/>
+    </sourcefile>
+  </package>
+</report>"#;
+        let (all, _, fps) = parse_jacoco_xml(xml, Path::new("."), Path::new(".")).unwrap();
+        // mb=0 + cb=0 = 0 total branches, so no branches created
+        assert_eq!(all.len(), 0);
+        assert_eq!(fps.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_jacoco_xml_all_covered() {
+        let xml = r#"<?xml version="1.0"?>
+<report name="test">
+  <package name="com/foo">
+    <sourcefile name="All.java">
+      <line nr="1" mi="0" ci="5" mb="0" cb="4"/>
+    </sourcefile>
+  </package>
+</report>"#;
+        let (all, exec, _) = parse_jacoco_xml(xml, Path::new("."), Path::new(".")).unwrap();
+        assert_eq!(all.len(), 4);
+        assert_eq!(exec.len(), 4);
+    }
+
+    #[test]
+    fn test_parse_jacoco_xml_all_missed() {
+        let xml = r#"<?xml version="1.0"?>
+<report name="test">
+  <package name="com/foo">
+    <sourcefile name="None.java">
+      <line nr="1" mi="5" ci="0" mb="3" cb="0"/>
+    </sourcefile>
+  </package>
+</report>"#;
+        let (all, exec, _) = parse_jacoco_xml(xml, Path::new("."), Path::new(".")).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(exec.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_jacoco_xml_multiple_lines_in_sourcefile() {
+        let xml = r#"<?xml version="1.0"?>
+<report name="test">
+  <package name="pkg">
+    <sourcefile name="Multi.java">
+      <line nr="1" mi="0" ci="1" mb="1" cb="1"/>
+      <line nr="2" mi="0" ci="1" mb="0" cb="2"/>
+      <line nr="3" mi="0" ci="1" mb="3" cb="0"/>
+      <line nr="4" mi="0" ci="1" mb="0" cb="0"/>
+    </sourcefile>
+  </package>
+</report>"#;
+        let (all, exec, _) = parse_jacoco_xml(xml, Path::new("."), Path::new(".")).unwrap();
+        // line 1: 2 branches (1 exec), line 2: 2 (2 exec), line 3: 3 (0 exec), line 4: 0
+        assert_eq!(all.len(), 7);
+        assert_eq!(exec.len(), 3);
+    }
+
+    #[test]
+    fn test_fnv1a_empty_string() {
+        assert_eq!(fnv1a_hash(""), 0xcbf2_9ce4_8422_2325);
+    }
+
+    #[test]
+    fn test_parse_jacoco_xml_interleaved_packages() {
+        // After closing a package, opening a new one should use the new package name
+        let xml = r#"<?xml version="1.0"?>
+<report name="test">
+  <package name="first">
+    <sourcefile name="A.java">
+      <line nr="1" mi="0" ci="1" mb="1" cb="1"/>
+    </sourcefile>
+  </package>
+  <package name="second">
+    <sourcefile name="B.java">
+      <line nr="1" mi="0" ci="1" mb="0" cb="1"/>
+    </sourcefile>
+  </package>
+</report>"#;
+        let (_, _, fps) = parse_jacoco_xml(xml, Path::new("."), Path::new(".")).unwrap();
+        let paths: Vec<String> = fps.values().map(|p| p.to_string_lossy().to_string()).collect();
+        assert!(paths.contains(&"first/A.java".to_string()));
+        assert!(paths.contains(&"second/B.java".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_instrument_maven_spawn_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        // No build.gradle => maven
+
+        let runner = Arc::new(FakeRunner::spawn_error());
+        let inst = JavaInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::Java,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_instrument_gradle_spawn_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        std::fs::write(repo_root.join("build.gradle"), "").unwrap();
+
+        let runner = Arc::new(FakeRunner::spawn_error());
+        let inst = JavaInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::Java,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await;
+        assert!(result.is_err());
+    }
 }

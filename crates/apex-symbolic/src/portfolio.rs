@@ -252,6 +252,59 @@ mod tests {
     }
 
     #[test]
+    fn portfolio_error_before_sat_propagates() {
+        // Error solver first, SAT solver second — error should propagate
+        let solvers: Vec<Box<dyn Solver>> = vec![
+            Box::new(ErrorSolver),
+            Box::new(SatSolver::new(vec![99])),
+        ];
+        let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));
+        let result = portfolio.solve(&["x > 0".to_string()], false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn portfolio_null_then_null_returns_none() {
+        let solvers: Vec<Box<dyn Solver>> = vec![
+            Box::new(NullSolver::new("n1")),
+            Box::new(NullSolver::new("n2")),
+            Box::new(NullSolver::new("n3")),
+        ];
+        let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));
+        let result = portfolio.solve(&["x > 0".to_string()], false).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn portfolio_solve_batch_mixed_results() {
+        let solvers: Vec<Box<dyn Solver>> = vec![
+            Box::new(NullSolver::new("null")),
+        ];
+        let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));
+        let sets = vec![
+            vec!["a".to_string()],
+            vec!["b".to_string()],
+            vec!["c".to_string()],
+        ];
+        let results = portfolio.solve_batch(&sets, true);
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn portfolio_solve_batch_with_sat_solver() {
+        let solvers: Vec<Box<dyn Solver>> = vec![
+            Box::new(SatSolver::new(vec![1, 2])),
+        ];
+        let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));
+        let sets = vec![vec!["x > 0".to_string()], vec!["y < 5".to_string()]];
+        let results = portfolio.solve_batch(&sets, false);
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(r.as_ref().unwrap().is_some());
+        }
+    }
+
+    #[test]
     fn portfolio_solve_batch_empty_sets() {
         let solvers: Vec<Box<dyn Solver>> = vec![Box::new(NullSolver::new("null"))];
         let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));

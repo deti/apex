@@ -129,4 +129,107 @@ mod tests {
         assert_eq!(ex.pending_for_concolic(), 1);
         assert_eq!(ex.pending_for_fuzz(), 2);
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `take_for_concolic()` on an empty exchange returns an empty vec.
+    #[test]
+    fn take_for_concolic_when_empty_returns_empty() {
+        let ex = SeedExchange::new();
+        let seeds = ex.take_for_concolic();
+        assert!(seeds.is_empty());
+    }
+
+    /// `take_for_fuzz()` on an empty exchange returns an empty vec.
+    #[test]
+    fn take_for_fuzz_when_empty_returns_empty() {
+        let ex = SeedExchange::new();
+        let seeds = ex.take_for_fuzz();
+        assert!(seeds.is_empty());
+    }
+
+    /// After `take_for_concolic`, pending_for_concolic is 0.
+    #[test]
+    fn take_for_concolic_clears_pending() {
+        let ex = SeedExchange::new();
+        ex.deposit_for_concolic(make_seed(b"a"));
+        ex.deposit_for_concolic(make_seed(b"b"));
+        let taken = ex.take_for_concolic();
+        assert_eq!(taken.len(), 2);
+        assert_eq!(ex.pending_for_concolic(), 0);
+    }
+
+    /// After `take_for_fuzz`, pending_for_fuzz is 0.
+    #[test]
+    fn take_for_fuzz_clears_pending() {
+        let ex = SeedExchange::new();
+        ex.deposit_for_fuzz(make_seed(b"m"));
+        ex.deposit_for_fuzz(make_seed(b"n"));
+        ex.deposit_for_fuzz(make_seed(b"o"));
+        let taken = ex.take_for_fuzz();
+        assert_eq!(taken.len(), 3);
+        assert_eq!(ex.pending_for_fuzz(), 0);
+    }
+
+    /// Two consecutive takes both return empty on the second call.
+    #[test]
+    fn double_take_second_is_empty() {
+        let ex = SeedExchange::new();
+        ex.deposit_for_concolic(make_seed(b"once"));
+        let first = ex.take_for_concolic();
+        assert_eq!(first.len(), 1);
+        let second = ex.take_for_concolic();
+        assert!(second.is_empty());
+    }
+
+    /// `Default` impl creates an empty exchange.
+    #[test]
+    fn default_creates_empty_exchange() {
+        let ex = SeedExchange::default();
+        assert_eq!(ex.pending_for_concolic(), 0);
+        assert_eq!(ex.pending_for_fuzz(), 0);
+    }
+
+    /// fuzz→concolic and concolic→fuzz queues are independent.
+    #[test]
+    fn queues_are_independent() {
+        let ex = SeedExchange::new();
+        ex.deposit_for_concolic(make_seed(b"c1"));
+        ex.deposit_for_concolic(make_seed(b"c2"));
+        ex.deposit_for_fuzz(make_seed(b"f1"));
+
+        // Taking concolic does not affect fuzz queue.
+        let c = ex.take_for_concolic();
+        assert_eq!(c.len(), 2);
+        assert_eq!(ex.pending_for_fuzz(), 1);
+
+        // Taking fuzz does not affect concolic queue (already empty).
+        let f = ex.take_for_fuzz();
+        assert_eq!(f.len(), 1);
+        assert_eq!(ex.pending_for_concolic(), 0);
+    }
+
+    /// Data content is preserved through deposit/take round-trip.
+    #[test]
+    fn data_preserved_through_round_trip() {
+        let ex = SeedExchange::new();
+        ex.deposit_for_fuzz(make_seed(b"hello-world"));
+        let seeds = ex.take_for_fuzz();
+        assert_eq!(seeds[0].data.as_ref(), b"hello-world");
+    }
+
+    /// Many seeds deposited then taken all at once.
+    #[test]
+    fn many_seeds_round_trip() {
+        let ex = SeedExchange::new();
+        for i in 0u8..50 {
+            ex.deposit_for_concolic(make_seed(&[i]));
+        }
+        assert_eq!(ex.pending_for_concolic(), 50);
+        let all = ex.take_for_concolic();
+        assert_eq!(all.len(), 50);
+        assert_eq!(ex.pending_for_concolic(), 0);
+    }
 }

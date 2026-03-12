@@ -281,6 +281,67 @@ mod tests {
         assert_eq!(vars, vec!["_my_var"]);
     }
 
+    #[test]
+    fn test_is_identifier_with_special_chars() {
+        assert!(!is_identifier("foo!bar"));
+        assert!(!is_identifier("x y"));
+        assert!(is_identifier("_"));
+        assert!(is_identifier("a123"));
+    }
+
+    #[test]
+    fn test_condition_only_operator_no_rhs() {
+        assert_eq!(condition_to_smtlib2("x >"), None);
+    }
+
+    #[test]
+    fn test_condition_only_operator_no_lhs() {
+        assert_eq!(condition_to_smtlib2("> 5"), None);
+    }
+
+    #[test]
+    fn test_extract_vars_numeric_tokens_skipped() {
+        // Numeric tokens that start with a letter (like identifiers) won't parse as i64
+        let vars = extract_variables("(> abc 123)");
+        assert_eq!(vars, vec!["abc"]);
+    }
+
+    #[test]
+    fn test_extract_vars_only_parens_and_numbers() {
+        let vars = extract_variables("(123 456)");
+        assert!(vars.is_empty());
+    }
+
+    #[test]
+    fn test_extract_vars_with_dots() {
+        let vars = extract_variables("(> self.x 0)");
+        assert_eq!(vars, vec!["self.x"]);
+    }
+
+    #[test]
+    fn test_condition_underscore_var() {
+        assert_eq!(
+            condition_to_smtlib2("_x > 5"),
+            Some("(> _x 5)".into())
+        );
+    }
+
+    #[test]
+    fn test_condition_large_number() {
+        assert_eq!(
+            condition_to_smtlib2("n == 999999"),
+            Some("(= n 999999)".into())
+        );
+    }
+
+    #[test]
+    fn test_condition_negative_number_all_ops() {
+        assert_eq!(condition_to_smtlib2("x >= -10"), Some("(>= x -10)".into()));
+        assert_eq!(condition_to_smtlib2("x <= -1"), Some("(<= x -1)".into()));
+        assert_eq!(condition_to_smtlib2("x == -5"), Some("(= x -5)".into()));
+        assert_eq!(condition_to_smtlib2("x != -3"), Some("(not (= x -3))".into()));
+    }
+
     // -----------------------------------------------------------------------
     // proptest properties
     // -----------------------------------------------------------------------
@@ -361,5 +422,76 @@ mod tests {
             // Encoding should be deterministic
             prop_assert_eq!(&encoded, &encode_identifier(&ident));
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_condition_lt() {
+        assert_eq!(condition_to_smtlib2("y < 10"), Some("(< y 10)".into()));
+    }
+
+    #[test]
+    fn test_is_identifier_with_digit_not_first() {
+        // Digit after first char is valid
+        assert!(is_identifier("a1b2c3"));
+        assert!(is_identifier("_123"));
+    }
+
+    #[test]
+    fn test_is_identifier_starts_with_hyphen() {
+        assert!(!is_identifier("-bad"));
+    }
+
+    #[test]
+    fn test_extract_vars_all_keywords_skipped() {
+        for kw in KEYWORDS {
+            let expr = format!("(= {} 0)", kw);
+            let vars = extract_variables(&expr);
+            assert!(
+                !vars.contains(&kw.to_string()),
+                "keyword '{}' should not appear in vars",
+                kw
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_vars_multiple_dots() {
+        let vars = extract_variables("(> self.value.x 0)");
+        assert!(vars.contains(&"self.value.x".to_string()));
+    }
+
+    #[test]
+    fn test_condition_to_smtlib2_lhs_not_identifier_skips() {
+        // LHS with a digit should fail is_identifier check and return None
+        assert_eq!(condition_to_smtlib2("1invalid > 5"), None);
+    }
+
+    #[test]
+    fn test_condition_to_smtlib2_rhs_variable_returns_none() {
+        // RHS that's a var name (not integer) should return None
+        assert_eq!(condition_to_smtlib2("x > y"), None);
+    }
+
+    #[test]
+    fn test_extract_vars_numeric_false_positive_never_occurs() {
+        // Verify tokens that parse as i64 are excluded
+        let vars = extract_variables("(> x 42)");
+        assert!(!vars.contains(&"42".to_string()));
+        assert!(vars.contains(&"x".to_string()));
+    }
+
+    #[test]
+    fn test_condition_ge_negative_large() {
+        assert_eq!(condition_to_smtlib2("n >= -1000"), Some("(>= n -1000)".into()));
+    }
+
+    #[test]
+    fn test_extract_vars_underscore_only() {
+        let vars = extract_variables("(> _ 0)");
+        assert!(vars.contains(&"_".to_string()));
     }
 }

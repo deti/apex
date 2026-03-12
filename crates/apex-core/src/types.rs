@@ -473,7 +473,7 @@ mod tests {
 
     #[test]
     fn language_parse_roundtrip() {
-        for lang in ["python", "js", "java", "c", "rust", "wasm"] {
+        for lang in ["python", "js", "java", "c", "rust", "wasm", "ruby"] {
             let parsed: Language = lang.parse().unwrap();
             let display = parsed.to_string();
             let reparsed: Language = display.parse().unwrap();
@@ -486,6 +486,8 @@ mod tests {
         assert_eq!("py".parse::<Language>().unwrap(), Language::Python);
         assert_eq!("node".parse::<Language>().unwrap(), Language::JavaScript);
         assert_eq!("rs".parse::<Language>().unwrap(), Language::Rust);
+        assert_eq!("rb".parse::<Language>().unwrap(), Language::Ruby);
+        assert_eq!("ruby".parse::<Language>().unwrap(), Language::Ruby);
         assert!("unknown".parse::<Language>().is_err());
     }
 
@@ -766,6 +768,7 @@ mod tests {
             Language::C,
             Language::Rust,
             Language::Wasm,
+            Language::Ruby,
         ];
         for lang in languages {
             let tc = TestCandidate::new("code".into(), lang);
@@ -795,6 +798,7 @@ mod tests {
         assert_eq!(Language::C.to_string(), "c");
         assert_eq!(Language::Rust.to_string(), "rust");
         assert_eq!(Language::Wasm.to_string(), "wasm");
+        assert_eq!(Language::Ruby.to_string(), "ruby");
     }
 
     #[test]

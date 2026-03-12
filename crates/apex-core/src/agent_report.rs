@@ -747,4 +747,165 @@ mod tests {
         let lines = vec!["fn my-func(x: u32) -> u32 {".to_string()];
         assert_eq!(extract_enclosing_function(&lines), None);
     }
+
+    #[test]
+    fn suggest_approach_hard_grpc() {
+        let lines = vec!["    grpc_client.call(request).await?;".to_string()];
+        let approach = suggest_approach(GapDifficulty::Hard, &lines);
+        assert!(approach.contains("driller") || approach.contains("mock"));
+    }
+
+    #[test]
+    fn suggest_approach_hard_tcp() {
+        let lines = vec!["    let stream = TcpStream::connect(addr)?;".to_string()];
+        let approach = suggest_approach(GapDifficulty::Hard, &lines);
+        assert!(approach.contains("driller") || approach.contains("mock"));
+    }
+
+    #[test]
+    fn suggest_approach_hard_fallback() {
+        // Hard difficulty but no unsafe/extern/await/grpc/tcp keywords
+        let lines = vec!["    Command::new(\"ls\").output()?;".to_string()];
+        let approach = suggest_approach(GapDifficulty::Hard, &lines);
+        assert!(approach.contains("fuzz") || approach.contains("integration"));
+    }
+
+    #[test]
+    fn classify_hard_process_command() {
+        let lines = vec!["    Command::new(\"ls\").arg(\"-la\").output()?;".to_string()];
+        let (diff, _reason) = classify_difficulty(&lines);
+        assert_eq!(diff, GapDifficulty::Hard);
+    }
+
+    #[test]
+    fn classify_hard_udp_socket() {
+        let lines = vec!["    let socket = UdpSocket::bind(\"0.0.0.0:0\")?;".to_string()];
+        let (diff, _reason) = classify_difficulty(&lines);
+        assert_eq!(diff, GapDifficulty::Hard);
+    }
+
+    #[test]
+    fn classify_hard_tonic() {
+        let lines = vec!["    tonic::transport::Server::builder()".to_string()];
+        let (diff, _reason) = classify_difficulty(&lines);
+        assert_eq!(diff, GapDifficulty::Hard);
+    }
+
+    #[test]
+    fn classify_hard_hyper() {
+        let lines = vec!["    hyper::Client::new().get(uri).await".to_string()];
+        let (diff, _reason) = classify_difficulty(&lines);
+        assert_eq!(diff, GapDifficulty::Hard);
+    }
+
+    #[test]
+    fn classify_medium_unwrap_or() {
+        let lines = vec!["    let v = opt.unwrap_or(default);".to_string()];
+        let (diff, _reason) = classify_difficulty(&lines);
+        assert_eq!(diff, GapDifficulty::Medium);
+    }
+
+    #[test]
+    fn classify_medium_ok_or() {
+        let lines = vec!["    let r = opt.ok_or(Error::Missing)?;".to_string()];
+        let (diff, _reason) = classify_difficulty(&lines);
+        assert_eq!(diff, GapDifficulty::Medium);
+    }
+
+    #[test]
+    fn classify_medium_file_open() {
+        let lines = vec!["    let f = File::open(path)?;".to_string()];
+        let (diff, _reason) = classify_difficulty(&lines);
+        assert_eq!(diff, GapDifficulty::Medium);
+    }
+
+    #[test]
+    fn classify_medium_config_access() {
+        let lines = vec!["    if config.verbose {".to_string()];
+        let (diff, _reason) = classify_difficulty(&lines);
+        assert_eq!(diff, GapDifficulty::Medium);
+    }
+
+    #[test]
+    fn suggest_approach_medium_env() {
+        let lines = vec!["    let home = env::var(\"HOME\")?;".to_string()];
+        let approach = suggest_approach(GapDifficulty::Medium, &lines);
+        assert!(approach.contains("config") || approach.contains("environment"));
+    }
+
+    #[test]
+    fn build_report_source_context_collects_nearby_lines() {
+        let file_paths: HashMap<u64, PathBuf> = [(1u64, PathBuf::from("a.rs"))].into();
+        let uncovered = vec![BranchId {
+            file_id: 1,
+            line: 5,
+            col: 0,
+            direction: 0,
+            discriminator: 0,
+            condition_index: None,
+        }];
+        let source_cache: HashMap<(u64, u32), String> = [
+            ((1, 2), "line 2".into()),
+            ((1, 3), "line 3".into()),
+            ((1, 4), "line 4".into()),
+            ((1, 5), "if x > 0 {".into()),
+            ((1, 6), "line 6".into()),
+            ((1, 7), "line 7".into()),
+            ((1, 8), "line 8".into()),
+        ]
+        .into();
+        let report = build_agent_gap_report(10, 9, &uncovered, &file_paths, &source_cache);
+        assert_eq!(report.gaps.len(), 1);
+        // ±3 lines around line 5 = lines 2-8 = 7 context lines
+        assert_eq!(report.gaps[0].source_context.len(), 7);
+    }
+
+    #[test]
+    fn gap_difficulty_serde_roundtrip() {
+        for diff in [
+            GapDifficulty::Easy,
+            GapDifficulty::Medium,
+            GapDifficulty::Hard,
+            GapDifficulty::Blocked,
+        ] {
+            let json = serde_json::to_string(&diff).unwrap();
+            let back: GapDifficulty = serde_json::from_str(&json).unwrap();
+            assert_eq!(diff, back);
+        }
+    }
+
+    #[test]
+    fn build_report_gaps_sorted_by_bang_for_buck_descending() {
+        let file_paths: HashMap<u64, PathBuf> = [
+            (1u64, PathBuf::from("small.rs")),
+            (2u64, PathBuf::from("big.rs")),
+        ]
+        .into();
+        // 10 uncovered in file 1, 1 uncovered in file 2
+        let mut uncovered = Vec::new();
+        for line in 1..=10 {
+            uncovered.push(BranchId {
+                file_id: 1,
+                line,
+                col: 0,
+                direction: 0,
+                discriminator: 0,
+                condition_index: None,
+            });
+        }
+        uncovered.push(BranchId {
+            file_id: 2,
+            line: 1,
+            col: 0,
+            direction: 0,
+            discriminator: 0,
+            condition_index: None,
+        });
+        let source_cache: HashMap<(u64, u32), String> = HashMap::new();
+        let report = build_agent_gap_report(100, 89, &uncovered, &file_paths, &source_cache);
+        // file 1 has higher bang_for_buck (10/100=0.1 > 1/100=0.01)
+        // so file 1 gaps should come first
+        assert_eq!(report.gaps.len(), 11);
+        assert!(report.gaps[0].bang_for_buck >= report.gaps[10].bang_for_buck);
+    }
 }

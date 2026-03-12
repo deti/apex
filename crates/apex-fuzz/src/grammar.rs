@@ -232,11 +232,169 @@ mod tests {
     }
 
     #[test]
+    fn grammar_clone() {
+        let g = simple_grammar();
+        let g2 = g.clone();
+        assert_eq!(g2.start, "expr");
+        assert!(g2.productions.contains_key("expr"));
+    }
+
+    #[test]
+    fn production_clone() {
+        let g = simple_grammar();
+        let prod = g.productions.get("expr").unwrap().clone();
+        assert_eq!(prod.lhs, "expr");
+        assert_eq!(prod.alternatives.len(), 2);
+    }
+
+    #[test]
+    fn parse_node_interior_empty_children() {
+        let node = ParseNode::Interior("empty".into(), vec![]);
+        let node2 = ParseNode::Interior("empty".into(), vec![]);
+        assert_eq!(node, node2);
+    }
+
+    #[test]
+    fn parse_node_interior_nested() {
+        let inner = ParseNode::Interior("inner".into(), vec![ParseNode::Leaf("x".into())]);
+        let outer = ParseNode::Interior("outer".into(), vec![inner.clone()]);
+        let outer2 = ParseNode::Interior("outer".into(), vec![inner]);
+        assert_eq!(outer, outer2);
+    }
+
+    #[test]
+    fn symbol_clone() {
+        let s = Symbol::NonTerminal("x".into());
+        let s2 = s.clone();
+        assert_eq!(s, s2);
+    }
+
+    #[test]
+    fn generate_depth_one_with_only_recursive_alt() {
+        // Grammar where the only alternative is recursive
+        let mut g = Grammar::new("start");
+        g.add_production(
+            "start",
+            vec![vec![
+                Symbol::NonTerminal("start".into()),
+                Symbol::Terminal("+".into()),
+                Symbol::Terminal("1".into()),
+            ]],
+        );
+        let mut rng = StdRng::seed_from_u64(0);
+        // At depth 1, it should pick the shortest alt (the only one) and
+        // skip non-terminals at depth 0
+        let result = g.generate(&mut rng, 1).unwrap();
+        // The non-terminal "start" is skipped at depth 0, so we get "+1"
+        assert!(result.contains("1"));
+    }
+
+    #[test]
+    fn generate_multiple_nonterminals_in_alt() {
+        let mut g = Grammar::new("s");
+        g.add_production("s", vec![vec![
+            Symbol::NonTerminal("a".into()),
+            Symbol::Terminal(" ".into()),
+            Symbol::NonTerminal("b".into()),
+        ]]);
+        g.add_production("a", vec![vec![Symbol::Terminal("hello".into())]]);
+        g.add_production("b", vec![vec![Symbol::Terminal("world".into())]]);
+        let mut rng = StdRng::seed_from_u64(42);
+        let result = g.generate(&mut rng, 3).unwrap();
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn grammar_debug() {
+        let g = simple_grammar();
+        let debug = format!("{:?}", g);
+        assert!(debug.contains("Grammar"));
+    }
+
+    #[test]
     fn parse_node_equality() {
         assert_eq!(ParseNode::Leaf("a".into()), ParseNode::Leaf("a".into()));
         assert_ne!(ParseNode::Leaf("a".into()), ParseNode::Leaf("b".into()));
         let interior = ParseNode::Interior("x".into(), vec![ParseNode::Leaf("y".into())]);
         let interior2 = ParseNode::Interior("x".into(), vec![ParseNode::Leaf("y".into())]);
         assert_eq!(interior, interior2);
+    }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn generate_with_only_terminal_alternatives() {
+        let mut g = Grammar::new("lit");
+        g.add_production("lit", vec![
+            vec![Symbol::Terminal("a".into())],
+            vec![Symbol::Terminal("b".into())],
+            vec![Symbol::Terminal("c".into())],
+        ]);
+        let mut rng = StdRng::seed_from_u64(0);
+        let result = g.generate(&mut rng, 10).unwrap();
+        assert!(result == "a" || result == "b" || result == "c");
+    }
+
+    #[test]
+    fn generate_empty_alternatives_exits_at_depth_zero() {
+        // Production exists but alternatives is empty -> depth=0 path exits immediately
+        let mut g = Grammar::new("s");
+        g.productions.insert("s".to_string(), crate::grammar::Production {
+            lhs: "s".into(),
+            alternatives: vec![],
+        });
+        let mut rng = StdRng::seed_from_u64(0);
+        // Should not panic; returns Some("") since alternatives is empty at depth=0
+        let result = g.generate(&mut rng, 5);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "");
+    }
+
+    #[test]
+    fn grammar_new_has_empty_productions() {
+        let g = Grammar::new("start");
+        assert!(g.productions.is_empty());
+        assert_eq!(g.start, "start");
+    }
+
+    #[test]
+    fn symbol_debug() {
+        let t = Symbol::Terminal("hello".into());
+        let nt = Symbol::NonTerminal("world".into());
+        let dt = format!("{:?}", t);
+        let dnt = format!("{:?}", nt);
+        assert!(dt.contains("Terminal"));
+        assert!(dnt.contains("NonTerminal"));
+    }
+
+    #[test]
+    fn parse_node_debug() {
+        let leaf = ParseNode::Leaf("x".into());
+        let interior = ParseNode::Interior("y".into(), vec![]);
+        let dl = format!("{:?}", leaf);
+        let di = format!("{:?}", interior);
+        assert!(dl.contains("Leaf"));
+        assert!(di.contains("Interior"));
+    }
+
+    #[test]
+    fn add_production_new_key_inserts_production() {
+        let mut g = Grammar::new("s");
+        g.add_production("new_rule", vec![vec![Symbol::Terminal("x".into())]]);
+        assert!(g.productions.contains_key("new_rule"));
+        assert_eq!(g.productions["new_rule"].lhs, "new_rule");
+    }
+
+    #[test]
+    fn generate_from_unknown_nonterminal_emits_name_as_fallback() {
+        let mut g = Grammar::new("root");
+        // root -> [unknown_nt]
+        g.add_production("root", vec![vec![Symbol::NonTerminal("ghost".into())]]);
+        let mut rng = StdRng::seed_from_u64(0);
+        // "ghost" has no production => emits "ghost"
+        let result = g.generate(&mut rng, 5).unwrap();
+        assert_eq!(result, "ghost");
     }
 }

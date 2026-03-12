@@ -267,4 +267,184 @@ mod tests {
         let m = CmpLogMutator::new(CmpLog::new());
         assert_eq!(m.name(), "cmplog");
     }
+
+    #[test]
+    fn cmp_log_default() {
+        let log = CmpLog::default();
+        assert!(log.is_empty());
+        assert_eq!(log.entries().len(), 0);
+    }
+
+    #[test]
+    fn cmp_log_is_empty_after_add() {
+        let mut log = CmpLog::new();
+        assert!(log.is_empty());
+        log.add(CmpEntry::new(vec![1], vec![2]));
+        assert!(!log.is_empty());
+    }
+
+    #[test]
+    fn cmplog_mutator_needle_longer_than_input() {
+        let mut log = CmpLog::new();
+        log.add(CmpEntry::new(b"LONGNEEDLE".to_vec(), b"SHORT".to_vec()));
+        let m = CmpLogMutator::new(log);
+        let input = b"tiny";
+        let mut rng = rand::thread_rng();
+        // needle.len() > input.len(), should return input unchanged
+        let out = m.mutate(input, &mut rng);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn cmplog_mutator_empty_needle_returns_original() {
+        let mut log = CmpLog::new();
+        log.add(CmpEntry::new(vec![], b"replacement".to_vec()));
+        let m = CmpLogMutator::new(log);
+        let input = b"test data";
+        let mut rng = rand::thread_rng();
+        // empty needle should return input unchanged
+        let out = m.mutate(input, &mut rng);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn cmplog_mutator_multiple_match_positions() {
+        let mut log = CmpLog::new();
+        log.add(CmpEntry::new(b"AA".to_vec(), b"BB".to_vec()));
+        let m = CmpLogMutator::new(log);
+        let input = b"AAXAA"; // "AA" at positions 0 and 3
+        let mut rng = rand::thread_rng();
+        let mut saw_first = false;
+        let mut saw_second = false;
+        for _ in 0..100 {
+            let out = m.mutate(input, &mut rng);
+            if out == b"BBXAA" || out == b"BBXBB" {
+                saw_first = true;
+            }
+            if out == b"AAXBB" || out == b"BBXBB" {
+                saw_second = true;
+            }
+            if saw_first && saw_second {
+                break;
+            }
+        }
+        // At least one position should be replaced
+        assert!(saw_first || saw_second);
+    }
+
+    #[test]
+    fn parse_hints_expected_comma_got() {
+        let output = "expected 100, got 200";
+        let hints = parse_cmp_hints_from_output(output);
+        assert!(!hints.is_empty());
+        assert!(hints.iter().any(|e| e.arg1 == b"100" && e.arg2 == b"200"));
+    }
+
+    #[test]
+    fn parse_hints_multiple_matches() {
+        let output = "expected 1 but got 2\nexpected 3 but got 4";
+        let hints = parse_cmp_hints_from_output(output);
+        assert!(hints.len() >= 2);
+    }
+
+    #[test]
+    fn cmp_entry_clone_and_eq() {
+        let e1 = CmpEntry::new(vec![1, 2], vec![3, 4]);
+        let e2 = e1.clone();
+        assert_eq!(e1, e2);
+    }
+
+    #[test]
+    fn cmp_entry_hash_consistent() {
+        use std::collections::HashSet;
+        let e1 = CmpEntry::new(vec![10], vec![20]);
+        let e2 = CmpEntry::new(vec![10], vec![20]);
+        let mut set = HashSet::new();
+        set.insert(e1);
+        set.insert(e2);
+        assert_eq!(set.len(), 1); // duplicates deduplicated
+    }
+
+    #[test]
+    fn cmp_entry_debug() {
+        let e = CmpEntry::new(vec![0xAA], vec![0xBB]);
+        let debug = format!("{:?}", e);
+        assert!(debug.contains("CmpEntry"));
+    }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn cmp_log_add_same_entry_three_times_only_stored_once() {
+        let mut log = CmpLog::new();
+        let entry = CmpEntry::new(vec![1, 2, 3], vec![4, 5, 6]);
+        log.add(entry.clone());
+        log.add(entry.clone());
+        log.add(entry);
+        assert_eq!(log.entries().len(), 1);
+    }
+
+    #[test]
+    fn cmp_log_entries_returns_in_insertion_order() {
+        let mut log = CmpLog::new();
+        log.add(CmpEntry::new(vec![10], vec![20]));
+        log.add(CmpEntry::new(vec![30], vec![40]));
+        log.add(CmpEntry::new(vec![50], vec![60]));
+        let entries = log.entries();
+        assert_eq!(entries[0].arg1, vec![10]);
+        assert_eq!(entries[1].arg1, vec![30]);
+        assert_eq!(entries[2].arg1, vec![50]);
+    }
+
+    #[test]
+    fn parse_hints_left_right_pattern() {
+        let output = "thread 'main' panicked: assertion failed: left=`hello`, right=`world`";
+        let hints = parse_cmp_hints_from_output(output);
+        assert!(!hints.is_empty());
+        assert!(hints.iter().any(|e| e.arg1 == b"hello" && e.arg2 == b"world"));
+    }
+
+    #[test]
+    fn cmplog_mutator_with_same_needle_and_replacement_is_identity() {
+        let mut log = CmpLog::new();
+        log.add(CmpEntry::new(b"AB".to_vec(), b"AB".to_vec()));
+        let m = CmpLogMutator::new(log);
+        let input = b"xABy";
+        let mut rng = rand::thread_rng();
+        // Replacing AB with AB is the identity
+        let out = m.mutate(input, &mut rng);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn cmplog_mutator_multiple_entries_selects_one() {
+        let mut log = CmpLog::new();
+        log.add(CmpEntry::new(b"XX".to_vec(), b"YY".to_vec()));
+        log.add(CmpEntry::new(b"AA".to_vec(), b"BB".to_vec()));
+        let m = CmpLogMutator::new(log);
+        let input = b"XXAA";
+        let mut rng = rand::thread_rng();
+        // Should not panic regardless of which entry is selected
+        let out = m.mutate(input, &mut rng);
+        assert_eq!(out.len(), input.len()); // replacements are same length
+    }
+
+    #[test]
+    fn cmp_entry_ne_when_different() {
+        let e1 = CmpEntry::new(vec![1], vec![2]);
+        let e2 = CmpEntry::new(vec![1], vec![3]);
+        assert_ne!(e1, e2);
+
+        let e3 = CmpEntry::new(vec![5], vec![2]);
+        assert_ne!(e1, e3);
+    }
+
+    #[test]
+    fn parse_hints_returns_multiple_left_right_pairs() {
+        let output = "left=`alpha`, right=`beta`\nleft=`foo`, right=`bar`";
+        let hints = parse_cmp_hints_from_output(output);
+        assert!(hints.len() >= 2);
+    }
 }

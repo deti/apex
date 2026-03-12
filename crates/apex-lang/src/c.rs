@@ -1142,4 +1142,213 @@ mod tests {
         let result = runner.run_tests(dir.path(), &[]).await.unwrap();
         assert_eq!(result.exit_code, 0);
     }
+
+    // ------------------------------------------------------------------
+    // install_deps — autogen nonzero exit is a warning, not an error
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_autogen_nonzero_exit_still_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("autogen.sh"), "#!/bin/sh\nexit 1").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "sh" && spec.args.contains(&"autogen.sh".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::failure(1, b"autogen error".to_vec())));
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_ok(), "nonzero autogen exit should be a warning, not an error");
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — configure nonzero exit is a warning, not an error
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_configure_nonzero_exit_still_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("configure"), "#!/bin/sh\nexit 1").unwrap();
+        // No Makefile so configure runs
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "./configure")
+            .times(1)
+            .returning(|_| Ok(CommandOutput::failure(1, b"configure warning".to_vec())));
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_ok(), "nonzero configure exit should be a warning, not an error");
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — cmake with extra args
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_cmake_with_extra_args() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CMakeLists.txt"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "cmake" && spec.args.contains(&"-B".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "cmake" && spec.args.contains(&"--build".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+        mock.expect_run_command()
+            .withf(|spec| {
+                spec.program == "ctest" && spec.args.iter().any(|a| a == "VERBOSE=1")
+            })
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"all pass".to_vec())));
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner
+            .run_tests(dir.path(), &["VERBOSE=1".into()])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — autogen nonzero then configure runs
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_autogen_nonzero_then_configure_still_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("autogen.sh"), "#!/bin/sh").unwrap();
+        std::fs::write(dir.path().join("configure"), "#!/bin/sh").unwrap();
+
+        let mut mock = MockCmd::new();
+        // autogen fails with nonzero
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "sh")
+            .times(1)
+            .returning(|_| Ok(CommandOutput::failure(1, b"autogen warn".to_vec())));
+        // configure still runs
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "./configure")
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // with_runner constructor
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn with_runner_creates_runner() {
+        let mock = MockCmd::new();
+        let runner = CRunner::with_runner(mock);
+        assert_eq!(runner.language(), Language::C);
+    }
+
+    // ------------------------------------------------------------------
+    // walkdir_c_files — path with file_name() returning None (edge case)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn walkdir_c_files_ignores_entries_without_extension_mixed() {
+        let dir = tempfile::tempdir().unwrap();
+        // Mix of files with no extension, other extensions, and .c
+        std::fs::write(dir.path().join("no_ext"), "").unwrap();
+        std::fs::write(dir.path().join("script.sh"), "").unwrap();
+        std::fs::write(dir.path().join("prog.c"), "int main(){}").unwrap();
+        let files = walkdir_c_files(dir.path());
+        assert_eq!(files.len(), 1);
+        assert!(files[0].contains("prog.c"));
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — setup with both autogen.sh AND configure AND Makefile
+    // (configure should be skipped because Makefile exists)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_autogen_runs_but_configure_skipped_because_makefile() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("autogen.sh"), "#!/bin/sh").unwrap();
+        std::fs::write(dir.path().join("configure"), "#!/bin/sh").unwrap();
+        std::fs::write(dir.path().join("Makefile"), "all:").unwrap();
+
+        let mut mock = MockCmd::new();
+        // autogen.sh runs
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "sh" && spec.args.contains(&"autogen.sh".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"".to_vec())));
+        // configure should NOT run because Makefile exists
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — ctest receives -V flag
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_cmake_ctest_has_verbose_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CMakeLists.txt"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "cmake" && spec.args.contains(&"-B".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "cmake" && spec.args.contains(&"--build".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "ctest" && spec.args.contains(&"-V".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"all pass".to_vec())));
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — cmake nonzero exit from ctest (not an Err)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_ctest_nonzero_exit_not_err() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CMakeLists.txt"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "cmake" && spec.args.contains(&"-B".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "cmake" && spec.args.contains(&"--build".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "ctest")
+            .times(1)
+            .returning(|_| Ok(CommandOutput::failure(8, b"8 tests failed".to_vec())));
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 8);
+    }
 }

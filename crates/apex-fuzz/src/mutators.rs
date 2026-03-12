@@ -413,6 +413,122 @@ mod tests {
     }
 
     #[test]
+    fn byte_arith_empty_returns_random() {
+        let out = byte_arith(&[], &mut rng());
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn interesting_byte_empty_returns_interesting() {
+        let out = interesting_byte(&[], &mut rng());
+        assert_eq!(out.len(), 1);
+        let interesting = [0, 1, 7, 8, 16, 32, 64, 127, 128, 192, 254, 255];
+        assert!(interesting.contains(&out[0]));
+    }
+
+    #[test]
+    fn insert_byte_empty_input() {
+        let out = insert_byte(&[], &mut rng());
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn duplicate_block_empty_input() {
+        let out = duplicate_block(&[], &mut rng());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn delete_byte_empty_input() {
+        let out = delete_byte(&[], &mut rng());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn splice_both_empty() {
+        let out = splice(&[], &[], &mut rng());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn havoc_zero_ops() {
+        let input = b"unchanged";
+        let out = havoc(input, &mut rng(), 0);
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn havoc_single_op() {
+        let input = b"test";
+        let out = havoc(input, &mut rng(), 1);
+        // Should produce something (may or may not differ)
+        let _ = out;
+    }
+
+    #[test]
+    fn builtin_mutator_bit_flip_via_trait() {
+        let m = BitFlipMutator;
+        let mut r = rand::thread_rng();
+        let out = m.mutate(b"test", &mut r);
+        assert_eq!(out.len(), 4);
+        assert_eq!(m.name(), "bit_flip");
+    }
+
+    #[test]
+    fn builtin_mutator_byte_flip_via_trait() {
+        let m = ByteFlipMutator;
+        let mut r = rand::thread_rng();
+        let out = m.mutate(b"test", &mut r);
+        assert_eq!(out.len(), 4);
+        assert_eq!(m.name(), "byte_flip");
+    }
+
+    #[test]
+    fn builtin_mutator_byte_arith_via_trait() {
+        let m = ByteArithMutator;
+        let mut r = rand::thread_rng();
+        let out = m.mutate(b"test", &mut r);
+        assert_eq!(out.len(), 4);
+        assert_eq!(m.name(), "byte_arith");
+    }
+
+    #[test]
+    fn builtin_mutator_interesting_byte_via_trait() {
+        let m = InterestingByteMutator;
+        let mut r = rand::thread_rng();
+        let out = m.mutate(b"test", &mut r);
+        assert_eq!(out.len(), 4);
+        assert_eq!(m.name(), "interesting_byte");
+    }
+
+    #[test]
+    fn builtin_mutator_insert_byte_via_trait() {
+        let m = InsertByteMutator;
+        let mut r = rand::thread_rng();
+        let out = m.mutate(b"test", &mut r);
+        assert_eq!(out.len(), 5);
+        assert_eq!(m.name(), "insert_byte");
+    }
+
+    #[test]
+    fn builtin_mutator_delete_byte_via_trait() {
+        let m = DeleteByteMutator;
+        let mut r = rand::thread_rng();
+        let out = m.mutate(b"test", &mut r);
+        assert_eq!(out.len(), 3);
+        assert_eq!(m.name(), "delete_byte");
+    }
+
+    #[test]
+    fn builtin_mutator_duplicate_block_via_trait() {
+        let m = DuplicateBlockMutator;
+        let mut r = rand::thread_rng();
+        let out = m.mutate(b"test", &mut r);
+        assert!(out.len() >= 4);
+        assert_eq!(m.name(), "duplicate_block");
+    }
+
+    #[test]
     fn all_builtin_mutators_implement_trait() {
         use crate::traits::Mutator;
         let mutators: Vec<Box<dyn Mutator>> = builtin_mutators();

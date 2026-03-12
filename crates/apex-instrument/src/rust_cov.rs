@@ -827,4 +827,233 @@ mod tests {
             .unwrap();
         assert!(result.is_empty()); // non-zero exit returns empty
     }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_run_coverage_for_test_spawn_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        let runner = FakeRunner::spawn_error();
+        let result = run_coverage_for_test_with_runner("my_test", root, &runner).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_llvm_json_segment_with_missing_values() {
+        // Segments with null/missing values for count/has_count/is_entry/is_gap
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json = format!(
+            r#"{{
+  "data": [{{
+    "files": [{{
+      "filename": "{}/src/edge.rs",
+      "segments": [
+        [1, 1, null, null, null, null],
+        [2, 1, 5, true, true, false]
+      ]
+    }}]
+  }}]
+}}"#,
+            root.display()
+        );
+        let (all, exec, _) = parse_llvm_json(json.as_bytes(), root).unwrap();
+        // First segment: has_count=false (unwrap_or(false)), so skipped
+        // Second segment: valid
+        assert_eq!(all.len(), 1);
+        assert_eq!(exec.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_llvm_json_zero_line_col() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json = format!(
+            r#"{{
+  "data": [{{
+    "files": [{{
+      "filename": "{}/src/z.rs",
+      "segments": [
+        [0, 0, 1, true, true, false]
+      ]
+    }}]
+  }}]
+}}"#,
+            root.display()
+        );
+        let (all, exec, _) = parse_llvm_json(json.as_bytes(), root).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].line, 0);
+        assert_eq!(all[0].col, 0);
+        assert_eq!(exec.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_llvm_json_empty_segments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json = format!(
+            r#"{{
+  "data": [{{
+    "files": [{{
+      "filename": "{}/src/empty_seg.rs",
+      "segments": []
+    }}]
+  }}]
+}}"#,
+            root.display()
+        );
+        let (all, exec, fps) = parse_llvm_json(json.as_bytes(), root).unwrap();
+        assert_eq!(all.len(), 0);
+        assert_eq!(exec.len(), 0);
+        // File should still be registered in file_paths
+        assert_eq!(fps.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_llvm_json_multiple_files_same_data_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json = format!(
+            r#"{{
+  "data": [{{
+    "files": [
+      {{
+        "filename": "{root}/src/one.rs",
+        "segments": [[1, 1, 1, true, true, false]]
+      }},
+      {{
+        "filename": "{root}/src/two.rs",
+        "segments": [[2, 1, 0, true, true, false]]
+      }},
+      {{
+        "filename": "{root}/src/three.rs",
+        "segments": [[3, 1, 5, true, true, false]]
+      }}
+    ]
+  }}]
+}}"#,
+            root = root.display()
+        );
+        let (all, exec, fps) = parse_llvm_json(json.as_bytes(), root).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(exec.len(), 2); // count=1 and count=5
+        assert_eq!(fps.len(), 3);
+    }
+
+    #[test]
+    fn test_fnv1a_single_chars() {
+        assert_ne!(fnv1a("a"), fnv1a("b"));
+        assert_ne!(fnv1a("a"), fnv1a("A"));
+        assert_eq!(fnv1a("a"), fnv1a("a"));
+    }
+
+    #[test]
+    fn test_fnv1a_long_string() {
+        let long = "a".repeat(1000);
+        let h1 = fnv1a(&long);
+        let h2 = fnv1a(&long);
+        assert_eq!(h1, h2);
+        assert_ne!(h1, fnv1a(""));
+    }
+
+    #[test]
+    fn test_with_runner_constructor() {
+        let runner = Arc::new(FakeRunner::success());
+        let inst = RustCovInstrumentor::with_runner(runner);
+        assert!(inst.branch_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_instrument_spawn_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+
+        // Write coverage JSON (in case it gets that far)
+        let json = sample_llvm_json(root.to_str().unwrap());
+        std::fs::write(root.join(".apex_coverage.json"), &json).unwrap();
+
+        // Runner: version check succeeds, coverage run fails with spawn error
+        use std::sync::atomic::{AtomicU32, Ordering};
+        struct VersionOkSpawnFailRunner {
+            call_count: AtomicU32,
+        }
+        #[async_trait]
+        impl CommandRunner for VersionOkSpawnFailRunner {
+            async fn run_command(
+                &self,
+                _spec: &CommandSpec,
+            ) -> apex_core::error::Result<CommandOutput> {
+                let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Ok(CommandOutput::success(Vec::new()))
+                } else {
+                    Err(ApexError::Subprocess {
+                        exit_code: -1,
+                        stderr: "spawn failed".into(),
+                    })
+                }
+            }
+        }
+
+        let runner = Arc::new(VersionOkSpawnFailRunner {
+            call_count: AtomicU32::new(0),
+        });
+        let inst = RustCovInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root,
+            language: apex_core::types::Language::Rust,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_empty_result_preserves_language() {
+        let target = Target {
+            root: PathBuf::from("/my/project"),
+            language: apex_core::types::Language::Rust,
+            test_command: vec!["cargo".into(), "test".into()],
+        };
+        let result = empty_result(&target);
+        assert_eq!(result.target.language, apex_core::types::Language::Rust);
+        assert_eq!(result.target.test_command, vec!["cargo", "test"]);
+    }
+
+    #[test]
+    fn test_parse_llvm_json_file_paths_deduplicated() {
+        // Two data entries referencing the same file
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json = format!(
+            r#"{{
+  "data": [
+    {{
+      "files": [{{
+        "filename": "{root}/src/same.rs",
+        "segments": [[1, 1, 1, true, true, false]]
+      }}]
+    }},
+    {{
+      "files": [{{
+        "filename": "{root}/src/same.rs",
+        "segments": [[2, 1, 0, true, true, false]]
+      }}]
+    }}
+  ]
+}}"#,
+            root = root.display()
+        );
+        let (all, _, fps) = parse_llvm_json(json.as_bytes(), root).unwrap();
+        assert_eq!(all.len(), 2);
+        // file_paths uses entry(), so same file_id maps to one entry
+        assert_eq!(fps.len(), 1);
+    }
 }

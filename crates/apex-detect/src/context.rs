@@ -31,3 +31,49 @@ impl fmt::Debug for AnalysisContext {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_impl_does_not_dump_full_cache() {
+        let ctx = AnalysisContext {
+            target_root: PathBuf::from("/tmp/test"),
+            language: Language::Python,
+            oracle: Arc::new(CoverageOracle::new()),
+            file_paths: HashMap::new(),
+            known_bugs: vec![],
+            source_cache: {
+                let mut m = HashMap::new();
+                m.insert(PathBuf::from("a.py"), "code".into());
+                m
+            },
+            fuzz_corpus: Some(PathBuf::from("/corpus")),
+            config: DetectConfig::default(),
+        };
+        let dbg = format!("{:?}", ctx);
+        assert!(dbg.contains("AnalysisContext"));
+        assert!(dbg.contains("/tmp/test"));
+        assert!(dbg.contains("Python"));
+        // source_cache shows count, not full contents
+        assert!(dbg.contains("1"));
+        assert!(dbg.contains("/corpus"));
+    }
+
+    #[test]
+    fn debug_impl_with_no_corpus() {
+        let ctx = AnalysisContext {
+            target_root: PathBuf::from("/proj"),
+            language: Language::Rust,
+            oracle: Arc::new(CoverageOracle::new()),
+            file_paths: HashMap::new(),
+            known_bugs: vec![],
+            source_cache: HashMap::new(),
+            fuzz_corpus: None,
+            config: DetectConfig::default(),
+        };
+        let dbg = format!("{:?}", ctx);
+        assert!(dbg.contains("None"));
+    }
+}

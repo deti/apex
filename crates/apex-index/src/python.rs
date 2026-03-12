@@ -492,4 +492,602 @@ mod tests {
         let result = parse_coverage_executed(Path::new("/nonexistent.json"), Path::new("/tmp"));
         assert!(result.is_err());
     }
+
+    // -----------------------------------------------------------------------
+    // fnv1a_hash edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fnv1a_hash_deterministic() {
+        let h1 = fnv1a_hash("hello.py");
+        let h2 = fnv1a_hash("hello.py");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn fnv1a_hash_different_inputs_differ() {
+        assert_ne!(fnv1a_hash("a.py"), fnv1a_hash("b.py"));
+    }
+
+    #[test]
+    fn fnv1a_hash_single_byte() {
+        let h = fnv1a_hash("a");
+        assert_ne!(h, 0);
+        assert_ne!(h, 0xcbf2_9ce4_8422_2325); // differs from empty
+    }
+
+    #[test]
+    fn fnv1a_hash_long_string() {
+        let long = "x".repeat(10000);
+        let h = fnv1a_hash(&long);
+        assert_ne!(h, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // chrono_now
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn chrono_now_returns_nonzero_string() {
+        let ts = chrono_now();
+        assert!(!ts.is_empty());
+        let val: u64 = ts.parse().expect("should be numeric");
+        assert!(val > 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // empty_index
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn empty_index_has_zero_branches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let idx = empty_index(tmp.path());
+        assert_eq!(idx.total_branches, 0);
+        assert_eq!(idx.covered_branches, 0);
+        assert!(idx.traces.is_empty());
+        assert!(idx.profiles.is_empty());
+        assert!(idx.file_paths.is_empty());
+        assert!(matches!(idx.language, Language::Python));
+        assert_eq!(idx.target_root, tmp.path().to_path_buf());
+        assert!(!idx.created_at.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_coverage_all_branches
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_coverage_all_branches_basic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{
+            "files": {
+                "src/foo.py": {
+                    "executed_branches": [[10, 12], [20, -1]],
+                    "missing_branches": [[30, 32], [40, -5]]
+                }
+            }
+        }"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, file_paths) =
+            parse_coverage_all_branches(&json_path, Path::new("/nonexistent_root")).unwrap();
+        // 2 executed + 2 missing = 4 branches
+        assert_eq!(branches.len(), 4);
+        // file_paths should have 1 entry
+        assert_eq!(file_paths.len(), 1);
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_negative_to_sets_direction_1() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{
+            "files": {
+                "mod.py": {
+                    "executed_branches": [[10, -3]],
+                    "missing_branches": [[20, -7]]
+                }
+            }
+        }"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, _) =
+            parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].direction, 1); // to < 0
+        assert_eq!(branches[1].direction, 1); // to < 0
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_positive_to_sets_direction_0() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{
+            "files": {
+                "mod.py": {
+                    "executed_branches": [[10, 15]],
+                    "missing_branches": [[20, 25]]
+                }
+            }
+        }"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, _) =
+            parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].direction, 0);
+        assert_eq!(branches[1].direction, 0);
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_empty_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, file_paths) =
+            parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        assert!(branches.is_empty());
+        assert!(file_paths.is_empty());
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_missing_keys() {
+        // File data has neither executed_branches nor missing_branches
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"some_other_key": 42}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, file_paths) =
+            parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        assert!(branches.is_empty());
+        assert_eq!(file_paths.len(), 1); // file_path entry still created
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_non_array_executed() {
+        // executed_branches is not an array
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": "not_array", "missing_branches": 42}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, _) =
+            parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_non_array_pairs() {
+        // Pairs within executed_branches are not arrays
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": [42, "hello"]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, _) =
+            parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        assert!(branches.is_empty()); // pairs are not arrays, skipped
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_short_pair() {
+        // Pair has only 1 element (not 2)
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": [[10]], "missing_branches": [[20, 30, 40]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, _) =
+            parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        // [10] has len 1, skipped. [20, 30, 40] has len 3, skipped.
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_strip_prefix_works() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        // File path starts with repo_root so strip_prefix removes it
+        let json = r#"{"files": {"/repo/root/src/foo.py": {"executed_branches": [[1, 2]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, file_paths) =
+            parse_coverage_all_branches(&json_path, Path::new("/repo/root")).unwrap();
+        assert_eq!(branches.len(), 1);
+        // The file_path should be relative
+        let first_path = file_paths.values().next().unwrap();
+        assert_eq!(first_path, &PathBuf::from("src/foo.py"));
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_no_strip_prefix() {
+        // File path does NOT start with repo_root, so strip_prefix falls back
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"other/path.py": {"executed_branches": [[1, 2]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (_, file_paths) =
+            parse_coverage_all_branches(&json_path, Path::new("/different/root")).unwrap();
+        let first_path = file_paths.values().next().unwrap();
+        assert_eq!(first_path, &PathBuf::from("other/path.py"));
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_invalid_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        std::fs::write(&json_path, "not json").unwrap();
+        let result = parse_coverage_all_branches(&json_path, Path::new("/"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_missing_file() {
+        let result = parse_coverage_all_branches(Path::new("/no/such/file.json"), Path::new("/"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_multiple_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{
+            "files": {
+                "a.py": {
+                    "executed_branches": [[1, 2]],
+                    "missing_branches": [[3, -4]]
+                },
+                "b.py": {
+                    "executed_branches": [[10, 20], [30, -40]],
+                    "missing_branches": []
+                }
+            }
+        }"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, file_paths) =
+            parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        // a.py: 1 executed + 1 missing = 2; b.py: 2 executed + 0 missing = 2; total = 4
+        assert_eq!(branches.len(), 4);
+        assert_eq!(file_paths.len(), 2);
+    }
+
+    #[test]
+    fn parse_coverage_all_branches_zero_to_value() {
+        // to == 0 is not < 0, so direction = 0
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": [[5, 0]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, _) =
+            parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].direction, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_coverage_executed — raw coverage.py format (fallback path)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_coverage_executed_raw_format() {
+        // This JSON does NOT match ApexCoverageJson (no all_branches field),
+        // so it falls back to the raw coverage.py parsing path.
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{
+            "files": {
+                "src/mod.py": {
+                    "executed_branches": [[10, 15], [20, -3]]
+                }
+            }
+        }"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].direction, 0); // 15 > 0
+        assert_eq!(branches[1].direction, 1); // -3 < 0
+    }
+
+    #[test]
+    fn parse_coverage_executed_raw_format_empty_executed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": []}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn parse_coverage_executed_raw_format_no_executed_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"other_key": 1}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn parse_coverage_executed_raw_format_non_array_executed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": "bad"}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn parse_coverage_executed_raw_format_non_array_pair() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": [42, "x"]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn parse_coverage_executed_raw_format_short_pair() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": [[10]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn parse_coverage_executed_raw_format_strip_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let root_str = tmp.path().to_string_lossy();
+        let json = format!(
+            r#"{{"files": {{"{root_str}/src/foo.py": {{"executed_branches": [[1, 2]]}}}}}}"#
+        );
+        std::fs::write(&json_path, &json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert_eq!(branches.len(), 1);
+        // The file_id should be computed from the relative path
+        let expected_file_id = fnv1a_hash("src/foo.py");
+        assert_eq!(branches[0].file_id, expected_file_id);
+    }
+
+    #[test]
+    fn parse_coverage_executed_raw_format_no_strip_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"other/path.py": {"executed_branches": [[1, 2]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, Path::new("/different")).unwrap();
+        assert_eq!(branches.len(), 1);
+        let expected_file_id = fnv1a_hash("other/path.py");
+        assert_eq!(branches[0].file_id, expected_file_id);
+    }
+
+    #[test]
+    fn parse_coverage_executed_raw_format_multiple_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{
+            "files": {
+                "a.py": {"executed_branches": [[1, 2]]},
+                "b.py": {"executed_branches": [[3, 4], [5, -6]]}
+            }
+        }"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert_eq!(branches.len(), 3);
+    }
+
+    #[test]
+    fn parse_coverage_executed_invalid_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        std::fs::write(&json_path, "{{not valid}}").unwrap();
+        let result = parse_coverage_executed(&json_path, tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_coverage_executed_empty_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert!(branches.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_apex_format edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_apex_format_empty_files() {
+        let json = r#"{"files": {}}"#;
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        let branches = parse_apex_format(&data, Path::new("/"));
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn parse_apex_format_empty_executed_branches() {
+        let json = r#"{
+            "files": {
+                "a.py": {
+                    "executed_branches": [],
+                    "missing_branches": [],
+                    "all_branches": []
+                }
+            }
+        }"#;
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        let branches = parse_apex_format(&data, Path::new("/"));
+        assert!(branches.is_empty());
+    }
+
+    #[test]
+    fn parse_apex_format_strip_prefix() {
+        let json = r#"{
+            "files": {
+                "/repo/src/a.py": {
+                    "executed_branches": [[1, 2]],
+                    "missing_branches": [],
+                    "all_branches": [[1, 2]]
+                }
+            }
+        }"#;
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        let branches = parse_apex_format(&data, Path::new("/repo"));
+        assert_eq!(branches.len(), 1);
+        let expected_id = fnv1a_hash("src/a.py");
+        assert_eq!(branches[0].file_id, expected_id);
+    }
+
+    #[test]
+    fn parse_apex_format_no_strip_prefix() {
+        let json = r#"{
+            "files": {
+                "relative/path.py": {
+                    "executed_branches": [[5, 10]],
+                    "missing_branches": [],
+                    "all_branches": [[5, 10]]
+                }
+            }
+        }"#;
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        let branches = parse_apex_format(&data, Path::new("/other/root"));
+        assert_eq!(branches.len(), 1);
+        let expected_id = fnv1a_hash("relative/path.py");
+        assert_eq!(branches[0].file_id, expected_id);
+    }
+
+    #[test]
+    fn parse_apex_format_multiple_files() {
+        let json = r#"{
+            "files": {
+                "a.py": {
+                    "executed_branches": [[1, 2]],
+                    "missing_branches": [],
+                    "all_branches": [[1, 2]]
+                },
+                "b.py": {
+                    "executed_branches": [[3, -4], [5, 6]],
+                    "missing_branches": [],
+                    "all_branches": [[3, -4], [5, 6]]
+                }
+            }
+        }"#;
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        let branches = parse_apex_format(&data, Path::new("/"));
+        assert_eq!(branches.len(), 3);
+    }
+
+    #[test]
+    fn parse_apex_format_zero_direction() {
+        // pair[1] == 0 => direction = 0 (not < 0)
+        let json = r#"{
+            "files": {
+                "a.py": {
+                    "executed_branches": [[10, 0]],
+                    "missing_branches": [],
+                    "all_branches": [[10, 0]]
+                }
+            }
+        }"#;
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        let branches = parse_apex_format(&data, Path::new("/"));
+        assert_eq!(branches[0].direction, 0);
+    }
+
+    #[test]
+    fn parse_apex_format_uses_unsigned_abs_for_from() {
+        // negative from value: unsigned_abs should give positive line
+        let json = r#"{
+            "files": {
+                "a.py": {
+                    "executed_branches": [[-10, 5]],
+                    "missing_branches": [],
+                    "all_branches": [[-10, 5]]
+                }
+            }
+        }"#;
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        let branches = parse_apex_format(&data, Path::new("/"));
+        assert_eq!(branches[0].line, 10); // unsigned_abs(-10) = 10
+    }
+
+    // -----------------------------------------------------------------------
+    // CoverageJsonRaw deserialization
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn coverage_json_raw_default_files() {
+        // "files" is missing entirely — serde(default) gives empty HashMap
+        let json = r#"{}"#;
+        let data: CoverageJsonRaw = serde_json::from_str(json).unwrap();
+        assert!(data.files.is_empty());
+    }
+
+    #[test]
+    fn coverage_json_raw_with_totals() {
+        // Extra fields like "totals" should be ignored
+        let json = r#"{"files": {}, "totals": {"percent_covered": 50.0}}"#;
+        let data: CoverageJsonRaw = serde_json::from_str(json).unwrap();
+        assert!(data.files.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_coverage_all_branches — unwrap_or(0) paths for non-numeric values
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_coverage_all_branches_non_numeric_pair_values() {
+        // Pair values are not numbers — as_i64() returns None, falls back to 0
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": [["x", "y"]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, _) =
+            parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        assert_eq!(branches.len(), 1);
+        // Both from and to are 0 (from unwrap_or(0)); to=0 is not < 0, so direction=0
+        assert_eq!(branches[0].line, 0);
+        assert_eq!(branches[0].direction, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_coverage_executed — raw format, non-numeric pair values
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_coverage_executed_raw_non_numeric_pair() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": [["a", "b"]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].line, 0);
+        assert_eq!(branches[0].direction, 0);
+    }
+
+    #[test]
+    fn parse_coverage_executed_raw_zero_to() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": [[5, 0]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].direction, 0); // 0 is not < 0
+    }
+
+    #[test]
+    fn parse_coverage_executed_raw_long_pair_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": [[1, 2, 3]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert!(branches.is_empty()); // len != 2
+    }
 }

@@ -235,4 +235,134 @@ mod tests {
             .contains("public class ApexGeneratedTest {"));
         assert!(results[0].content.ends_with("}\n"));
     }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn candidate_with_void_test_method_not_wrapped() {
+        let dir = tempfile::tempdir().unwrap();
+        let synth = JUnitSynthesizer::new(dir.path());
+        let candidate = make_candidate(
+            "@Test\nvoid testSimple() {\n    assertTrue(true);\n}",
+            vec![],
+        );
+        let results = synth.synthesize(&[candidate]).unwrap();
+        let content = &results[0].content;
+        // Should NOT double-wrap with testApexGenerated_
+        assert!(!content.contains("testApexGenerated_"));
+        assert!(content.contains("void testSimple()"));
+    }
+
+    #[test]
+    fn mixed_signature_and_raw_code_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let synth = JUnitSynthesizer::new(dir.path());
+        let c1 = make_candidate(
+            "@Test\npublic void testExisting() {\n    assertEquals(1, 1);\n}",
+            vec![BranchId::new(1, 1, 0, 0)],
+        );
+        let c2 = make_candidate(
+            "int x = 42;\nassertEquals(42, x);",
+            vec![BranchId::new(2, 2, 0, 0)],
+        );
+        let results = synth.synthesize(&[c1, c2]).unwrap();
+        let content = &results[0].content;
+        // c1 should be embedded directly (has "public void")
+        assert!(content.contains("public void testExisting()"));
+        // c2 should be wrapped (no method signature)
+        assert!(content.contains("testApexGenerated_1"));
+        assert!(content.contains("int x = 42;"));
+    }
+
+    #[test]
+    fn all_empty_code_candidates_still_produce_class() {
+        let dir = tempfile::tempdir().unwrap();
+        let synth = JUnitSynthesizer::new(dir.path());
+        let c1 = make_candidate("   ", vec![]);
+        let c2 = make_candidate("  ", vec![]);
+        let results = synth.synthesize(&[c1, c2]).unwrap();
+        let content = &results[0].content;
+        // Class wrapper should still be present, just no @Test methods
+        assert!(content.contains("public class ApexGeneratedTest {"));
+        assert!(!content.contains("@Test"));
+    }
+
+    #[test]
+    fn generate_content_method_numbering() {
+        let c1 = make_candidate("x();", vec![]);
+        let c2 = make_candidate("y();", vec![]);
+        let c3 = make_candidate("z();", vec![]);
+        let content = JUnitSynthesizer::generate_content(&[&c1, &c2, &c3]);
+        assert!(content.contains("testApexGenerated_0"));
+        assert!(content.contains("testApexGenerated_1"));
+        assert!(content.contains("testApexGenerated_2"));
+    }
+
+    #[test]
+    fn generate_content_indentation_of_wrapped_code() {
+        let c = make_candidate("int a = 1;\nint b = 2;\nassertEquals(3, a + b);", vec![]);
+        let content = JUnitSynthesizer::generate_content(&[&c]);
+        // Code lines should be indented by 8 spaces (inside method body)
+        assert!(content.contains("        int a = 1;"));
+        assert!(content.contains("        int b = 2;"));
+        assert!(content.contains("        assertEquals(3, a + b);"));
+    }
+
+    #[test]
+    fn generate_content_indentation_of_existing_method() {
+        let c = make_candidate(
+            "@Test\npublic void testStuff() {\n    assertTrue(true);\n}",
+            vec![],
+        );
+        let content = JUnitSynthesizer::generate_content(&[&c]);
+        // Lines should be indented by 4 spaces (class level)
+        assert!(content.contains("    @Test"));
+        assert!(content.contains("    public void testStuff() {"));
+    }
+
+    #[test]
+    fn file_path_is_correct() {
+        let dir = tempfile::tempdir().unwrap();
+        let synth = JUnitSynthesizer::new(dir.path());
+        let c = make_candidate("assertTrue(true);", vec![]);
+        let results = synth.synthesize(&[c]).unwrap();
+        assert_eq!(
+            results[0].path.file_name().unwrap().to_str().unwrap(),
+            "ApexGeneratedTest.java"
+        );
+        assert_eq!(results[0].path.parent().unwrap(), dir.path());
+    }
+
+    #[test]
+    fn deduplication_with_three_same_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let synth = JUnitSynthesizer::new(dir.path());
+        let c1 = make_candidate("assertEquals(1, 1);", vec![BranchId::new(1, 1, 0, 0)]);
+        let c2 = make_candidate("assertEquals(1, 1);", vec![BranchId::new(2, 2, 0, 0)]);
+        let c3 = make_candidate("assertEquals(1, 1);", vec![BranchId::new(3, 3, 0, 0)]);
+        let results = synth.synthesize(&[c1, c2, c3]).unwrap();
+        // All three have same code, so only 1 unique candidate
+        let count = results[0].content.matches("assertEquals(1, 1)").count();
+        assert_eq!(count, 1);
+        // But covers_branches should have the first occurrence's branch
+        assert_eq!(results[0].covers_branches.len(), 1);
+    }
+
+    #[test]
+    fn imports_always_present() {
+        let c = make_candidate("assertTrue(true);", vec![]);
+        let content = JUnitSynthesizer::generate_content(&[&c]);
+        assert!(content.contains("import org.junit.jupiter.api.Test;"));
+        assert!(content.contains("import static org.junit.jupiter.api.Assertions.*;"));
+        assert!(content.contains("package apex.generated;"));
+    }
+
+    #[test]
+    fn throws_exception_in_generated_method() {
+        let c = make_candidate("doRisky();", vec![]);
+        let content = JUnitSynthesizer::generate_content(&[&c]);
+        assert!(content.contains("throws Exception"));
+    }
 }

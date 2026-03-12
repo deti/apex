@@ -171,4 +171,93 @@ mod tests {
         let d = StaticAnalysisDetector::default();
         assert!(d.uses_cargo_subprocess());
     }
+
+    #[test]
+    fn parse_clippy_invalid_json() {
+        let findings = parse_clippy_line("not json at all");
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn parse_clippy_empty_code() {
+        let line = r#"{"reason":"compiler-message","message":{"code":{"code":""},"level":"warning","message":"msg","spans":[]}}"#;
+        let findings = parse_clippy_line(line);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn parse_clippy_no_code_field() {
+        let line = r#"{"reason":"compiler-message","message":{"code":null,"level":"warning","message":"msg","spans":[]}}"#;
+        let findings = parse_clippy_line(line);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn parse_clippy_error_level() {
+        let line = r#"{"reason":"compiler-message","message":{"code":{"code":"clippy::cast_possible_truncation"},"level":"error","message":"truncation","spans":[{"file_name":"src/lib.rs","line_start":10,"line_end":10,"column_start":1,"column_end":20}]}}"#;
+        let findings = parse_clippy_line(line);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+        assert_eq!(findings[0].category, FindingCategory::UndefinedBehavior);
+    }
+
+    #[test]
+    fn parse_clippy_note_level() {
+        let line = r#"{"reason":"compiler-message","message":{"code":{"code":"clippy::foo"},"level":"note","message":"info","spans":[]}}"#;
+        let findings = parse_clippy_line(line);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Low);
+    }
+
+    #[test]
+    fn parse_clippy_no_spans() {
+        let line = r#"{"reason":"compiler-message","message":{"code":{"code":"clippy::foo"},"level":"warning","message":"msg","spans":[]}}"#;
+        let findings = parse_clippy_line(line);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].file, PathBuf::from("unknown"));
+        assert_eq!(findings[0].line, None);
+    }
+
+    #[test]
+    fn clippy_code_to_category_unsafe() {
+        assert_eq!(
+            clippy_code_to_category("clippy::unsafe_derive_deserialize"),
+            FindingCategory::UnsafeCode
+        );
+    }
+
+    #[test]
+    fn clippy_code_to_category_expect_used() {
+        assert_eq!(
+            clippy_code_to_category("clippy::expect_used"),
+            FindingCategory::PanicPath
+        );
+    }
+
+    #[test]
+    fn clippy_code_to_category_overflow() {
+        assert_eq!(
+            clippy_code_to_category("clippy::integer_overflow"),
+            FindingCategory::UndefinedBehavior
+        );
+    }
+
+    #[test]
+    fn clippy_code_to_category_panic() {
+        assert_eq!(
+            clippy_code_to_category("clippy::panic_in_result"),
+            FindingCategory::PanicPath
+        );
+    }
+
+    #[test]
+    fn static_analysis_new_from_config() {
+        use crate::config::StaticAnalysisConfig;
+        let config = StaticAnalysisConfig {
+            clippy_extra_args: vec!["-W".into(), "clippy::pedantic".into()],
+            sarif_paths: vec![],
+        };
+        let det = StaticAnalysisDetector::new(&config);
+        assert_eq!(det.extra_args, vec!["-W", "clippy::pedantic"]);
+    }
 }

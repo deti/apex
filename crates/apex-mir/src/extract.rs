@@ -773,4 +773,331 @@ fn nested_braces() -> () {
         // should still close properly.
         assert!(matches!(funcs[0].blocks[0].terminator, Terminator::Return));
     }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn finish_bb_with_terminator_no_open_bb() {
+        // When current_bb_id is None, finish_bb_with_terminator is a no-op.
+        // This is exercised via a goto with valid target but no open bb.
+        // We simulate this indirectly: goto fires, takes the bb_id, then
+        // a second goto on the same bb has no bb_id left.
+        let mir = "\
+fn double_goto() -> () {
+    bb0: {
+        goto -> bb1;
+        goto -> bb2;
+    }
+    bb1: {
+        return;
+    }
+    bb2: {
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        // First goto consumed bb0; second goto had no bb_id, so it's a no-op.
+        // bb1 and bb2 are parsed normally.
+        assert!(funcs[0].block_count() >= 2);
+    }
+
+    #[test]
+    fn finish_bb_with_terminator_no_current_fn() {
+        // finish_bb_with_terminator with current_fn == None is only reachable
+        // if somehow current_fn was taken. In practice this doesn't happen,
+        // but we can test the helper directly.
+        let mut current_fn: Option<MirFunction> = None;
+        let mut current_bb_id: Option<usize> = Some(0);
+        let mut current_stmts: Vec<Statement> = vec![Statement::Nop];
+        finish_bb_with_terminator(
+            &mut current_fn,
+            &mut current_bb_id,
+            &mut current_stmts,
+            Terminator::Return,
+        );
+        // bb_id was taken but no function to push to
+        assert!(current_bb_id.is_none());
+        assert!(current_fn.is_none());
+    }
+
+    #[test]
+    fn parse_only_whitespace() {
+        let mir = "   \n  \n\t  \n";
+        let funcs = parse_mir_output(mir);
+        assert!(funcs.is_empty());
+    }
+
+    #[test]
+    fn parse_comments_and_garbage_only() {
+        let mir = "// comment 1\n# not MIR\nsome random text\n---\n===";
+        let funcs = parse_mir_output(mir);
+        assert!(funcs.is_empty());
+    }
+
+    #[test]
+    fn parse_fn_no_body_just_opening_brace() {
+        // Function with opening brace and nothing else (trailing flush, no bb)
+        let mir = "fn lonely() -> () {";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "lonely");
+        assert_eq!(funcs[0].block_count(), 0);
+    }
+
+    #[test]
+    fn parse_multiple_bb_same_function_sequential_terminators() {
+        // Each bb has a different terminator type
+        let mir = "\
+fn varied() -> () {
+    bb0: {
+        goto -> bb1;
+    }
+    bb1: {
+        unreachable;
+    }
+    bb2: {
+        abort;
+    }
+    bb3: {
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].block_count(), 4);
+        assert!(matches!(funcs[0].blocks[0].terminator, Terminator::Goto { target: 1 }));
+        assert!(matches!(funcs[0].blocks[1].terminator, Terminator::Unreachable));
+        assert!(matches!(funcs[0].blocks[2].terminator, Terminator::Abort));
+        assert!(matches!(funcs[0].blocks[3].terminator, Terminator::Return));
+    }
+
+    #[test]
+    fn parse_bb_close_brace_with_no_bb_open() {
+        // A `}` line inside a function but outside any bb — just adjusts brace depth
+        let mir = "\
+fn stray_brace() -> () {
+    let x = 0;
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].block_count(), 0);
+    }
+
+    #[test]
+    fn parse_assignment_with_equals_in_rvalue() {
+        // rvalue contains multiple `=` characters
+        let mir = "\
+fn multi_eq() -> () {
+    bb0: {
+        _0 = CheckedBinaryOp(Eq, _1, _2);
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        let stmts = &funcs[0].blocks[0].statements;
+        assert_eq!(stmts.len(), 1);
+        match &stmts[0] {
+            Statement::Assign { place, rvalue } => {
+                assert_eq!(place, "_0");
+                assert_eq!(rvalue, "CheckedBinaryOp(Eq, _1, _2)");
+            }
+            _ => panic!("expected Assign"),
+        }
+    }
+
+    #[test]
+    fn parse_fn_name_with_generics() {
+        assert_eq!(
+            extract_fn_name("fn std::vec::Vec::<T>::push(_1: &mut Vec<T>) {"),
+            "std::vec::Vec::<T>::push"
+        );
+    }
+
+    #[test]
+    fn parse_fn_name_with_angle_brackets() {
+        // Angle brackets before parenthesis
+        assert_eq!(
+            extract_fn_name("fn foo::<u32>() {"),
+            "foo::<u32>"
+        );
+    }
+
+    #[test]
+    fn parse_bb_ref_leading_zeros() {
+        assert_eq!(parse_bb_ref("bb007"), Some(7));
+    }
+
+    #[test]
+    fn parse_bb_ref_large_number() {
+        assert_eq!(parse_bb_ref("bb999999"), Some(999999));
+    }
+
+    #[test]
+    fn parse_bb_ref_just_bb() {
+        // "bb" with no digits — parse fails
+        assert_eq!(parse_bb_ref("bb"), None);
+    }
+
+    #[test]
+    fn parse_bb_ref_negative() {
+        // "bb-1" — not a valid usize
+        assert_eq!(parse_bb_ref("bb-1"), None);
+    }
+
+    #[test]
+    fn parse_storage_live_dead_whitespace_in_var() {
+        // Variable name with trailing whitespace before `)` and `;`
+        let mir = "\
+fn ws_test() -> () {
+    bb0: {
+        StorageLive( _1 );
+        StorageDead( _2 );
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        let stmts = &funcs[0].blocks[0].statements;
+        assert_eq!(stmts.len(), 2);
+        // The trim() in parsing should handle extra spaces
+        assert!(matches!(&stmts[0], Statement::StorageLive(v) if v == "_1"));
+        assert!(matches!(&stmts[1], Statement::StorageDead(v) if v == "_2"));
+    }
+
+    #[test]
+    fn parse_line_starts_with_eq_sign_ignored() {
+        // In test enumeration context, lines starting with = are skipped.
+        // In MIR parsing, lines outside bb that don't match patterns are ignored.
+        let mir = "\
+fn eq_line() -> () {
+    bb0: {
+        return;
+    }
+}
+= some separator line";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+    }
+
+    #[test]
+    fn parse_multiple_functions_first_has_no_close() {
+        // First function never closes (no matching `}`), second function starts
+        let mir = "\
+fn first() -> () {
+    bb0: {
+        StorageLive(_1);
+        _0 = _1;
+fn second() -> () {
+    bb0: {
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 2);
+        assert_eq!(funcs[0].name, "first");
+        // first's bb0 was open when second fn started — it should be flushed
+        assert_eq!(funcs[0].block_count(), 1);
+        assert_eq!(funcs[0].blocks[0].statements.len(), 2);
+        assert_eq!(funcs[1].name, "second");
+    }
+
+    #[test]
+    fn parse_bb_close_when_no_bb_id_set() {
+        // `}` line inside a bb context where current_bb_id is already None
+        // (e.g., after a terminator already consumed it)
+        let mir = "\
+fn extra_close() -> () {
+    bb0: {
+        return;
+    }
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].block_count(), 1);
+    }
+
+    #[test]
+    fn parse_deep_nesting_braces() {
+        // Statement with deeply nested braces
+        let mir = "\
+fn deep() -> () {
+    bb0: {
+        _0 = A { b: B { c: C { d: 1 } } };
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].block_count(), 1);
+        assert!(matches!(funcs[0].blocks[0].terminator, Terminator::Return));
+    }
+
+    #[test]
+    fn parse_empty_bb_immediately_closed() {
+        let mir = "\
+fn empty_bb() -> () {
+    bb0: {
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].block_count(), 1);
+        assert!(funcs[0].blocks[0].statements.is_empty());
+        assert!(matches!(funcs[0].blocks[0].terminator, Terminator::Return));
+    }
+
+    #[test]
+    fn parse_goto_semicolon_no_space() {
+        // goto->bb1; — no space between goto and ->
+        let mir = "\
+fn goto_nospc_semi() -> () {
+    bb0: {
+        goto->bb1;
+    }
+    bb1: {
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert!(matches!(
+            funcs[0].blocks[0].terminator,
+            Terminator::Goto { target: 1 }
+        ));
+    }
+
+    #[test]
+    fn extract_fn_name_with_return_type_and_where() {
+        // Complex signature
+        assert_eq!(
+            extract_fn_name("fn my_mod::complex_fn(x: i32) -> Result<(), Error> {"),
+            "my_mod::complex_fn"
+        );
+    }
+
+    #[test]
+    fn parse_trailing_with_open_bb_and_stmts() {
+        // Trailing flush with an open bb that has accumulated statements
+        let mir = "fn trailing_stmts() -> () {\n    bb0: {\n        StorageLive(_1);\n        _0 = _1;";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].block_count(), 1);
+        assert_eq!(funcs[0].blocks[0].statements.len(), 2);
+    }
+
+    #[test]
+    fn parse_bb_header_colon_at_end() {
+        // bb header where `: {` is at the very end
+        let mir = "\
+fn colon_end() -> () {
+    bb0: {
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].block_count(), 1);
+    }
 }

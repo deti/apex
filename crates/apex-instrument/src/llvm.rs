@@ -220,4 +220,70 @@ mod tests {
             assert_eq!(result.work_dir, PathBuf::from("/tmp/fake-project"));
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_branch_ids_returns_empty_slice() {
+        use apex_core::traits::Instrumentor;
+        let inst = LlvmInstrumentor::new();
+        let ids = inst.branch_ids();
+        assert!(ids.is_empty());
+        assert_eq!(ids.len(), 0);
+    }
+
+    #[test]
+    fn test_default_and_new_are_equivalent() {
+        use apex_core::traits::Instrumentor;
+        let inst1 = LlvmInstrumentor::new();
+        let inst2 = LlvmInstrumentor::default();
+        assert_eq!(inst1.branch_ids().len(), inst2.branch_ids().len());
+    }
+
+    #[tokio::test]
+    async fn test_instrument_preserves_target_fields() {
+        let runner = Arc::new(FakeRunner);
+        let inst = LlvmInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: PathBuf::from("/my/project"),
+            language: apex_core::types::Language::C,
+            test_command: vec!["make".into(), "test".into()],
+        };
+
+        let result = inst.instrument(&target).await.unwrap();
+        #[cfg(not(feature = "llvm-instrument"))]
+        {
+            assert_eq!(result.target.root, PathBuf::from("/my/project"));
+            assert_eq!(result.target.language, apex_core::types::Language::C);
+            assert_eq!(result.target.test_command, vec!["make", "test"]);
+            assert_eq!(result.work_dir, PathBuf::from("/my/project"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_instrument_with_different_languages() {
+        let runner = Arc::new(FakeRunner);
+        let inst = LlvmInstrumentor::with_runner(runner);
+
+        // LLVM instrumentor should work with any target language
+        for lang in [
+            apex_core::types::Language::C,
+            apex_core::types::Language::Rust,
+        ] {
+            let target = Target {
+                root: PathBuf::from("/tmp/test"),
+                language: lang,
+                test_command: Vec::new(),
+            };
+
+            let result = inst.instrument(&target).await.unwrap();
+            #[cfg(not(feature = "llvm-instrument"))]
+            {
+                assert!(result.branch_ids.is_empty());
+            }
+        }
+    }
 }

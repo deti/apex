@@ -239,4 +239,124 @@ warning: 2 allowed advisories were not found in the advisory database:
         let d = DependencyAuditDetector;
         assert!(d.uses_cargo_subprocess());
     }
+
+    #[test]
+    fn parse_cargo_audit_empty_output() {
+        let result = parse_cargo_audit_output("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_cargo_audit_critical_severity() {
+        let json = r#"{
+            "vulnerabilities": {
+                "found": 1,
+                "list": [{
+                    "advisory": {
+                        "id": "RUSTSEC-2024-0001",
+                        "title": "critical vuln",
+                        "severity": "critical"
+                    },
+                    "package": {"name": "badlib", "version": "0.1.0"},
+                    "versions": {"patched": [">=0.2.0"]}
+                }]
+            }
+        }"#;
+        let findings = parse_cargo_audit_output(json).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+        assert!(findings[0].suggestion.contains("Upgrade"));
+    }
+
+    #[test]
+    fn parse_cargo_audit_low_severity() {
+        let json = r#"{
+            "vulnerabilities": {
+                "found": 1,
+                "list": [{
+                    "advisory": {
+                        "id": "RUSTSEC-2024-0002",
+                        "title": "low vuln",
+                        "severity": "low"
+                    },
+                    "package": {"name": "minorlib", "version": "1.0.0"},
+                    "versions": {"patched": []}
+                }]
+            }
+        }"#;
+        let findings = parse_cargo_audit_output(json).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Low);
+        assert!(findings[0].fix.is_none()); // no patched version
+        assert!(findings[0].suggestion.contains("No patched version"));
+    }
+
+    #[test]
+    fn parse_cargo_audit_unknown_severity() {
+        let json = r#"{
+            "vulnerabilities": {
+                "found": 1,
+                "list": [{
+                    "advisory": {
+                        "id": "RUSTSEC-2024-0003",
+                        "title": "vuln",
+                        "severity": "unknown"
+                    },
+                    "package": {"name": "lib", "version": "1.0.0"},
+                    "versions": {"patched": []}
+                }]
+            }
+        }"#;
+        let findings = parse_cargo_audit_output(json).unwrap();
+        assert_eq!(findings[0].severity, Severity::Medium); // _ fallback
+    }
+
+    #[test]
+    fn parse_cargo_audit_medium_severity() {
+        let json = r#"{
+            "vulnerabilities": {
+                "found": 1,
+                "list": [{
+                    "advisory": {
+                        "id": "RUSTSEC-2024-0004",
+                        "title": "medium vuln",
+                        "severity": "medium"
+                    },
+                    "package": {"name": "medlib", "version": "1.0.0"},
+                    "versions": {"patched": [">=1.1.0"]}
+                }]
+            }
+        }"#;
+        let findings = parse_cargo_audit_output(json).unwrap();
+        assert_eq!(findings[0].severity, Severity::Medium);
+        assert!(findings[0].fix.is_some());
+    }
+
+    #[test]
+    fn parse_cargo_audit_warnings_non_array_skipped() {
+        let json = r#"{
+            "vulnerabilities": {"found": 0, "list": []},
+            "warnings": {
+                "unmaintained": "not an array"
+            }
+        }"#;
+        let findings = parse_cargo_audit_output(json).unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn advisory_line_is_deterministic() {
+        let l1 = advisory_line("RUSTSEC-2023-0001");
+        let l2 = advisory_line("RUSTSEC-2023-0001");
+        assert_eq!(l1, l2);
+        assert!(l1 >= 1);
+    }
+
+    #[test]
+    fn advisory_line_differs_for_different_ids() {
+        let l1 = advisory_line("RUSTSEC-2023-0001");
+        let l2 = advisory_line("RUSTSEC-2024-0999");
+        // Different IDs should almost certainly produce different lines
+        assert_ne!(l1, l2);
+    }
 }

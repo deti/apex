@@ -441,6 +441,68 @@ mod tests {
     }
 
     #[test]
+    fn mark_covered_on_unreachable_returns_false() {
+        let oracle = CoverageOracle::new();
+        let b = make_branch(1, 0);
+        oracle.register_branches([b.clone()]);
+        oracle.mark_unreachable(&b);
+        // Attempting to mark_covered on Unreachable hits the `_ => false` arm
+        assert!(!oracle.mark_covered(&b, SeedId::new()));
+        assert!(matches!(
+            oracle.state_of(&b),
+            Some(BranchState::Unreachable)
+        ));
+    }
+
+    #[test]
+    fn mark_covered_on_suppressed_returns_false() {
+        let oracle = CoverageOracle::new();
+        let b = make_branch(1, 0);
+        oracle.register_branches([b.clone()]);
+        oracle.suppress(&b);
+        // Attempting to mark_covered on Suppressed hits the `_ => false` arm
+        assert!(!oracle.mark_covered(&b, SeedId::new()));
+        assert!(matches!(
+            oracle.state_of(&b),
+            Some(BranchState::Suppressed)
+        ));
+    }
+
+    #[test]
+    fn merge_from_result_no_new_coverage() {
+        let oracle = CoverageOracle::new();
+        let b = make_branch(1, 0);
+        oracle.register_branches([b.clone()]);
+        oracle.mark_covered(&b, SeedId::new());
+        // Second merge of same branch → no new coverage
+        let result = ExecutionResult {
+            seed_id: SeedId::new(),
+            status: apex_core::types::ExecutionStatus::Pass,
+            new_branches: vec![b],
+            trace: None,
+            duration_ms: 5,
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        let delta = oracle.merge_from_result(&result);
+        assert!(delta.newly_covered.is_empty());
+    }
+
+    #[test]
+    fn merge_bitmap_already_covered_no_new() {
+        let oracle = CoverageOracle::new();
+        let bs: Vec<_> = (0u32..3).map(|l| make_branch(l, 0)).collect();
+        oracle.register_branches(bs.clone());
+        let seed1 = SeedId::new();
+        oracle.mark_covered(&bs[0], seed1);
+        oracle.mark_covered(&bs[1], seed1);
+        // Bitmap marks all 3 as hit, but 2 are already covered
+        let bitmap = vec![1u8, 1, 1];
+        let delta = oracle.merge_bitmap(&bitmap, SeedId::new());
+        assert_eq!(delta.newly_covered.len(), 1); // only the 3rd is new
+    }
+
+    #[test]
     fn test_suppress_on_unreachable_is_noop() {
         let oracle = CoverageOracle::new();
         let b = make_branch(1, 0);

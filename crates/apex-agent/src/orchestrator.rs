@@ -1490,4 +1490,185 @@ mod tests {
         let summary = cluster.bug_summary();
         assert_eq!(summary.total, 0);
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `monitor_action()` returns SwitchStrategy after small number of stalls.
+    #[test]
+    fn monitor_action_switch_strategy_after_stalls() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let sandbox: Arc<dyn Sandbox> = Arc::new(StubSandbox);
+        let cluster = AgentCluster::new(oracle, sandbox, test_target());
+
+        // Inject stalls directly into the monitor (window_size=10 → 2*10=20 for AgentCycle).
+        let mut monitor = cluster.monitor.lock().unwrap();
+        monitor.record(0, 100);
+        // 3 stalls → SwitchStrategy (3 < 2*10=20)
+        for i in 1..=3 {
+            monitor.record(i, 100);
+        }
+        drop(monitor);
+        assert_eq!(cluster.monitor_action(), crate::monitor::MonitorAction::SwitchStrategy);
+    }
+
+    /// `monitor_action()` returns AgentCycle after many stalls.
+    #[test]
+    fn monitor_action_agent_cycle_after_many_stalls() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let sandbox: Arc<dyn Sandbox> = Arc::new(StubSandbox);
+        let cluster = AgentCluster::new(oracle, sandbox, test_target());
+
+        let mut monitor = cluster.monitor.lock().unwrap();
+        monitor.record(0, 50);
+        // 20 stalls → stall_count = 20 = 2*10 → AgentCycle
+        for i in 1..=20 {
+            monitor.record(i, 50);
+        }
+        drop(monitor);
+        assert_eq!(cluster.monitor_action(), crate::monitor::MonitorAction::AgentCycle);
+    }
+
+    /// `monitor_action()` returns Stop after very many stalls.
+    #[test]
+    fn monitor_action_stop_after_extreme_stalls() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let sandbox: Arc<dyn Sandbox> = Arc::new(StubSandbox);
+        let cluster = AgentCluster::new(oracle, sandbox, test_target());
+
+        let mut monitor = cluster.monitor.lock().unwrap();
+        monitor.record(0, 10);
+        // 40 stalls → stall_count = 40 >= 4*10=40 → Stop
+        for i in 1..=40 {
+            monitor.record(i, 10);
+        }
+        drop(monitor);
+        assert_eq!(cluster.monitor_action(), crate::monitor::MonitorAction::Stop);
+    }
+
+    /// `bug_summary()` reports correct total after bugs are recorded.
+    #[tokio::test]
+    async fn bug_summary_after_crashes_recorded() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(99, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        struct OneShotCrash {
+            fired: std::sync::Mutex<bool>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for OneShotCrash {
+            fn name(&self) -> &str { "crash-strategy" }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                let mut f = self.fired.lock().unwrap();
+                if *f {
+                    Ok(Vec::new())
+                } else {
+                    *f = true;
+                    Ok(vec![InputSeed::new(b"c".to_vec(), apex_core::types::SeedOrigin::Fuzzer)])
+                }
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let cluster = AgentCluster::new(oracle, Arc::new(CrashSandbox), test_target())
+            .with_strategy(Box::new(OneShotCrash { fired: std::sync::Mutex::new(false) }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: Some(5),
+                stall_threshold: 2,
+            });
+
+        cluster.run().await.unwrap();
+        let summary = cluster.bug_summary();
+        assert!(summary.total > 0);
+        assert!(summary.by_class.contains_key("crash"));
+    }
+
+    /// `with_strategy()` then `strategy_count()` chains correctly.
+    #[test]
+    fn with_strategy_chain_three_strategies() {
+        struct Noop(&'static str);
+        #[async_trait::async_trait]
+        impl Strategy for Noop {
+            fn name(&self) -> &str { self.0 }
+            async fn suggest_inputs(&self, _: &ExplorationContext) -> apex_core::error::Result<Vec<InputSeed>> { Ok(vec![]) }
+            async fn observe(&self, _: &ExecutionResult) -> apex_core::error::Result<()> { Ok(()) }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target())
+            .with_strategy(Box::new(Noop("a")))
+            .with_strategy(Box::new(Noop("b")))
+            .with_strategy(Box::new(Noop("c")));
+        assert_eq!(cluster.strategy_count(), 3);
+    }
+
+    /// Target with empty test_command can be constructed.
+    #[test]
+    fn cluster_empty_test_command() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let target = Target {
+            root: PathBuf::from("/tmp"),
+            language: Language::Rust,
+            test_command: vec![],
+        };
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), target);
+        assert!(cluster.target.test_command.is_empty());
+    }
+
+    /// OrchestratorConfig::default() stall_threshold equals the module constant.
+    #[test]
+    fn orchestrator_config_stall_threshold_matches_constant() {
+        let cfg = OrchestratorConfig::default();
+        assert_eq!(cfg.stall_threshold, STALL_THRESHOLD);
+    }
+
+    /// `with_config()` preserves `None` deadline.
+    #[test]
+    fn with_config_none_deadline_preserved() {
+        let cfg = OrchestratorConfig {
+            coverage_target: 0.8,
+            deadline_secs: None,
+            stall_threshold: 5,
+        };
+        let oracle = Arc::new(CoverageOracle::new());
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target())
+            .with_config(cfg);
+        assert!(cluster.config.deadline_secs.is_none());
+    }
+
+    /// `run()` with an oracle that has pre-covered branches exits via `uncovered.is_empty()`.
+    #[tokio::test]
+    async fn run_pre_covered_branches_exits_immediately() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let b1 = apex_core::types::BranchId::new(5, 1, 0, 0);
+        let b2 = apex_core::types::BranchId::new(5, 2, 0, 0);
+        oracle.register_branches([b1.clone(), b2.clone()]);
+        oracle.mark_covered(&b1, apex_core::types::SeedId::new());
+        oracle.mark_covered(&b2, apex_core::types::SeedId::new());
+
+        let cluster = AgentCluster::new(oracle.clone(), Arc::new(StubSandbox), test_target());
+        cluster.run().await.unwrap();
+        assert_eq!(oracle.covered_count(), 2);
+    }
+
+    /// `bug_summary()` contains the reports vec.
+    #[test]
+    fn bug_summary_reports_field_populated() {
+        use apex_core::types::{BugClass, BugReport, SeedId};
+        let oracle = Arc::new(CoverageOracle::new());
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target());
+        let report = BugReport::new(BugClass::Crash, SeedId::new(), "oops".into());
+        cluster.ledger.record(report);
+        let summary = cluster.bug_summary();
+        assert_eq!(summary.total, 1);
+        assert_eq!(summary.reports.len(), 1);
+    }
 }

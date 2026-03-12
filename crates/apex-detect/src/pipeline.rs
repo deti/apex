@@ -444,6 +444,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_all_with_custom_timeout() {
+        let finding = make_finding(
+            "mock",
+            "src/lib.rs",
+            5,
+            Severity::Low,
+            FindingCategory::PanicPath,
+        );
+        let detector = MockDetector {
+            name: "mock-timeout",
+            subprocess: false,
+            findings: vec![finding],
+        };
+        let pipeline = DetectorPipeline::new(vec![Box::new(detector)]);
+        let mut ctx = test_context();
+        ctx.config.per_detector_timeout_secs = Some(10);
+        let report = pipeline.run_all(&ctx).await;
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.detector_status[0], ("mock-timeout".to_string(), true));
+    }
+
+    #[tokio::test]
+    async fn run_all_multiple_subprocess_detectors_run_sequentially() {
+        let f1 = make_finding("sub-a", "src/a.rs", 1, Severity::Medium, FindingCategory::DependencyVuln);
+        let f2 = make_finding("sub-b", "src/b.rs", 2, Severity::Low, FindingCategory::DependencyVuln);
+        let pipeline = DetectorPipeline::new(vec![
+            Box::new(MockDetector {
+                name: "sub-a",
+                subprocess: true,
+                findings: vec![f1],
+            }),
+            Box::new(MockDetector {
+                name: "sub-b",
+                subprocess: true,
+                findings: vec![f2],
+            }),
+        ]);
+        let ctx = test_context();
+        let report = pipeline.run_all(&ctx).await;
+        assert_eq!(report.findings.len(), 2);
+        assert!(report.detector_status.iter().all(|(_, ok)| *ok));
+    }
+
+    #[test]
+    fn deduplicate_higher_severity_wins() {
+        let mut findings = vec![
+            make_finding("a", "src/lib.rs", 10, Severity::Low, FindingCategory::PanicPath),
+            make_finding("b", "src/lib.rs", 10, Severity::Critical, FindingCategory::PanicPath),
+        ];
+        deduplicate(&mut findings);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+    }
+
+    #[test]
+    fn deduplicate_keeps_different_files_separate() {
+        let mut findings = vec![
+            make_finding("a", "src/a.rs", 10, Severity::Medium, FindingCategory::PanicPath),
+            make_finding("a", "src/b.rs", 10, Severity::Medium, FindingCategory::PanicPath),
+        ];
+        deduplicate(&mut findings);
+        assert_eq!(findings.len(), 2);
+    }
+
+    #[test]
+    fn deduplicate_merges_evidence() {
+        use crate::finding::Evidence;
+        let mut f1 = make_finding("a", "src/lib.rs", 10, Severity::Medium, FindingCategory::PanicPath);
+        f1.evidence = vec![Evidence::SanitizerReport {
+            sanitizer: "asan".into(),
+            stderr: "overflow".into(),
+        }];
+        let mut f2 = make_finding("b", "src/lib.rs", 10, Severity::Low, FindingCategory::PanicPath);
+        f2.evidence = vec![Evidence::SanitizerReport {
+            sanitizer: "ubsan".into(),
+            stderr: "undefined".into(),
+        }];
+        let mut findings = vec![f1, f2];
+        deduplicate(&mut findings);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].evidence.len(), 2); // evidence merged from both
+    }
+
+    #[tokio::test]
     async fn run_all_deduplicates_and_sorts() {
         // Two detectors emit findings at the same location/category — should be deduped.
         // Also include a Critical finding to verify severity sort (Critical first).

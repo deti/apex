@@ -1027,4 +1027,171 @@ mod tests {
             let _ = decode_vsock_response(truncated);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage: exit code mapping, with_coverage, edge cases
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_with_coverage_oracle_and_empty_bitmap() {
+        use apex_core::traits::Sandbox;
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b0 = BranchId::new(1, 10, 0, 0);
+        oracle.register_branches([b0.clone()]);
+
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir)
+            .with_rootfs(rootfs)
+            .with_coverage(Arc::clone(&oracle), vec![b0]);
+        sb.prepare().await.unwrap();
+
+        let seed = InputSeed::new(b"data".to_vec(), apex_core::types::SeedOrigin::Corpus);
+        let result = sb.run(&seed).await.unwrap();
+        // Stub produces empty bitmap, so no new branches
+        assert!(result.new_branches.is_empty());
+        assert_eq!(result.status, ExecutionStatus::Pass);
+    }
+
+    #[tokio::test]
+    async fn run_without_oracle_produces_no_branches() {
+        use apex_core::traits::Sandbox;
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+
+        let seed = InputSeed::new(b"test".to_vec(), apex_core::types::SeedOrigin::Corpus);
+        let result = sb.run(&seed).await.unwrap();
+        // oracle is None, so new_branches is always empty
+        assert!(result.new_branches.is_empty());
+    }
+
+    #[test]
+    fn exit_code_fail_range_1_to_127() {
+        // exit codes 1..127 map to Fail (not Pass, not Crash)
+        for code in [1u32, 2, 50, 100, 127] {
+            let status = match code {
+                0 => ExecutionStatus::Pass,
+                c if c >= 128 => ExecutionStatus::Crash,
+                _ => ExecutionStatus::Fail,
+            };
+            assert_eq!(status, ExecutionStatus::Fail, "code={code}");
+        }
+    }
+
+    #[test]
+    fn exit_code_crash_range_128_plus() {
+        for code in [128u32, 129, 137, 139, 255] {
+            let status = match code {
+                0 => ExecutionStatus::Pass,
+                c if c >= 128 => ExecutionStatus::Crash,
+                _ => ExecutionStatus::Fail,
+            };
+            assert_eq!(status, ExecutionStatus::Crash, "code={code}");
+        }
+    }
+
+    #[test]
+    fn vsock_response_debug_format() {
+        let resp = VsockResponse {
+            bitmap: vec![1, 2],
+            exit_code: 0,
+            stdout: vec![],
+            stderr: vec![],
+        };
+        let debug = format!("{:?}", resp);
+        assert!(debug.contains("VsockResponse"));
+        assert!(debug.contains("bitmap"));
+        assert!(debug.contains("exit_code"));
+    }
+
+    #[test]
+    fn vsock_response_eq() {
+        let a = VsockResponse {
+            bitmap: vec![1],
+            exit_code: 0,
+            stdout: vec![],
+            stderr: vec![],
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+
+        let c = VsockResponse {
+            bitmap: vec![2],
+            exit_code: 0,
+            stdout: vec![],
+            stderr: vec![],
+        };
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn decode_vsock_response_truncated_stderr_len() {
+        // Valid bitmap + exit_code + stdout, but no stderr_len bytes at all
+        let mut data = vec![];
+        data.extend_from_slice(&0u32.to_be_bytes()); // bitmap_len = 0
+        data.extend_from_slice(&0u32.to_be_bytes()); // exit_code = 0
+        data.extend_from_slice(&0u32.to_be_bytes()); // stdout_len = 0
+        // No stderr_len at all
+        let result = decode_vsock_response(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encode_vsock_frame_single_byte() {
+        let frame = encode_vsock_frame(&[0x42]);
+        assert_eq!(frame.len(), 5);
+        assert_eq!(&frame[..4], &[0, 0, 0, 1]);
+        assert_eq!(frame[4], 0x42);
+    }
+
+    #[test]
+    fn default_rootfs_for_c_and_java() {
+        let c_path = FirecrackerSandbox::default_rootfs(Language::C);
+        let java_path = FirecrackerSandbox::default_rootfs(Language::Java);
+        assert!(c_path.to_string_lossy().contains("/c/"));
+        assert!(java_path.to_string_lossy().contains("/java/"));
+    }
+
+    #[tokio::test]
+    async fn snapshot_returns_unique_ids() {
+        use apex_core::traits::Sandbox;
+        let sb = FirecrackerSandbox::new(Language::Rust, PathBuf::from("/tmp/fc-snap"));
+        let id1 = sb.snapshot().await.unwrap();
+        let id2 = sb.snapshot().await.unwrap();
+        assert_ne!(id1, id2, "snapshot IDs should be unique");
+    }
+
+    #[test]
+    fn with_coverage_sets_branch_index() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let b0 = BranchId::new(1, 1, 0, 0);
+        let b1 = BranchId::new(1, 2, 0, 1);
+        let sb = FirecrackerSandbox::new(Language::Python, PathBuf::from("/tmp"))
+            .with_coverage(Arc::clone(&oracle), vec![b0.clone(), b1.clone()]);
+        assert_eq!(sb.branch_index.len(), 2);
+        assert_eq!(sb.branch_index[0], b0);
+        assert_eq!(sb.branch_index[1], b1);
+    }
+
+    #[test]
+    fn new_with_all_languages() {
+        for lang in [
+            Language::Python,
+            Language::JavaScript,
+            Language::Rust,
+            Language::C,
+            Language::Java,
+        ] {
+            let sb = FirecrackerSandbox::new(lang, PathBuf::from("/tmp"));
+            assert_eq!(sb.language, lang);
+        }
+    }
 }

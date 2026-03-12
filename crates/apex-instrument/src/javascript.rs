@@ -668,4 +668,249 @@ mod tests {
         let err_msg = format!("{}", result.unwrap_err());
         assert!(err_msg.contains("coverage-final.json not produced"));
     }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_istanbul_no_locations_no_b_key_fallback_to_2() {
+        // When locations is empty AND b has no entry for the key, arm_count defaults to 2
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/fallback.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 3, "column": 1 }}, "end": {{ "line": 3, "column": 10 }} }},
+        "locations": []
+      }}
+    }},
+    "b": {{}}
+  }}
+}}"#,
+            root = repo_root.to_str().unwrap()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, repo_root).unwrap();
+
+        // No locations, no b entry -> fallback arm_count=2, both use loc.start
+        assert_eq!(inst.branch_ids.len(), 2);
+        assert_eq!(inst.executed_branch_ids.len(), 0);
+        for bid in &inst.branch_ids {
+            assert_eq!(bid.line, 3);
+            assert_eq!(bid.col, 1);
+        }
+    }
+
+    #[test]
+    fn test_parse_istanbul_path_not_under_repo_root() {
+        // When file path doesn't strip_prefix, it uses the full path as-is
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{
+  "/completely/different/path/util.js": {
+    "branchMap": {
+      "0": {
+        "loc": { "start": { "line": 1, "column": 0 }, "end": { "line": 1, "column": 10 } },
+        "locations": [
+          { "start": { "line": 1, "column": 0 }, "end": { "line": 1, "column": 5 } }
+        ]
+      }
+    },
+    "b": {
+      "0": [5]
+    }
+  }
+}"#;
+        std::fs::write(&json_path, json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, Path::new("/other/root"))
+            .unwrap();
+
+        assert_eq!(inst.branch_ids.len(), 1);
+        assert_eq!(inst.executed_branch_ids.len(), 1);
+        // File path should be stored as the original absolute path (since strip_prefix fails)
+        let fid = fnv1a_hash("/completely/different/path/util.js");
+        assert!(inst.file_paths.contains_key(&fid));
+    }
+
+    #[test]
+    fn test_parse_istanbul_mixed_locations_and_fallback() {
+        // Branch with 3 arms in b[] but only 1 location => first arm uses location, rest use loc
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/mix.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 10, "column": 0 }}, "end": {{ "line": 10, "column": 30 }} }},
+        "locations": [
+          {{ "start": {{ "line": 10, "column": 5 }}, "end": {{ "line": 10, "column": 15 }} }}
+        ]
+      }}
+    }},
+    "b": {{
+      "0": [1, 0, 3]
+    }}
+  }}
+}}"#,
+            root = repo_root.to_str().unwrap()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, repo_root).unwrap();
+
+        // b["0"] has 3 elements, but locations has 1 (non-empty)
+        // arm_count = locations.len() = 1 (locations takes priority over b.len())
+        assert_eq!(inst.branch_ids.len(), 1);
+        // arm 0: uses location[0] -> line=10, col=5
+        assert_eq!(inst.branch_ids[0].col, 5);
+        // executed: arm0 count = b["0"][0] = 1 > 0 => 1 executed
+        assert_eq!(inst.executed_branch_ids.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_istanbul_hit_count_out_of_range() {
+        // b has fewer entries than arm_count => was_hit returns false for extra arms
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/short_b.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 1, "column": 0 }}, "end": {{ "line": 1, "column": 10 }} }},
+        "locations": [
+          {{ "start": {{ "line": 1, "column": 0 }}, "end": {{ "line": 1, "column": 3 }} }},
+          {{ "start": {{ "line": 1, "column": 4 }}, "end": {{ "line": 1, "column": 7 }} }},
+          {{ "start": {{ "line": 1, "column": 8 }}, "end": {{ "line": 1, "column": 10 }} }}
+        ]
+      }}
+    }},
+    "b": {{
+      "0": [5]
+    }}
+  }}
+}}"#,
+            root = repo_root.to_str().unwrap()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, repo_root).unwrap();
+
+        // 3 arms from locations, b has only [5] => arm0 hit, arms 1,2 not hit
+        assert_eq!(inst.branch_ids.len(), 3);
+        assert_eq!(inst.executed_branch_ids.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_istanbul_multiple_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/a.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 1, "column": 0 }}, "end": {{ "line": 1, "column": 10 }} }},
+        "locations": [
+          {{ "start": {{ "line": 1, "column": 0 }}, "end": {{ "line": 1, "column": 5 }} }},
+          {{ "start": {{ "line": 1, "column": 6 }}, "end": {{ "line": 1, "column": 10 }} }}
+        ]
+      }}
+    }},
+    "b": {{ "0": [1, 1] }}
+  }},
+  "{root}/src/b.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 5, "column": 0 }}, "end": {{ "line": 5, "column": 10 }} }},
+        "locations": [
+          {{ "start": {{ "line": 5, "column": 0 }}, "end": {{ "line": 5, "column": 5 }} }}
+        ]
+      }}
+    }},
+    "b": {{ "0": [0] }}
+  }}
+}}"#,
+            root = repo_root.to_str().unwrap()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, repo_root).unwrap();
+
+        assert_eq!(inst.file_paths.len(), 2);
+        // a.js: 2 arms both hit, b.js: 1 arm not hit
+        assert_eq!(inst.branch_ids.len(), 3);
+        assert_eq!(inst.executed_branch_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_istanbul_direction_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/dir.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 1, "column": 0 }}, "end": {{ "line": 1, "column": 10 }} }},
+        "locations": [
+          {{ "start": {{ "line": 1, "column": 0 }}, "end": {{ "line": 1, "column": 3 }} }},
+          {{ "start": {{ "line": 1, "column": 4 }}, "end": {{ "line": 1, "column": 7 }} }},
+          {{ "start": {{ "line": 1, "column": 8 }}, "end": {{ "line": 1, "column": 10 }} }}
+        ]
+      }}
+    }},
+    "b": {{ "0": [1, 0, 1] }}
+  }}
+}}"#,
+            root = repo_root.to_str().unwrap()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, repo_root).unwrap();
+
+        // Check that direction (arm index) is correctly assigned
+        let dirs: Vec<u8> = inst.branch_ids.iter().map(|b| b.direction).collect();
+        assert_eq!(dirs, vec![0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_instrument_with_custom_test_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        let report_dir = repo_root.join(".apex_coverage_js");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::fs::write(report_dir.join("coverage-final.json"), "{}").unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaScriptInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::JavaScript,
+            test_command: vec!["jest".into(), "--coverage".into()],
+        };
+
+        let result = inst.instrument(&target).await.unwrap();
+        assert!(result.branch_ids.is_empty());
+        assert_eq!(result.work_dir, repo_root.to_path_buf());
+    }
 }

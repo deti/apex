@@ -633,6 +633,165 @@ mod tests {
         assert!(err_msg.contains("coverage JSON not produced"));
     }
 
+    #[test]
+    fn test_fnv1a_single_byte_values() {
+        // Single-byte strings should produce unique hashes
+        let hashes: Vec<u64> = (b'a'..=b'z').map(|c| fnv1a_hash(&String::from(c as char))).collect();
+        let unique: std::collections::HashSet<u64> = hashes.iter().cloned().collect();
+        assert_eq!(hashes.len(), unique.len(), "all single-char hashes should be unique");
+    }
+
+    #[test]
+    fn test_with_runner_constructor() {
+        let runner = Arc::new(FakeRunner::success());
+        let inst = PythonInstrumentor::with_runner(runner);
+        assert!(inst.branch_ids.is_empty());
+        assert!(inst.executed_branch_ids.is_empty());
+        assert!(inst.file_paths.is_empty());
+        assert!(inst.work_dir.is_none());
+    }
+
+    #[test]
+    fn test_parse_coverage_json_multiple_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = format!(
+            r#"{{
+  "files": {{
+    "{root}/a.py": {{
+      "executed_branches": [[1, 2]],
+      "missing_branches": [[3, -1]],
+      "all_branches": [[1, 2], [3, -1]]
+    }},
+    "{root}/b.py": {{
+      "executed_branches": [],
+      "missing_branches": [[10, 20], [30, -1]],
+      "all_branches": [[10, 20], [30, -1]]
+    }},
+    "{root}/c.py": {{
+      "executed_branches": [[5, 6], [7, 8]],
+      "missing_branches": [],
+      "all_branches": [[5, 6], [7, 8]]
+    }}
+  }}
+}}"#,
+            root = repo_root.display()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = PythonInstrumentor::new();
+        inst.parse_coverage_json(&json_path, repo_root).unwrap();
+
+        // a.py: 1 exec + 1 miss = 2 total, b.py: 0 + 2 = 2, c.py: 2 + 0 = 2
+        assert_eq!(inst.branch_ids.len(), 6);
+        assert_eq!(inst.executed_branch_ids.len(), 3);
+        assert_eq!(inst.file_paths.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_coverage_json_all_positive_to_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = format!(
+            r#"{{
+  "files": {{
+    "{root}/x.py": {{
+      "executed_branches": [[1, 5], [10, 15]],
+      "missing_branches": [[20, 25]],
+      "all_branches": [[1, 5], [10, 15], [20, 25]]
+    }}
+  }}
+}}"#,
+            root = repo_root.display()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = PythonInstrumentor::new();
+        inst.parse_coverage_json(&json_path, repo_root).unwrap();
+
+        // All positive to_lines => direction=0 for all
+        for b in &inst.branch_ids {
+            assert_eq!(b.direction, 0);
+        }
+    }
+
+    #[test]
+    fn test_parse_coverage_json_all_negative_to_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = format!(
+            r#"{{
+  "files": {{
+    "{root}/y.py": {{
+      "executed_branches": [[1, -1]],
+      "missing_branches": [[5, -2]],
+      "all_branches": [[1, -1], [5, -2]]
+    }}
+  }}
+}}"#,
+            root = repo_root.display()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = PythonInstrumentor::new();
+        inst.parse_coverage_json(&json_path, repo_root).unwrap();
+
+        for b in &inst.branch_ids {
+            assert_eq!(b.direction, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_instrument_with_custom_test_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        let json = r#"{"files": {}}"#;
+        std::fs::write(repo_root.join(".apex_coverage.json"), json).unwrap();
+
+        use std::sync::Mutex;
+
+        struct CapturingRunner {
+            captured_args: Mutex<Vec<String>>,
+        }
+
+        #[async_trait]
+        impl CommandRunner for CapturingRunner {
+            async fn run_command(
+                &self,
+                spec: &CommandSpec,
+            ) -> apex_core::error::Result<CommandOutput> {
+                let mut args = self.captured_args.lock().unwrap();
+                *args = spec.args.clone();
+                Ok(CommandOutput::success(Vec::new()))
+            }
+        }
+
+        let runner = Arc::new(CapturingRunner {
+            captured_args: Mutex::new(Vec::new()),
+        });
+        let runner_ref = runner.clone();
+        let inst = PythonInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::Python,
+            test_command: vec!["python".into(), "-m".into(), "unittest".into()],
+        };
+
+        inst.instrument(&target).await.unwrap();
+
+        let args = runner_ref.captured_args.lock().unwrap();
+        assert!(args.iter().any(|a| a == "python"), "expected 'python' in args: {:?}", *args);
+        assert!(args.iter().any(|a| a == "-m"), "expected '-m' in args: {:?}", *args);
+        assert!(args.iter().any(|a| a == "unittest"), "expected 'unittest' in args: {:?}", *args);
+        // Should NOT contain "pytest" since custom command was provided
+        assert!(!args.iter().any(|a| a == "pytest"), "should not contain 'pytest': {:?}", *args);
+    }
+
     #[tokio::test]
     async fn test_instrument_default_test_command() {
         // Verify that empty test_command defaults to pytest -q

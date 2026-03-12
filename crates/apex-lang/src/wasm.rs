@@ -493,4 +493,149 @@ mod tests {
     fn classify_wasm_exit_generic_fail() {
         assert_eq!(classify_wasm_exit(1, "some error"), WasmExitKind::Fail);
     }
+
+    // ------------------------------------------------------------------
+    // classify_wasm_exit — additional branch coverage
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn classify_wasm_exit_pass_with_nonempty_stderr() {
+        // exit 0 should always be Pass, even when stderr has text
+        assert_eq!(classify_wasm_exit(0, "some diagnostic"), WasmExitKind::Pass);
+    }
+
+    #[test]
+    fn classify_wasm_exit_oom_via_short_keyword() {
+        // "oom" branch of the OOM check
+        assert_eq!(classify_wasm_exit(1, "oom"), WasmExitKind::OutOfMemory);
+    }
+
+    #[test]
+    fn classify_wasm_exit_oom_case_insensitive() {
+        // stderr is lowercased before comparison
+        assert_eq!(
+            classify_wasm_exit(1, "Process OOM killed"),
+            WasmExitKind::OutOfMemory
+        );
+    }
+
+    #[test]
+    fn classify_wasm_exit_oom_out_of_memory_case_insensitive() {
+        assert_eq!(
+            classify_wasm_exit(1, "Out Of Memory error"),
+            WasmExitKind::OutOfMemory
+        );
+    }
+
+    #[test]
+    fn classify_wasm_exit_unreachable_stderr_crash() {
+        // "unreachable" in stderr triggers Crash (exit_code < 128, no "trap")
+        assert_eq!(
+            classify_wasm_exit(1, "error: unreachable executed"),
+            WasmExitKind::Crash
+        );
+    }
+
+    #[test]
+    fn classify_wasm_exit_wasm_trap_uppercase() {
+        // "wasm trap" check is case-insensitive via to_lowercase()
+        assert_eq!(
+            classify_wasm_exit(1, "WASM TRAP: integer divide by zero"),
+            WasmExitKind::Crash
+        );
+    }
+
+    #[test]
+    fn classify_wasm_exit_exit_128_no_trap_crash() {
+        // exit >= 128 without trap/unreachable/oom is Crash (not Timeout)
+        assert_eq!(classify_wasm_exit(130, ""), WasmExitKind::Crash);
+    }
+
+    #[test]
+    fn classify_wasm_exit_exit_137_with_trap_is_crash() {
+        // exit 137 WITH "trap" in stderr should be Crash, not Timeout
+        assert_eq!(
+            classify_wasm_exit(137, "wasm trap: out of bounds memory access"),
+            WasmExitKind::Crash
+        );
+    }
+
+    #[test]
+    fn classify_wasm_exit_exit_129_crash() {
+        // exit 129 (>= 128) is Crash when no OOM/trap/unreachable keywords
+        assert_eq!(classify_wasm_exit(129, "signal"), WasmExitKind::Crash);
+    }
+
+    #[test]
+    fn classify_wasm_exit_fail_exit_127() {
+        // exit 127 (< 128) with no keywords → Fail
+        assert_eq!(
+            classify_wasm_exit(127, "command not found"),
+            WasmExitKind::Fail
+        );
+    }
+
+    #[test]
+    fn classify_wasm_exit_fail_zero_exit_code_is_pass() {
+        // Boundary: exit 0 regardless of exit_code comparisons below
+        assert_eq!(classify_wasm_exit(0, "trap"), WasmExitKind::Pass);
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — wasmtime returns nonzero (not a spawn error)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_wasmtime_returns_nonzero() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let mut mock = MockCmd::new();
+        // wasmtime --version returns exit code 1 (unhealthy but still responds)
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "wasmtime")
+            .times(1)
+            .returning(|_| Ok(CommandOutput::failure(1, b"error".to_vec())));
+
+        let runner = WasmRunner::with_runner(mock);
+        // Should still return Ok (just warns that wasmtime is not found/functional)
+        let result = runner.install_deps(dir.path()).await;
+        assert!(result.is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // find_wasm_for_run — multiple .wasm files, picks one
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn find_wasm_for_run_no_wasm_only_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.rs"), "fn main(){}").unwrap();
+        std::fs::write(dir.path().join("lib.js"), "").unwrap();
+        let (path, instrumented) = WasmRunner::<RealCommandRunner>::find_wasm_for_run(dir.path());
+        assert!(path.is_none());
+        assert!(!instrumented);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — wasm file path is passed to wasmtime
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_wasm_path_passed_as_arg() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("my_module.wasm"), &[0x00]).unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| {
+                spec.program == "wasmtime"
+                    && spec.args.iter().any(|a| a.contains("my_module.wasm"))
+            })
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let runner = WasmRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
 }

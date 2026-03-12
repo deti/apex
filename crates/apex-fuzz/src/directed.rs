@@ -82,4 +82,101 @@ mod tests {
     fn temperature_past_total_clamped() {
         assert!((temperature(200, 100) - 0.0).abs() < f64::EPSILON);
     }
+
+    #[test]
+    fn energy_negative_distance_returns_one() {
+        // distance <= 0.0 branch
+        assert!((directed_energy(-5.0, 0.5) - 1.0).abs() < f64::EPSILON);
+        assert!((directed_energy(-100.0, 0.0) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn energy_mid_temperature() {
+        // temp=0.5, distance=2.0 => 0.5*1.0 + 0.5*(1/2) = 0.5 + 0.25 = 0.75
+        let e = directed_energy(2.0, 0.5);
+        assert!((e - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn energy_temperature_clamped_above_one() {
+        // temperature > 1.0 should be clamped to 1.0
+        let e = directed_energy(10.0, 5.0);
+        let expected = directed_energy(10.0, 1.0);
+        assert!((e - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn energy_temperature_clamped_below_zero() {
+        // temperature < 0.0 should be clamped to 0.0
+        let e = directed_energy(10.0, -2.0);
+        let expected = directed_energy(10.0, 0.0);
+        assert!((e - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn energy_distance_one_low_temp() {
+        // distance=1.0, temp=0.0 => pure exploitation = 1/1 = 1.0
+        let e = directed_energy(1.0, 0.0);
+        assert!((e - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn temperature_quarter_point() {
+        assert!((temperature(25, 100) - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn temperature_one_of_one() {
+        // current=1, total=1 => past total => 0.0
+        assert!((temperature(1, 1) - 0.0).abs() < f64::EPSILON);
+    }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn directed_energy_very_close_to_zero_positive() {
+        // distance very small positive (not exactly 0) should use formula
+        let e = directed_energy(1e-15, 0.0);
+        // At temp=0, pure exploitation = 1/1e-15 which is huge
+        assert!(e > 1.0);
+    }
+
+    #[test]
+    fn temperature_near_end() {
+        // current = total - 1 should still be a small positive value
+        let t = temperature(99, 100);
+        assert!((t - 0.01).abs() < 1e-9);
+    }
+
+    #[test]
+    fn temperature_large_values() {
+        let t = temperature(500_000, 1_000_000);
+        assert!((t - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn directed_energy_at_exact_zero_temp() {
+        // temp clamped to 0.0 -> pure exploitation
+        let e = directed_energy(4.0, 0.0);
+        assert!((e - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn directed_energy_at_exact_one_temp() {
+        // temp=1.0 -> pure exploration = 1.0 for any distance
+        for d in [0.001, 1.0, 100.0, 1_000_000.0] {
+            let e = directed_energy(d, 1.0);
+            assert!((e - 1.0).abs() < 1e-9, "distance={d}");
+        }
+    }
+
+    #[test]
+    fn temperature_current_equals_zero_always_max() {
+        for total in [1u64, 10, 100, 1000] {
+            let t = temperature(0, total);
+            assert!((t - 1.0).abs() < f64::EPSILON, "total={total}");
+        }
+    }
 }

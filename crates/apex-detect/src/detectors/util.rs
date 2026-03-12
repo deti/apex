@@ -128,3 +128,203 @@ pub fn is_comment(trimmed: &str, lang: Language) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- is_test_file ----
+
+    #[test]
+    fn test_file_in_tests_dir() {
+        assert!(is_test_file(std::path::Path::new("tests/test_foo.rs")));
+    }
+
+    #[test]
+    fn test_file_in_test_dir() {
+        assert!(is_test_file(std::path::Path::new("test/foo.js")));
+    }
+
+    #[test]
+    fn test_file_nested_tests() {
+        assert!(is_test_file(std::path::Path::new("src/tests/bar.rs")));
+    }
+
+    #[test]
+    fn test_file_jest_convention() {
+        assert!(is_test_file(std::path::Path::new("src/__tests__/foo.js")));
+    }
+
+    #[test]
+    fn test_file_benches() {
+        assert!(is_test_file(std::path::Path::new("benches/bench_sort.rs")));
+        assert!(is_test_file(std::path::Path::new("crates/foo/benches/bar.rs")));
+    }
+
+    #[test]
+    fn test_file_spec_dir() {
+        assert!(is_test_file(std::path::Path::new("spec/models/user_spec.rb")));
+        assert!(is_test_file(std::path::Path::new("app/spec/foo.rb")));
+    }
+
+    #[test]
+    fn test_file_suffix_patterns() {
+        assert!(is_test_file(std::path::Path::new("src/foo_test.rs")));
+        assert!(is_test_file(std::path::Path::new("src/foo_test.py")));
+        assert!(is_test_file(std::path::Path::new("src/foo_tests.rs")));
+        assert!(is_test_file(std::path::Path::new("src/foo.test.js")));
+        assert!(is_test_file(std::path::Path::new("src/foo.test.ts")));
+        assert!(is_test_file(std::path::Path::new("src/foo.test.tsx")));
+        assert!(is_test_file(std::path::Path::new("src/foo.spec.js")));
+        assert!(is_test_file(std::path::Path::new("src/foo.spec.ts")));
+        assert!(is_test_file(std::path::Path::new("src/foo.spec.tsx")));
+    }
+
+    #[test]
+    fn test_file_test_prefix() {
+        assert!(is_test_file(std::path::Path::new("src/test_utils.py")));
+        assert!(is_test_file(std::path::Path::new("lib/test_helper.rb")));
+    }
+
+    #[test]
+    fn test_file_helper_stems() {
+        assert!(is_test_file(std::path::Path::new("testutil.rs")));
+        assert!(is_test_file(std::path::Path::new("testutils.py")));
+        assert!(is_test_file(std::path::Path::new("test_util.rs")));
+        assert!(is_test_file(std::path::Path::new("test_utils.rs")));
+        assert!(is_test_file(std::path::Path::new("test_helpers.rb")));
+        assert!(is_test_file(std::path::Path::new("test_helper.rb")));
+        assert!(is_test_file(std::path::Path::new("testing.py")));
+        assert!(is_test_file(std::path::Path::new("conftest.py")));
+    }
+
+    #[test]
+    fn not_test_file_regular_src() {
+        assert!(!is_test_file(std::path::Path::new("src/main.rs")));
+        assert!(!is_test_file(std::path::Path::new("src/lib.rs")));
+        assert!(!is_test_file(std::path::Path::new("src/utils.py")));
+    }
+
+    // ---- in_test_block ----
+
+    #[test]
+    fn in_test_block_cfg_test_mod() {
+        let src = "fn real() {}\n\n#[cfg(test)]\nmod tests {\n    fn inside() {}\n}\n";
+        assert!(!in_test_block(src, 0)); // real()
+        assert!(!in_test_block(src, 2)); // #[cfg(test)]
+        assert!(in_test_block(src, 4));  // fn inside()
+    }
+
+    #[test]
+    fn in_test_block_mod_tests_inline() {
+        let src = "fn real() {}\nmod tests {\n    fn t() {}\n}\n";
+        assert!(!in_test_block(src, 0));
+        assert!(in_test_block(src, 2)); // fn t()
+    }
+
+    #[test]
+    fn in_test_block_empty_source() {
+        assert!(!in_test_block("", 0));
+    }
+
+    #[test]
+    fn in_test_block_no_test_mod() {
+        let src = "fn main() {\n    println!(\"hello\");\n}\n";
+        assert!(!in_test_block(src, 1));
+    }
+
+    #[test]
+    fn in_test_block_after_closing_brace() {
+        let src = "#[cfg(test)]\nmod tests {\n    fn t() {}\n}\nfn after() {}\n";
+        assert!(in_test_block(src, 2));  // fn t()
+        assert!(!in_test_block(src, 4)); // fn after()
+    }
+
+    // ---- strip_string_literals ----
+
+    #[test]
+    fn strip_empty() {
+        assert_eq!(strip_string_literals(""), "");
+    }
+
+    #[test]
+    fn strip_no_strings() {
+        assert_eq!(strip_string_literals("let x = 42;"), "let x = 42;");
+    }
+
+    #[test]
+    fn strip_simple_string() {
+        assert_eq!(strip_string_literals(r#"let x = "hello";"#), r#"let x = "";"#);
+    }
+
+    #[test]
+    fn strip_escaped_quote() {
+        assert_eq!(
+            strip_string_literals(r#"let x = "say \"hi\"";"#),
+            r#"let x = "";"#
+        );
+    }
+
+    #[test]
+    fn strip_multiple_strings() {
+        assert_eq!(
+            strip_string_literals(r#"f("a", "b")"#),
+            r#"f("", "")"#
+        );
+    }
+
+    // ---- is_comment ----
+
+    #[test]
+    fn comment_rust_line() {
+        assert!(is_comment("// comment", Language::Rust));
+    }
+
+    #[test]
+    fn comment_rust_block() {
+        assert!(is_comment("/* block */", Language::Rust));
+    }
+
+    #[test]
+    fn comment_star_continuation() {
+        assert!(is_comment("* continued", Language::Rust));
+    }
+
+    #[test]
+    fn comment_python_hash() {
+        assert!(is_comment("# python comment", Language::Python));
+    }
+
+    #[test]
+    fn comment_ruby_hash() {
+        assert!(is_comment("# ruby comment", Language::Ruby));
+    }
+
+    #[test]
+    fn comment_hash_not_in_rust() {
+        // In Rust, # is an attribute prefix, not a comment
+        assert!(!is_comment("#[derive(Debug)]", Language::Rust));
+    }
+
+    #[test]
+    fn comment_hash_not_in_js() {
+        assert!(!is_comment("# not a js comment", Language::JavaScript));
+    }
+
+    #[test]
+    fn not_comment_code() {
+        assert!(!is_comment("let x = 1;", Language::Rust));
+        assert!(!is_comment("x = 1", Language::Python));
+    }
+
+    // ---- Windows path separators ----
+
+    #[test]
+    fn test_file_windows_paths() {
+        assert!(is_test_file(std::path::Path::new("tests\\foo.rs")));
+        assert!(is_test_file(std::path::Path::new("test\\bar.js")));
+        assert!(is_test_file(std::path::Path::new("src\\tests\\baz.rs")));
+        assert!(is_test_file(std::path::Path::new("src\\__tests__\\qux.js")));
+        assert!(is_test_file(std::path::Path::new("benches\\bench.rs")));
+    }
+}

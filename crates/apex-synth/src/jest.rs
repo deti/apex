@@ -205,4 +205,97 @@ mod tests {
         let results = synth.synthesize(&[c1, c2]).unwrap();
         assert_eq!(results[0].covers_branches.len(), 2);
     }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mixed_empty_and_non_empty_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let synth = JestSynthesizer::new(dir.path());
+        let c1 = make_candidate("", vec![]);
+        let c2 = make_candidate("test('real', () => { expect(1).toBe(1); });", vec![BranchId::new(1, 1, 0, 0)]);
+        let c3 = make_candidate("   ", vec![]);
+        let results = synth.synthesize(&[c1, c2, c3]).unwrap();
+        // Only c2 has non-empty code
+        assert_eq!(results.len(), 1);
+        assert!(results[0].content.contains("test('real'"));
+        assert_eq!(results[0].covers_branches.len(), 1);
+    }
+
+    #[test]
+    fn generate_content_includes_use_strict() {
+        let c = make_candidate("test('x', () => {});", vec![]);
+        let content = JestSynthesizer::generate_content(&[&c]);
+        assert!(content.contains("'use strict'"));
+    }
+
+    #[test]
+    fn generate_content_empty_code_skipped() {
+        let c1 = TestCandidate::new("".to_string(), Language::JavaScript);
+        let c2_code = "test('y', () => {});";
+        let c2 = make_candidate(c2_code, vec![]);
+        let content = JestSynthesizer::generate_content(&[&c1, &c2]);
+        // Empty code candidate should not appear
+        assert!(!content.contains("// Candidate 1\n// Candidate 2"));
+        assert!(content.contains("// Candidate 2"));
+    }
+
+    #[test]
+    fn reasoning_with_whitespace_only_not_included() {
+        let dir = tempfile::tempdir().unwrap();
+        let synth = JestSynthesizer::new(dir.path());
+        let mut c = TestCandidate::new("test('z', () => {});".to_string(), Language::JavaScript);
+        c.reasoning = "   ".to_string();
+        let results = synth.synthesize(&[c]).unwrap();
+        // Only "// Candidate 1" comment, no reasoning line
+        let comment_lines: Vec<&str> = results[0]
+            .content
+            .lines()
+            .filter(|l| {
+                l.starts_with("// ") && !l.contains("Auto-generated") && !l.contains("Each test")
+            })
+            .collect();
+        assert_eq!(comment_lines.len(), 1);
+    }
+
+    #[test]
+    fn output_file_is_named_correctly() {
+        let dir = tempfile::tempdir().unwrap();
+        let synth = JestSynthesizer::new(dir.path());
+        let c = make_candidate("test('n', () => {});", vec![]);
+        let results = synth.synthesize(&[c]).unwrap();
+        assert_eq!(
+            results[0].path.file_name().unwrap().to_str().unwrap(),
+            "apex_generated.test.js"
+        );
+    }
+
+    #[test]
+    fn multiple_unique_candidates_all_included() {
+        let dir = tempfile::tempdir().unwrap();
+        let synth = JestSynthesizer::new(dir.path());
+        let c1 = make_candidate("test('a', () => {});", vec![]);
+        let c2 = make_candidate("test('b', () => {});", vec![]);
+        let c3 = make_candidate("test('c', () => {});", vec![]);
+        let results = synth.synthesize(&[c1, c2, c3]).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].content.contains("// Candidate 1"));
+        assert!(results[0].content.contains("// Candidate 2"));
+        assert!(results[0].content.contains("// Candidate 3"));
+    }
+
+    #[test]
+    fn deduplication_of_empty_trimmed_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let synth = JestSynthesizer::new(dir.path());
+        let c1 = make_candidate("   ", vec![]);
+        let c2 = make_candidate("  ", vec![]);
+        let c3 = make_candidate("test('only', () => {});", vec![]);
+        let results = synth.synthesize(&[c1, c2, c3]).unwrap();
+        assert_eq!(results.len(), 1);
+        let count = results[0].content.matches("// Candidate").count();
+        assert_eq!(count, 1); // Only the non-empty candidate
+    }
 }

@@ -132,6 +132,55 @@ mod tests {
     }
 
     #[test]
+    fn harness_not_taken_direction() {
+        let prover = KaniProver::new(PathBuf::from("/tmp/target"));
+        let branch = BranchId::new(42, 10, 5, 1); // direction=1 => not_taken
+        let harness = prover.generate_harness(&branch, "other_fn");
+        assert!(harness.contains("not_taken"));
+        assert!(harness.contains("check_reachability_42_10_not_taken"));
+        assert!(harness.contains("other_fn"));
+    }
+
+    #[test]
+    fn target_root_accessor() {
+        let path = PathBuf::from("/some/path");
+        let prover = KaniProver::new(path.clone());
+        assert_eq!(prover.target_root(), &path);
+    }
+
+    #[test]
+    fn reachability_result_debug() {
+        let r = ReachabilityResult::Reachable("witness data".to_string());
+        let debug = format!("{:?}", r);
+        assert!(debug.contains("Reachable"));
+        assert!(debug.contains("witness data"));
+
+        let u = ReachabilityResult::Unreachable;
+        let debug = format!("{:?}", u);
+        assert!(debug.contains("Unreachable"));
+
+        let k = ReachabilityResult::Unknown("reason".to_string());
+        let debug = format!("{:?}", k);
+        assert!(debug.contains("Unknown"));
+    }
+
+    #[test]
+    fn reachability_result_clone() {
+        let r = ReachabilityResult::Reachable("test".to_string());
+        let r2 = r.clone();
+        assert_eq!(r, r2);
+    }
+
+    #[test]
+    fn harness_contains_kani_cover() {
+        let prover = KaniProver::new(PathBuf::from("/tmp"));
+        let branch = BranchId::new(1, 20, 3, 0);
+        let harness = prover.generate_harness(&branch, "test_fn");
+        assert!(harness.contains("kani::cover!"));
+        assert!(harness.contains("#[cfg(kani)]"));
+    }
+
+    #[test]
     fn reachability_result_variants() {
         let reachable = ReachabilityResult::Reachable("witness".to_string());
         let unreachable = ReachabilityResult::Unreachable;
@@ -148,5 +197,69 @@ mod tests {
         assert_ne!(reachable, unreachable.clone());
         assert_ne!(unreachable, unknown.clone());
         assert_ne!(reachable, unknown);
+    }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn generate_harness_taken_direction_content() {
+        let prover = KaniProver::new(PathBuf::from("/tmp/myproject"));
+        // direction=0 => "taken"
+        let branch = BranchId::new(10, 100, 3, 0);
+        let harness = prover.generate_harness(&branch, "my_fn");
+        assert!(harness.contains("taken"), "direction 0 should produce 'taken'");
+        assert!(!harness.contains("not_taken"));
+        assert!(harness.contains("10_100_taken"), "should encode file_id and line");
+    }
+
+    #[test]
+    fn generate_harness_not_taken_direction_content() {
+        let prover = KaniProver::new(PathBuf::from("/tmp/myproject"));
+        // direction=1 => "not_taken"
+        let branch = BranchId::new(7, 50, 2, 1);
+        let harness = prover.generate_harness(&branch, "other_fn");
+        assert!(harness.contains("not_taken"), "direction 1 should produce 'not_taken'");
+        assert!(!harness.contains("\"taken\""), "should not contain plain 'taken'");
+    }
+
+    #[test]
+    fn generate_harness_encodes_function_name() {
+        let prover = KaniProver::new(PathBuf::from("/tmp"));
+        let branch = BranchId::new(1, 5, 0, 0);
+        let harness = prover.generate_harness(&branch, "complex_function_name");
+        assert!(harness.contains("complex_function_name(kani::any())"));
+    }
+
+    #[test]
+    fn target_root_returns_exact_path() {
+        let path = PathBuf::from("/very/specific/path/to/project");
+        let prover = KaniProver::new(path.clone());
+        assert_eq!(*prover.target_root(), path);
+    }
+
+    #[test]
+    fn check_reachability_returns_unknown_message_for_no_feature() {
+        let prover = KaniProver::new(PathBuf::from("/tmp"));
+        let branch = BranchId::new(1, 1, 0, 0);
+        let result = prover.check_reachability(&branch, "fn_name");
+        // Must be Unknown with a meaningful message
+        if let ReachabilityResult::Unknown(msg) = result {
+            assert!(!msg.is_empty(), "message should not be empty");
+        } else {
+            panic!("expected Unknown, got something else");
+        }
+    }
+
+    #[test]
+    fn reachability_result_ne_different_payloads() {
+        let r1 = ReachabilityResult::Reachable("a".to_string());
+        let r2 = ReachabilityResult::Reachable("b".to_string());
+        assert_ne!(r1, r2);
+
+        let u1 = ReachabilityResult::Unknown("x".to_string());
+        let u2 = ReachabilityResult::Unknown("y".to_string());
+        assert_ne!(u1, u2);
     }
 }

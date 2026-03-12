@@ -476,4 +476,50 @@ alpha = 0.3
         assert_eq!(cfg.fuzz.corpus_max, 10_000);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn detect_config_default_severity_threshold() {
+        // Exercises the default_detect_severity() serde default function
+        let cfg = DetectConfig::default();
+        assert_eq!(cfg.severity_threshold, "low");
+        assert!(cfg.enabled.is_empty());
+        assert!(cfg.per_detector_timeout_secs.is_none());
+    }
+
+    #[test]
+    fn detect_config_from_toml_uses_default_severity() {
+        // When [detect] section exists but severity_threshold is absent,
+        // the serde default function default_detect_severity() is called
+        let toml = r#"
+[detect]
+enabled = ["unsafe", "deps"]
+"#;
+        let cfg = ApexConfig::parse_toml(toml).unwrap();
+        assert_eq!(cfg.detect.severity_threshold, "low");
+        assert_eq!(cfg.detect.enabled, vec!["unsafe", "deps"]);
+    }
+
+    #[test]
+    fn detect_config_from_toml_with_explicit_severity() {
+        let toml = r#"
+[detect]
+severity_threshold = "high"
+per_detector_timeout_secs = 30
+"#;
+        let cfg = ApexConfig::parse_toml(toml).unwrap();
+        assert_eq!(cfg.detect.severity_threshold, "high");
+        assert_eq!(cfg.detect.per_detector_timeout_secs, Some(30));
+    }
+
+    #[test]
+    fn discover_walks_up_to_parent() {
+        // Create a nested dir structure where apex.toml is in the parent
+        let base = std::env::temp_dir().join("apex_test_discover_parent");
+        let child = base.join("subdir");
+        let _ = std::fs::create_dir_all(&child);
+        std::fs::write(base.join("apex.toml"), "[coverage]\ntarget = 0.33\n").unwrap();
+        let cfg = ApexConfig::discover(&child);
+        assert!((cfg.coverage.target - 0.33).abs() < f64::EPSILON);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

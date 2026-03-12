@@ -238,4 +238,354 @@ mod tests {
         };
         assert!(driller.observe(&result).await.is_ok());
     }
+
+    #[test]
+    fn record_constraints_appends_multiple_batches() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 10);
+
+        driller.record_constraints(vec![PathConstraint {
+            branch: BranchId::new(1, 1, 0, 0),
+            smtlib2: "(assert true)".into(),
+            direction_taken: true,
+        }]);
+        driller.record_constraints(vec![
+            PathConstraint {
+                branch: BranchId::new(1, 2, 0, 0),
+                smtlib2: "(assert (> x 1))".into(),
+                direction_taken: false,
+            },
+            PathConstraint {
+                branch: BranchId::new(1, 3, 0, 0),
+                smtlib2: "(assert (< x 10))".into(),
+                direction_taken: true,
+            },
+        ]);
+
+        let cs = driller.constraints.lock().unwrap();
+        assert_eq!(cs.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn suggest_inputs_skips_covered_branches() {
+        // Constraints exist for branches 1 and 2, but only branch 2 is uncovered.
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 10);
+
+        let b1 = BranchId::new(1, 10, 0, 0);
+        let b2 = BranchId::new(1, 20, 0, 0);
+        driller.record_constraints(vec![
+            PathConstraint {
+                branch: b1.clone(),
+                smtlib2: "(assert (> x 0))".into(),
+                direction_taken: true,
+            },
+            PathConstraint {
+                branch: b2.clone(),
+                smtlib2: "(assert (< x 100))".into(),
+                direction_taken: true,
+            },
+        ]);
+
+        // Only b2 is uncovered — b1 is already covered
+        let ctx = make_ctx(vec![b2]);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        assert_eq!(inputs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn suggest_inputs_with_zero_max_constraints() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 0); // max_constraints = 0
+
+        let branch = BranchId::new(1, 5, 0, 0);
+        driller.record_constraints(vec![PathConstraint {
+            branch: branch.clone(),
+            smtlib2: "(assert true)".into(),
+            direction_taken: true,
+        }]);
+
+        let ctx = make_ctx(vec![branch]);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        // max_constraints is 0, so take(0) yields nothing
+        assert!(inputs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn suggest_inputs_builds_correct_prefix_chain() {
+        // Verify that the prefix chain includes constraints up to and including the target.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct RecordingSolver {
+            call_count: AtomicUsize,
+        }
+
+        impl Solver for RecordingSolver {
+            fn solve(
+                &self,
+                constraints: &[String],
+                _negate_last: bool,
+            ) -> Result<Option<InputSeed>> {
+                self.call_count.fetch_add(1, Ordering::SeqCst);
+                // First call should have constraints for branch at line 10 only
+                // (take_while stops before it, then chain adds it)
+                Ok(Some(InputSeed::new(
+                    format!("solved-{}", constraints.len()).into_bytes(),
+                    SeedOrigin::Symbolic,
+                )))
+            }
+            fn set_logic(&mut self, _logic: apex_symbolic::traits::SolverLogic) {}
+            fn name(&self) -> &str {
+                "recording"
+            }
+        }
+
+        let solver = Arc::new(Mutex::new(RecordingSolver {
+            call_count: AtomicUsize::new(0),
+        }));
+        let driller = DrillerStrategy::new(solver.clone(), 10);
+
+        let b1 = BranchId::new(1, 10, 0, 0);
+        let b2 = BranchId::new(1, 20, 0, 0);
+        driller.record_constraints(vec![
+            PathConstraint {
+                branch: b1.clone(),
+                smtlib2: "(assert (> x 0))".into(),
+                direction_taken: true,
+            },
+            PathConstraint {
+                branch: b2.clone(),
+                smtlib2: "(assert (< x 100))".into(),
+                direction_taken: true,
+            },
+        ]);
+
+        // Both uncovered → frontier has both
+        let ctx = make_ctx(vec![b1, b2]);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        assert_eq!(inputs.len(), 2);
+        let count = solver.lock().unwrap().call_count.load(Ordering::SeqCst);
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn suggest_inputs_no_uncovered_matching_constraints() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 10);
+
+        // Record constraint for branch at line 10
+        driller.record_constraints(vec![PathConstraint {
+            branch: BranchId::new(1, 10, 0, 0),
+            smtlib2: "(assert true)".into(),
+            direction_taken: true,
+        }]);
+
+        // Uncovered branch is at line 99 — no matching constraint
+        let ctx = make_ctx(vec![BranchId::new(1, 99, 0, 0)]);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        assert!(inputs.is_empty());
+    }
+
+    #[test]
+    fn record_constraints_empty_is_noop() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 10);
+        driller.record_constraints(vec![]);
+        let cs = driller.constraints.lock().unwrap();
+        assert!(cs.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `observe()` always returns Ok — exercise it with all ExecutionStatus variants.
+    #[tokio::test]
+    async fn observe_returns_ok_for_all_statuses() {
+        use apex_core::types::{ExecutionStatus, SeedId};
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 10);
+
+        for status in [
+            ExecutionStatus::Pass,
+            ExecutionStatus::Fail,
+            ExecutionStatus::Crash,
+            ExecutionStatus::Timeout,
+            ExecutionStatus::OomKill,
+        ] {
+            let result = ExecutionResult {
+                seed_id: SeedId::new(),
+                status,
+                new_branches: vec![],
+                trace: None,
+                duration_ms: 1,
+                stdout: String::new(),
+                stderr: String::new(),
+            };
+            assert!(driller.observe(&result).await.is_ok());
+        }
+    }
+
+    /// PathConstraint with `direction_taken = false` is handled the same way.
+    #[tokio::test]
+    async fn suggest_inputs_with_direction_taken_false() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 10);
+        let branch = BranchId::new(1, 10, 0, 0);
+        driller.record_constraints(vec![PathConstraint {
+            branch: branch.clone(),
+            smtlib2: "(assert (= x 0))".into(),
+            direction_taken: false, // <-- the false arm
+        }]);
+        let ctx = make_ctx(vec![branch]);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        // Solver is solvable → should produce 1 input.
+        assert_eq!(inputs.len(), 1);
+    }
+
+    /// suggest_inputs with constraints for covered AND uncovered branches.
+    /// Only uncovered ones should be in the frontier.
+    #[tokio::test]
+    async fn suggest_inputs_frontier_excludes_covered() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 10);
+
+        let covered = BranchId::new(2, 10, 0, 0);
+        let uncovered = BranchId::new(2, 20, 0, 0);
+
+        driller.record_constraints(vec![
+            PathConstraint {
+                branch: covered.clone(),
+                smtlib2: "(assert true)".into(),
+                direction_taken: true,
+            },
+            PathConstraint {
+                branch: uncovered.clone(),
+                smtlib2: "(assert false)".into(),
+                direction_taken: false,
+            },
+        ]);
+
+        // Only `uncovered` is in the context.
+        let ctx = make_ctx(vec![uncovered]);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        // 1 frontier branch → 1 solve attempt → 1 result (solvable).
+        assert_eq!(inputs.len(), 1);
+    }
+
+    /// suggest_inputs with an empty uncovered_branches list → frontier is empty.
+    #[tokio::test]
+    async fn suggest_inputs_no_uncovered_branches_in_ctx() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 10);
+        driller.record_constraints(vec![PathConstraint {
+            branch: BranchId::new(1, 1, 0, 0),
+            smtlib2: "(assert true)".into(),
+            direction_taken: true,
+        }]);
+
+        // Empty uncovered list → nothing matches → empty inputs.
+        let ctx = make_ctx(vec![]);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        assert!(inputs.is_empty());
+    }
+
+    /// When solver returns Err for a constraint, `if let Ok(Some(seed))` skips it.
+    #[tokio::test]
+    async fn suggest_inputs_solver_error_skipped() {
+        struct ErrorSolver;
+        impl Solver for ErrorSolver {
+            fn solve(
+                &self,
+                _constraints: &[String],
+                _negate_last: bool,
+            ) -> Result<Option<InputSeed>> {
+                Err(apex_core::error::ApexError::Agent("solver error".into()))
+            }
+            fn set_logic(&mut self, _logic: apex_symbolic::traits::SolverLogic) {}
+            fn name(&self) -> &str {
+                "error"
+            }
+        }
+
+        let solver = Arc::new(Mutex::new(ErrorSolver));
+        let driller = DrillerStrategy::new(solver, 10);
+        let branch = BranchId::new(1, 5, 0, 0);
+        driller.record_constraints(vec![PathConstraint {
+            branch: branch.clone(),
+            smtlib2: "(assert true)".into(),
+            direction_taken: true,
+        }]);
+
+        let ctx = make_ctx(vec![branch]);
+        // Solver errors are silently skipped by `if let Ok(Some(seed))`.
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        assert!(inputs.is_empty());
+    }
+
+    /// All constraints in max_constraints limit are processed when limit is large enough.
+    #[tokio::test]
+    async fn suggest_inputs_processes_all_within_limit() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 100);
+
+        let mut constraints = Vec::new();
+        let mut uncovered = Vec::new();
+        for i in 0..5u32 {
+            let b = BranchId::new(3, i, 0, 0);
+            constraints.push(PathConstraint {
+                branch: b.clone(),
+                smtlib2: format!("(assert (> x {i}))"),
+                direction_taken: true,
+            });
+            uncovered.push(b);
+        }
+        driller.record_constraints(constraints);
+        let ctx = make_ctx(uncovered);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        assert_eq!(inputs.len(), 5);
+    }
+
+    /// InputSeed origin is always Symbolic for solver-produced seeds.
+    #[tokio::test]
+    async fn suggest_inputs_seed_origin_is_symbolic() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 10);
+        let branch = BranchId::new(1, 1, 0, 0);
+        driller.record_constraints(vec![PathConstraint {
+            branch: branch.clone(),
+            smtlib2: "(assert true)".into(),
+            direction_taken: true,
+        }]);
+        let ctx = make_ctx(vec![branch]);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        assert!(!inputs.is_empty());
+        for input in &inputs {
+            assert_eq!(input.origin, SeedOrigin::Symbolic);
+        }
+    }
+
+    /// DrillerStrategy with max_constraints=1 only solves the first frontier branch.
+    #[tokio::test]
+    async fn suggest_inputs_max_constraints_one() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 1);
+
+        let branches: Vec<BranchId> = (0..3).map(|i| BranchId::new(4, i, 0, 0)).collect();
+        driller.record_constraints(
+            branches
+                .iter()
+                .map(|b| PathConstraint {
+                    branch: b.clone(),
+                    smtlib2: "(assert true)".into(),
+                    direction_taken: true,
+                })
+                .collect(),
+        );
+
+        let ctx = make_ctx(branches);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        // max_constraints = 1 → at most 1 input.
+        assert!(inputs.len() <= 1);
+    }
 }

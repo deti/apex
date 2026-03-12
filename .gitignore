@@ -46,3 +46,6 @@ __pycache__/
 
 # Fuzz corpus/artifacts
 fuzz/
+
+# APEX runtime index output
+.apex/

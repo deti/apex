@@ -352,6 +352,42 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
+    fn mutate_with_multiple_mutators_distributes() {
+        let mut scheduler = make_scheduler(5);
+        let mut rng = StdRng::seed_from_u64(0);
+        let input = b"data";
+        for _ in 0..50 {
+            let _ = scheduler.mutate(input, &mut rng);
+        }
+        let total_apps: u64 = scheduler.stats.iter().map(|s| s.applications).sum();
+        assert_eq!(total_apps, 50);
+    }
+
+    #[test]
+    fn stats_summary_names_correct() {
+        let scheduler = make_scheduler(4);
+        let summary = scheduler.stats_summary();
+        for (i, (name, _, _, _)) in summary.iter().enumerate() {
+            assert_eq!(*name, format!("m{i}").as_str());
+        }
+    }
+
+    #[test]
+    fn report_hit_then_miss_sequence() {
+        let mut scheduler = make_scheduler(1);
+        scheduler.stats[0].applications = 10;
+        scheduler.stats[0].coverage_hits = 5;
+        let before = scheduler.stats[0].ema_yield;
+        scheduler.report_hit(0);
+        let after_hit = scheduler.stats[0].ema_yield;
+        scheduler.report_miss(0);
+        let after_miss = scheduler.stats[0].ema_yield;
+        // After a hit, ema should change; after a miss, it should change again
+        assert_ne!(before, after_hit);
+        assert_ne!(after_hit, after_miss);
+    }
+
+    #[test]
     fn ema_converges_toward_high_yield() {
         let mut scheduler = make_scheduler(1);
         // Simulate 20 applications, all hits, check EMA rises

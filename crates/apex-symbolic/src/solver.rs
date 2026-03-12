@@ -674,6 +674,61 @@ mod tests {
     }
 
     #[test]
+    fn z3_solver_for_language_ruby_uses_auto() {
+        let solver = Z3Solver::for_language(apex_core::types::Language::Ruby);
+        assert_eq!(solver.name(), "z3");
+    }
+
+    #[test]
+    fn z3_solver_solve_empty_returns_none() {
+        let solver = Z3Solver::new(SolverLogic::QfLia);
+        let result = SolverTrait::solve(&solver, &[], false).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn z3_solver_solve_empty_negate_returns_none() {
+        let solver = Z3Solver::new(SolverLogic::QfAbv);
+        let result = SolverTrait::solve(&solver, &[], true).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn z3_solver_set_logic_all_variants() {
+        let mut solver = Z3Solver::new(SolverLogic::Auto);
+        solver.set_logic(SolverLogic::QfLia);
+        solver.set_logic(SolverLogic::QfAbv);
+        solver.set_logic(SolverLogic::QfS);
+        solver.set_logic(SolverLogic::Auto);
+    }
+
+    #[test]
+    fn solve_free_fn_negate_last() {
+        let result = solve(vec!["(> x 0)".to_string(), "(< y 10)".to_string()], true).unwrap();
+        assert!(result.is_none()); // no z3
+    }
+
+    #[test]
+    fn session_multiple_push_then_diverge() {
+        let mut session = SymbolicSession::new();
+        for i in 0..10 {
+            session.push(make_constraint(&format!("(> x{}  0)", i)));
+        }
+        assert_eq!(session.len(), 10);
+        let inputs = session.diverging_inputs().unwrap();
+        assert!(inputs.is_empty()); // no z3
+    }
+
+    #[test]
+    fn session_diverging_inputs_generational_two_constraints() {
+        let mut session = SymbolicSession::new();
+        session.push(make_constraint("(> x 0)"));
+        session.push(make_constraint("(< y 10)"));
+        let inputs = session.diverging_inputs_generational().unwrap();
+        assert!(inputs.is_empty()); // no z3
+    }
+
+    #[test]
     fn session_diverging_inputs_with_z3solver_no_z3() {
         let solver = Z3Solver::new(SolverLogic::QfLia);
         let mut session = SymbolicSession::new();
@@ -681,5 +736,96 @@ mod tests {
         session.push(make_constraint("(< y 10)"));
         let inputs = session.diverging_inputs_with(&solver).unwrap();
         assert!(inputs.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn z3_solver_for_language_all_arms() {
+        // Each Language variant produces a valid Z3Solver (cover the match arms)
+        use apex_core::types::Language;
+        for lang in [
+            Language::Python,
+            Language::C,
+            Language::Rust,
+            Language::JavaScript,
+            Language::Java,
+            Language::Wasm,
+            Language::Ruby,
+        ] {
+            let solver = Z3Solver::for_language(lang);
+            assert_eq!(solver.name(), "z3");
+        }
+    }
+
+    #[test]
+    fn session_diverging_inputs_with_many_constraints() {
+        // Exercises the sets-building loop inside diverging_inputs_with
+        let solver = Z3Solver::new(SolverLogic::Auto);
+        let mut session = SymbolicSession::new();
+        for i in 0..5 {
+            session.push(make_constraint(&format!("(> x{i} 0)")));
+        }
+        let inputs = session.diverging_inputs_with(&solver).unwrap();
+        assert!(inputs.is_empty()); // no z3
+    }
+
+    #[test]
+    fn session_generational_one_then_two_constraints() {
+        // Cover generational with exactly 1 and 2 constraints
+        let mut s1 = SymbolicSession::new();
+        s1.push(make_constraint("(> a 0)"));
+        assert!(s1.diverging_inputs_generational().unwrap().is_empty());
+
+        let mut s2 = SymbolicSession::new();
+        s2.push(make_constraint("(> a 0)"));
+        s2.push(make_constraint("(< b 5)"));
+        assert!(s2.diverging_inputs_generational().unwrap().is_empty());
+    }
+
+    #[test]
+    fn session_len_and_is_empty_consistency() {
+        let mut session = SymbolicSession::new();
+        assert_eq!(session.is_empty(), session.len() == 0);
+        session.push(make_constraint("(> x 0)"));
+        assert_eq!(session.is_empty(), session.len() == 0);
+        assert_eq!(session.len(), 1);
+    }
+
+    #[test]
+    fn z3_solver_name_all_logic_variants() {
+        // Ensure all SolverLogic variants don't affect the name() method
+        for logic in [
+            SolverLogic::QfLia,
+            SolverLogic::QfAbv,
+            SolverLogic::QfS,
+            SolverLogic::Auto,
+        ] {
+            let solver = Z3Solver::new(logic);
+            assert_eq!(solver.name(), "z3");
+        }
+    }
+
+    #[test]
+    fn solve_free_function_many_constraints() {
+        // Exercises the take(MAX_DEPTH) path — pass more than 64 constraints
+        let constraints: Vec<String> = (0..70).map(|i| format!("(> x{i} 0)")).collect();
+        let result = solve(constraints, false).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn session_diverging_inputs_batch_error_is_swallowed() {
+        // diverging_inputs_with logs and discards Err from batch results
+        use crate::cache::CachingSolver;
+        let inner = Z3Solver::new(SolverLogic::Auto);
+        let cached = CachingSolver::new(inner);
+        let mut session = SymbolicSession::new();
+        session.push(make_constraint("(= z 0)"));
+        // Should not panic or return Err
+        let result = session.diverging_inputs_with(&cached);
+        assert!(result.is_ok());
     }
 }

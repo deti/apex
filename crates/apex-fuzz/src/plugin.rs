@@ -94,11 +94,66 @@ mod tests {
     }
 
     #[test]
+    fn registry_default_is_empty() {
+        let reg = MutatorRegistry::default();
+        assert!(reg.is_empty());
+        assert_eq!(reg.len(), 0);
+    }
+
+    #[test]
     fn registered_mutator_works() {
         let mut reg = MutatorRegistry::new();
         reg.register(Box::new(UpperMutator));
         let mut rng = rand::thread_rng();
         let result = reg.mutators()[0].mutate(b"hello", &mut rng);
         assert_eq!(result, b"HELLO");
+    }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn registry_len_matches_register_calls() {
+        let mut reg = MutatorRegistry::new();
+        for i in 0..5 {
+            let _ = i; // suppress warning
+            reg.register(Box::new(UpperMutator));
+        }
+        assert_eq!(reg.len(), 5);
+        assert!(!reg.is_empty());
+    }
+
+    #[test]
+    fn registry_default_and_new_are_equivalent() {
+        let a = MutatorRegistry::new();
+        let b = MutatorRegistry::default();
+        assert_eq!(a.len(), b.len());
+        assert_eq!(a.is_empty(), b.is_empty());
+    }
+
+    #[test]
+    fn registry_mutators_returns_all_registered() {
+        let mut reg = MutatorRegistry::new();
+        reg.register(Box::new(UpperMutator));
+        reg.register(Box::new(ReverseMutator));
+        let names: Vec<&str> = reg.mutators().iter().map(|m| m.name()).collect();
+        assert!(names.contains(&"upper"));
+        assert!(names.contains(&"reverse"));
+    }
+
+    #[test]
+    fn registry_reverse_mutator_works() {
+        let mut reg = MutatorRegistry::new();
+        reg.register(Box::new(ReverseMutator));
+        let mut rng = rand::thread_rng();
+        let result = reg.mutators()[0].mutate(b"abcd", &mut rng);
+        assert_eq!(result, b"dcba");
+    }
+
+    #[test]
+    fn registry_empty_mutators_slice_is_empty() {
+        let reg = MutatorRegistry::new();
+        assert!(reg.mutators().is_empty());
     }
 }

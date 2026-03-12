@@ -39,6 +39,13 @@ mod tests {
     }
 
     #[test]
+    fn mutator_empty_input() {
+        let m = IdentityMutator;
+        let mut rng = rand::thread_rng();
+        assert_eq!(m.mutate(b"", &mut rng), b"");
+    }
+
+    #[test]
     fn mutator_is_object_safe() {
         let m: Box<dyn Mutator> = Box::new(IdentityMutator);
         let mut rng = rand::thread_rng();

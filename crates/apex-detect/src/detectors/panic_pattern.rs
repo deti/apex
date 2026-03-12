@@ -551,4 +551,136 @@ mod tests {
         assert!(findings[0].title.contains("abort"));
         assert_eq!(findings[0].severity, Severity::Medium);
     }
+
+    #[test]
+    fn patterns_for_java_falls_back_to_rust() {
+        let pats = patterns_for_language(Language::Java);
+        // Java falls through to the _ arm → RUST_PANIC_PATTERNS
+        assert!(pats.iter().any(|(p, _)| *p == ".unwrap()"));
+    }
+
+    #[test]
+    fn patterns_for_wasm_falls_back_to_rust() {
+        let pats = patterns_for_language(Language::Wasm);
+        assert!(pats.iter().any(|(p, _)| *p == "panic!("));
+    }
+
+    #[test]
+    fn classify_severity_abort_bare() {
+        // "abort" (without parens) is also a hard panic pattern
+        assert_eq!(classify_severity("abort"), Severity::Medium);
+    }
+
+    #[test]
+    fn classify_severity_exit_bang() {
+        assert_eq!(classify_severity("exit!"), Severity::Medium);
+    }
+
+    #[test]
+    fn classify_severity_unknown_pattern() {
+        assert_eq!(classify_severity("some_random_pattern"), Severity::Low);
+    }
+
+    #[tokio::test]
+    async fn skips_test_and_tokio_test_attributes() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/lib.rs"),
+            "#[test]\nfn test_foo() {}\n#[tokio::test]\nasync fn test_bar() {}\nfn real() { panic!(\"boom\"); }\n".into(),
+        );
+        let ctx = make_ctx(files);
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        // Only the real panic, not the #[test]/#[tokio::test] attributes
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].title.contains("panic"));
+    }
+
+    #[tokio::test]
+    async fn detects_python_os_exit() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/worker.py"),
+            "import os\ndef crash():\n    os._exit(1)\n".into(),
+        );
+        let ctx = make_ctx_lang(files, Language::Python);
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].title.contains("os._exit"));
+        assert_eq!(findings[0].severity, Severity::Medium);
+    }
+
+    #[tokio::test]
+    async fn detects_python_bare_assert() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/check.py"),
+            "def validate(x):\n    assert x > 0\n".into(),
+        );
+        let ctx = make_ctx_lang(files, Language::Python);
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].title.contains("assert"));
+    }
+
+    #[tokio::test]
+    async fn detects_c_exit_and_assert() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/main.c"),
+            "void stop() {\n    exit(1);\n}\nvoid check() {\n    assert(x > 0);\n}\n".into(),
+        );
+        let ctx = make_ctx_lang(files, Language::C);
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn detects_js_throw_error() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/api.js"),
+            "function validate() {\n    throw new Error(\"invalid\");\n}\n".into(),
+        );
+        let ctx = make_ctx_lang(files, Language::JavaScript);
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].title.contains("throw new Error"));
+    }
+
+    #[tokio::test]
+    async fn detects_ruby_kernel_exit_and_fail() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("lib/runner.rb"),
+            "def go\n  Kernel.exit\nend\ndef bad\n  fail \"oops\"\nend\n".into(),
+        );
+        let ctx = make_ctx_lang(files, Language::Ruby);
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn detects_rust_unimplemented() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/lib.rs"),
+            "fn stub() {\n    unimplemented!();\n}\n".into(),
+        );
+        let ctx = make_ctx(files);
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Medium);
+    }
+
+    #[tokio::test]
+    async fn detects_python_raise_systemexit() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/app.py"),
+            "def quit():\n    raise SystemExit\n".into(),
+        );
+        let ctx = make_ctx_lang(files, Language::Python);
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+    }
 }

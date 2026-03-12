@@ -264,4 +264,155 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert!(result[0].source_line.is_none());
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `extract_source_contexts` with an empty uncovered slice returns empty.
+    #[test]
+    fn extract_contexts_empty_uncovered_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file_paths: HashMap<u64, PathBuf> = HashMap::new();
+        let ctxs = extract_source_contexts(&[], &file_paths, root);
+        assert!(ctxs.is_empty());
+    }
+
+    /// `build_uncovered_with_lines` with an empty uncovered slice returns empty.
+    #[test]
+    fn build_uncovered_empty_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let file_paths: HashMap<u64, PathBuf> = HashMap::new();
+        let result = build_uncovered_with_lines(&[], &file_paths, root);
+        assert!(result.is_empty());
+    }
+
+    /// Branch at line 0 (or line < WINDOW) — saturating_sub prevents underflow,
+    /// so start_line is clamped to 1.
+    #[test]
+    fn extract_contexts_branch_near_start_of_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let content: String = (1..=5).map(|i| format!("line {i}\n")).collect();
+        let rel = write_file(root, "small.py", &content);
+        let mut file_paths = HashMap::new();
+        file_paths.insert(1u64, rel.clone());
+
+        // Branch at line 2 — window of 15 would go below 1, saturating to 1.
+        let uncovered = vec![make_branch(1, 2)];
+        let ctxs = extract_source_contexts(&uncovered, &file_paths, root);
+        assert_eq!(ctxs.len(), 1);
+        assert_eq!(ctxs[0].start_line, 1); // saturating_sub(15) → 0 → max(1) = 1
+    }
+
+    /// Branch at the last line — window + line would exceed total, clamped to total.
+    #[test]
+    fn extract_contexts_branch_near_end_of_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let content: String = (1..=5).map(|i| format!("line {i}\n")).collect();
+        let rel = write_file(root, "tail.py", &content);
+        let mut file_paths = HashMap::new();
+        file_paths.insert(1u64, rel);
+
+        // Branch at line 5 — line + WINDOW(15) = 20 > total(5), clamped to 5.
+        let uncovered = vec![make_branch(1, 5)];
+        let ctxs = extract_source_contexts(&uncovered, &file_paths, root);
+        assert_eq!(ctxs.len(), 1);
+        // slice goes from max(1, 5-15) = 1 to min(5, 5+15) = 5 → 5 lines.
+        assert_eq!(ctxs[0].lines.len(), 5);
+    }
+
+    /// `extract_source_contexts` skips a file_id that has no entry in file_paths.
+    #[test]
+    fn extract_contexts_skips_unknown_file_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // file_paths has no entry for file_id 99.
+        let file_paths: HashMap<u64, PathBuf> = HashMap::new();
+        let uncovered = vec![make_branch(99, 5)];
+        let ctxs = extract_source_contexts(&uncovered, &file_paths, root);
+        assert!(ctxs.is_empty());
+    }
+
+    /// Multiple branches in the same file collapse into one SourceContext.
+    #[test]
+    fn extract_contexts_multiple_branches_same_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let content: String = (1..=50).map(|i| format!("line {i}\n")).collect();
+        let rel = write_file(root, "multi.py", &content);
+        let mut file_paths = HashMap::new();
+        file_paths.insert(1u64, rel);
+
+        let uncovered = vec![
+            make_branch(1, 10),
+            make_branch(1, 20),
+            make_branch(1, 30),
+        ];
+        let ctxs = extract_source_contexts(&uncovered, &file_paths, root);
+        // All branches in the same file → one SourceContext.
+        assert_eq!(ctxs.len(), 1);
+    }
+
+    /// `build_uncovered_with_lines` uses the file cache for repeated accesses
+    /// to the same file_id (exercises the `or_insert_with` path on hit vs miss).
+    #[test]
+    fn build_uncovered_file_cache_reuse() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let rel = write_file(root, "cached.py", "first\nsecond\nthird\n");
+        let mut file_paths = HashMap::new();
+        file_paths.insert(1u64, rel.clone());
+
+        // Two branches from the same file — second access should use the cache.
+        let uncovered = vec![make_branch(1, 1), make_branch(1, 3)];
+        let result = build_uncovered_with_lines(&uncovered, &file_paths, root);
+
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].source_line.as_deref(), Some("first"));
+        assert_eq!(result[1].source_line.as_deref(), Some("third"));
+    }
+
+    /// `build_uncovered_with_lines` with line = 0 (saturating_sub(1) = 0, valid index).
+    #[test]
+    fn build_uncovered_line_zero_saturates_to_index_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let rel = write_file(root, "zero.py", "first line\nsecond line\n");
+        let mut file_paths = HashMap::new();
+        file_paths.insert(1u64, rel);
+
+        // line=0 → saturating_sub(1) = 0 → lines.get(0) = Some("first line")
+        let uncovered = vec![make_branch(1, 0)];
+        let result = build_uncovered_with_lines(&uncovered, &file_paths, root);
+        assert_eq!(result.len(), 1);
+        // line 0 with saturating_sub(1) → index 0 → "first line"
+        assert_eq!(result[0].source_line.as_deref(), Some("first line"));
+    }
+
+    /// MAX_FILES_PER_ROUND constant is accessible and equals 3.
+    #[test]
+    fn max_files_per_round_constant() {
+        assert_eq!(MAX_FILES_PER_ROUND, 3);
+    }
+
+    /// When two files have the same uncovered branch count, both appear in result.
+    #[test]
+    fn extract_contexts_tie_in_uncovered_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let rel_a = write_file(root, "tie_a.py", "a1\na2\n");
+        let rel_b = write_file(root, "tie_b.py", "b1\nb2\n");
+        let mut file_paths = HashMap::new();
+        file_paths.insert(1u64, rel_a);
+        file_paths.insert(2u64, rel_b);
+
+        // Each file has exactly 1 uncovered branch.
+        let uncovered = vec![make_branch(1, 1), make_branch(2, 1)];
+        let ctxs = extract_source_contexts(&uncovered, &file_paths, root);
+        assert_eq!(ctxs.len(), 2);
+    }
 }

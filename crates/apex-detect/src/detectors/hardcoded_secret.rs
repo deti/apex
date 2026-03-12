@@ -334,4 +334,149 @@ mod tests {
     fn does_not_use_cargo_subprocess() {
         assert!(!HardcodedSecretDetector.uses_cargo_subprocess());
     }
+
+    #[test]
+    fn is_example_file_variants() {
+        assert!(is_example_file(std::path::Path::new("config.sample.yml")));
+        assert!(is_example_file(std::path::Path::new("settings.template.json")));
+        assert!(is_example_file(std::path::Path::new("README.md")));
+        assert!(is_example_file(std::path::Path::new("SETUP.txt")));
+        assert!(is_example_file(std::path::Path::new("docs/guide.rst")));
+        assert!(!is_example_file(std::path::Path::new("src/config.py")));
+        assert!(!is_example_file(std::path::Path::new("lib/auth.rb")));
+    }
+
+    #[test]
+    fn contains_placeholder_variants() {
+        assert!(contains_placeholder("api_key = \"CHANGEME\""));
+        assert!(contains_placeholder("token = \"your-api-key\""));
+        assert!(contains_placeholder("key = \"YOUR_API_KEY\""));
+        assert!(contains_placeholder("key = \"xxx\""));
+        assert!(contains_placeholder("key = \"XXX\""));
+        assert!(contains_placeholder("key = \"placeholder\""));
+        assert!(contains_placeholder("key = \"PLACEHOLDER\""));
+        assert!(contains_placeholder("key = \"example\""));
+        assert!(contains_placeholder("key = \"EXAMPLE\""));
+        assert!(contains_placeholder("key = \"replace_me\""));
+        assert!(contains_placeholder("key = \"REPLACE_ME\""));
+        assert!(contains_placeholder("key = \"TODO\""));
+        assert!(contains_placeholder("key = \"FIXME\""));
+        assert!(contains_placeholder("key = \"test\""));
+        assert!(contains_placeholder("key = \"dummy\""));
+        assert!(contains_placeholder("key = \"fake\""));
+        assert!(contains_placeholder("key = \"sample\""));
+        assert!(contains_placeholder("key = \"demo\""));
+        assert!(!contains_placeholder("key = \"AKIAIOSFODNN7ABCDEFG\""));
+    }
+
+    #[test]
+    fn references_env_var_variants() {
+        assert!(references_env_var("let key = env(\"API_KEY\")"));
+        assert!(references_env_var("key = ENV[\"API_KEY\"]"));
+        assert!(references_env_var("key = os.environ.get('KEY')"));
+        assert!(references_env_var("const key = process.env.API_KEY"));
+        assert!(references_env_var("let key = std::env::var(\"KEY\")"));
+        assert!(references_env_var("char* k = getenv(\"KEY\")"));
+        assert!(!references_env_var("api_key = \"hardcoded_value\""));
+    }
+
+    #[tokio::test]
+    async fn detects_github_token() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/deploy.py"),
+            "GITHUB_TOKEN = \"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+    }
+
+    #[tokio::test]
+    async fn detects_generic_api_key() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/config.js"),
+            "const API_KEY = \"abcdefghijklmnopqrst12345\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::JavaScript);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    #[tokio::test]
+    async fn detects_generic_secret_token() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/auth.py"),
+            "secret = \"AbCdEfGhIjKlMnOpQrSt\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    #[tokio::test]
+    async fn detects_slack_token() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/notify.py"),
+            "SLACK_TOKEN = \"xoxb-1234567890-abcdefg\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn skips_cfg_test_block_in_rust() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/lib.rs"),
+            "#[cfg(test)]\nmod tests {\n    const KEY: &str = \"AKIAIOSFODNN7ABCDEFG\";\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Rust);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn skips_comments_in_python() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/config.py"),
+            "# AKIAIOSFODNN7ABCDEFG is the old key\nreal_code = 1\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn detects_ec_private_key() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/certs.py"),
+            "KEY = \"-----BEGIN EC PRIVATE KEY-----\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+    }
+
+    #[tokio::test]
+    async fn detects_stripe_live_key_variant() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/pay.rb"),
+            "Stripe.api_key = \"sk_live_ZbcdefghiJ1234567890\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Ruby);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+    }
 }

@@ -578,4 +578,248 @@ mod tests {
         let uncovered = index.uncovered_branch_ids(&all);
         assert_eq!(uncovered.len(), 2);
     }
+
+    #[test]
+    fn uncovered_branch_ids_empty_all_branches() {
+        let traces = vec![TestTrace {
+            test_name: "t1".into(),
+            branches: vec![make_branch(1, 10, 0)],
+            duration_ms: 10,
+            status: ExecutionStatus::Pass,
+        }];
+        let index = BranchIndex {
+            traces: traces.clone(),
+            profiles: BranchIndex::build_profiles(&traces),
+            file_paths: HashMap::new(),
+            total_branches: 1,
+            covered_branches: 1,
+            created_at: String::new(),
+            language: Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+        let uncovered = index.uncovered_branch_ids(&[]);
+        assert!(uncovered.is_empty());
+    }
+
+    #[test]
+    fn uncovered_branch_ids_all_covered() {
+        let traces = vec![TestTrace {
+            test_name: "t1".into(),
+            branches: vec![make_branch(1, 10, 0), make_branch(1, 20, 1)],
+            duration_ms: 10,
+            status: ExecutionStatus::Pass,
+        }];
+        let index = BranchIndex {
+            traces: traces.clone(),
+            profiles: BranchIndex::build_profiles(&traces),
+            file_paths: HashMap::new(),
+            total_branches: 2,
+            covered_branches: 2,
+            created_at: String::new(),
+            language: Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+        let all = vec![make_branch(1, 10, 0), make_branch(1, 20, 1)];
+        let uncovered = index.uncovered_branch_ids(&all);
+        assert!(uncovered.is_empty());
+    }
+
+    #[test]
+    fn coverage_percent_100_when_all_covered() {
+        let index = BranchIndex {
+            traces: vec![],
+            profiles: HashMap::new(),
+            file_paths: HashMap::new(),
+            total_branches: 10,
+            covered_branches: 10,
+            created_at: String::new(),
+            language: Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+        assert!((index.coverage_percent() - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn save_path_with_no_parent() {
+        // Path::new("index.json") has parent = Some("") which is empty but create_dir_all("") is a no-op
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("index.json");
+        let index = BranchIndex {
+            traces: vec![],
+            profiles: HashMap::new(),
+            file_paths: HashMap::new(),
+            total_branches: 0,
+            covered_branches: 0,
+            created_at: String::new(),
+            language: Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+        index.save(&path).unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn hash_source_files_javascript_extensions() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("app.js"), "console.log(1);").unwrap();
+        std::fs::write(tmp.path().join("types.ts"), "type Foo = string;").unwrap();
+        std::fs::write(tmp.path().join("other.py"), "pass").unwrap();
+
+        let h_js = hash_source_files(tmp.path(), Language::JavaScript);
+        let h_py = hash_source_files(tmp.path(), Language::Python);
+        assert_ne!(h_js, h_py);
+    }
+
+    #[test]
+    fn hash_source_files_java_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Main.java"), "class Main {}").unwrap();
+
+        let h = hash_source_files(tmp.path(), Language::Java);
+        assert!(!h.is_empty());
+        // Java file not picked up by Python extension
+        let h_py = hash_source_files(tmp.path(), Language::Python);
+        assert_ne!(h, h_py);
+    }
+
+    #[test]
+    fn hash_source_files_c_extensions() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("lib.c"), "int main() { return 0; }").unwrap();
+        std::fs::write(tmp.path().join("lib.h"), "#pragma once").unwrap();
+
+        let h = hash_source_files(tmp.path(), Language::C);
+        assert!(!h.is_empty());
+    }
+
+    #[test]
+    fn hash_source_files_wasm_extensions() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("module.wat"), "(module)").unwrap();
+
+        let h = hash_source_files(tmp.path(), Language::Wasm);
+        assert!(!h.is_empty());
+    }
+
+    #[test]
+    fn hash_source_files_ruby_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("app.rb"), "puts 'hello'").unwrap();
+
+        let h = hash_source_files(tmp.path(), Language::Ruby);
+        assert!(!h.is_empty());
+    }
+
+    #[test]
+    fn hash_source_files_skips_target_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("main.rs"), "fn main() {}").unwrap();
+        let h1 = hash_source_files(tmp.path(), Language::Rust);
+
+        // Files in "target" dir should be skipped
+        let target = tmp.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("build.rs"), "fn main() {}").unwrap();
+
+        let h2 = hash_source_files(tmp.path(), Language::Rust);
+        assert_eq!(h1, h2, "target dir files should be skipped");
+    }
+
+    #[test]
+    fn hash_source_files_skips_venv_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("app.py"), "pass").unwrap();
+        let h1 = hash_source_files(tmp.path(), Language::Python);
+
+        // Files in "venv" dir should be skipped
+        let venv = tmp.path().join("venv");
+        std::fs::create_dir(&venv).unwrap();
+        std::fs::write(venv.join("site.py"), "pass").unwrap();
+
+        let h2 = hash_source_files(tmp.path(), Language::Python);
+        assert_eq!(h1, h2, "venv dir files should be skipped");
+    }
+
+    #[test]
+    fn hash_source_files_skips_dot_venv_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("app.py"), "pass").unwrap();
+        let h1 = hash_source_files(tmp.path(), Language::Python);
+
+        // Files in ".venv" dir should also be skipped (starts with '.' check)
+        let dotenv = tmp.path().join(".venv");
+        std::fs::create_dir(&dotenv).unwrap();
+        std::fs::write(dotenv.join("env.py"), "pass").unwrap();
+
+        let h2 = hash_source_files(tmp.path(), Language::Python);
+        assert_eq!(h1, h2, ".venv dir files should be skipped");
+    }
+
+    #[test]
+    fn build_profiles_multiple_traces_same_branch() {
+        // Branch hit by 3 different tests -> hit_count = 3, test_count = 3
+        let b = make_branch(5, 42, 0);
+        let traces = vec![
+            TestTrace { test_name: "a".into(), branches: vec![b.clone()], duration_ms: 1, status: ExecutionStatus::Pass },
+            TestTrace { test_name: "b".into(), branches: vec![b.clone()], duration_ms: 1, status: ExecutionStatus::Pass },
+            TestTrace { test_name: "c".into(), branches: vec![b.clone()], duration_ms: 1, status: ExecutionStatus::Pass },
+        ];
+        let profiles = BranchIndex::build_profiles(&traces);
+        let key = branch_key(&b);
+        let p = &profiles[&key];
+        assert_eq!(p.hit_count, 3);
+        assert_eq!(p.test_count, 3);
+        assert_eq!(p.test_names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn branch_key_differs_by_file_id() {
+        let a = make_branch(1, 10, 0);
+        let b = make_branch(2, 10, 0);
+        assert_ne!(branch_key(&a), branch_key(&b));
+    }
+
+    #[test]
+    fn branch_key_differs_by_line() {
+        let a = make_branch(1, 10, 0);
+        let b = make_branch(1, 11, 0);
+        assert_ne!(branch_key(&a), branch_key(&b));
+    }
+
+    #[test]
+    fn dead_branches_empty_profiles() {
+        let index = BranchIndex {
+            traces: vec![],
+            profiles: HashMap::new(),
+            file_paths: HashMap::new(),
+            total_branches: 0,
+            covered_branches: 0,
+            created_at: String::new(),
+            language: Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+        assert!(index.dead_branches().is_empty());
+    }
+
+    #[test]
+    fn hash_source_files_recursive_subdir() {
+        // Files in subdirectories should be included
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("src");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("lib.py"), "pass").unwrap();
+
+        let h = hash_source_files(tmp.path(), Language::Python);
+        assert!(!h.is_empty());
+
+        // Adding another file changes the hash
+        std::fs::write(sub.join("other.py"), "x = 1").unwrap();
+        let h2 = hash_source_files(tmp.path(), Language::Python);
+        assert_ne!(h, h2);
+    }
 }

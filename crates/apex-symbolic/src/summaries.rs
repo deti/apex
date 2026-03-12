@@ -224,6 +224,62 @@ mod tests {
     }
 
     #[test]
+    fn max_summary_three_args() {
+        let s = lookup("builtins.max").unwrap();
+        let constraints = s.generate("ret", &["a", "b", "c"]);
+        assert_eq!(constraints.len(), 3);
+        for c in &constraints {
+            assert!(c.contains(">="));
+        }
+    }
+
+    #[test]
+    fn min_summary_three_args() {
+        let s = lookup("builtins.min").unwrap();
+        let constraints = s.generate("ret", &["a", "b", "c"]);
+        assert_eq!(constraints.len(), 3);
+        for c in &constraints {
+            assert!(c.contains("<="));
+        }
+    }
+
+    #[test]
+    fn abs_summary_two_args() {
+        let s = lookup("builtins.abs").unwrap();
+        // abs with multiple args - only first arg used for second constraint
+        let constraints = s.generate("ret", &["x", "y"]);
+        assert_eq!(constraints.len(), 2);
+        assert!(constraints[1].contains("x"));
+    }
+
+    #[test]
+    fn range_summary_arity_is_variadic() {
+        let s = lookup("builtins.range").unwrap();
+        assert_eq!(s.arity, -1);
+    }
+
+    #[test]
+    fn split_summary_arity_is_variadic() {
+        let s = lookup("str.split").unwrap();
+        assert_eq!(s.arity, -1);
+    }
+
+    #[test]
+    fn len_summary_ret_name_used() {
+        let s = lookup("builtins.len").unwrap();
+        let constraints = s.generate("my_ret", &["xs"]);
+        assert!(constraints[0].contains("my_ret"));
+    }
+
+    #[test]
+    fn all_summaries_have_unique_names() {
+        let mut names = std::collections::HashSet::new();
+        for s in super::ALL_SUMMARIES.iter() {
+            assert!(names.insert(s.name), "duplicate summary name: {}", s.name);
+        }
+    }
+
+    #[test]
     fn min_summary_single_arg() {
         let s = lookup("builtins.min").unwrap();
         let constraints = s.generate("ret", &["x"]);

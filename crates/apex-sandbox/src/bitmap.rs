@@ -114,4 +114,66 @@ mod tests {
         let result = bitmap_to_new_branches(&bitmap, &[], &oracle);
         assert!(result.is_empty());
     }
+
+    #[test]
+    fn unregistered_branch_in_oracle_returns_none_state() {
+        // Branch in index but NOT registered in oracle — state_of returns None
+        let oracle = CoverageOracle::new();
+        let b0 = make_branch(1, 0);
+        // Do NOT register b0 in oracle
+        let index = vec![b0];
+        let bitmap = vec![1u8];
+        let result = bitmap_to_new_branches(&bitmap, &index, &oracle);
+        // state_of returns None (not Some(Uncovered)), so branch is filtered out
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn mixed_registered_and_unregistered_branches() {
+        let oracle = CoverageOracle::new();
+        let b0 = make_branch(1, 0);
+        let b1 = make_branch(2, 0);
+        // Only register b1
+        oracle.register_branches([b1.clone()]);
+        let index = vec![b0, b1.clone()];
+        let bitmap = vec![1, 1];
+        let result = bitmap_to_new_branches(&bitmap, &index, &oracle);
+        // b0 not registered (None), b1 registered and uncovered
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], b1);
+    }
+
+    #[test]
+    fn all_branches_already_covered_returns_empty() {
+        let oracle = CoverageOracle::new();
+        let b0 = make_branch(1, 0);
+        let b1 = make_branch(2, 0);
+        oracle.register_branches([b0.clone(), b1.clone()]);
+        oracle.mark_covered(&b0, SeedId::new());
+        oracle.mark_covered(&b1, SeedId::new());
+        let index = vec![b0, b1];
+        let bitmap = vec![1, 1];
+        let result = bitmap_to_new_branches(&bitmap, &index, &oracle);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn high_hit_count_values_treated_as_hit() {
+        let oracle = CoverageOracle::new();
+        let b0 = make_branch(1, 0);
+        oracle.register_branches([b0.clone()]);
+        let index = vec![b0.clone()];
+        // bitmap value 255 (max u8) still counts as hit
+        let bitmap = vec![255u8];
+        let result = bitmap_to_new_branches(&bitmap, &index, &oracle);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], b0);
+    }
+
+    #[test]
+    fn both_empty_bitmap_and_index() {
+        let oracle = CoverageOracle::new();
+        let result = bitmap_to_new_branches(&[], &[], &oracle);
+        assert!(result.is_empty());
+    }
 }

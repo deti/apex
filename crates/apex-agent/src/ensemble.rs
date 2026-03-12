@@ -134,4 +134,111 @@ mod tests {
         assert!(!sync.should_sync(19));
         assert!(sync.should_sync(20));
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `sync()` on an empty buffer returns an empty vec.
+    #[test]
+    fn sync_empty_buffer_returns_empty() {
+        let sync = EnsembleSync::new(5);
+        let seeds = sync.sync(0);
+        assert!(seeds.is_empty());
+    }
+
+    /// `should_sync()` returns true at exact multiples of interval after reset.
+    #[test]
+    fn should_sync_at_multiples_after_reset() {
+        let sync = EnsembleSync::new(10);
+        sync.sync(10); // last_sync = 10
+        assert!(!sync.should_sync(15)); // 15 < 10+10
+        assert!(sync.should_sync(20));  // 20 >= 10+10
+        assert!(sync.should_sync(25));  // 25 >= 20 (last_sync still 10)
+    }
+
+    /// Two sequential syncs correctly advance the timer each time.
+    #[test]
+    fn sequential_syncs_advance_timer() {
+        let sync = EnsembleSync::new(5);
+        sync.deposit(make_seed());
+        sync.sync(5);  // last_sync = 5
+        sync.deposit(make_seed());
+        sync.sync(10); // last_sync = 10
+        // After syncing at 10, next sync due at 15.
+        assert!(!sync.should_sync(14));
+        assert!(sync.should_sync(15));
+    }
+
+    /// `pending_count()` decrements to zero after sync.
+    #[test]
+    fn pending_count_zero_after_sync() {
+        let sync = EnsembleSync::new(5);
+        sync.deposit(make_seed());
+        sync.deposit(make_seed());
+        sync.deposit(make_seed());
+        assert_eq!(sync.pending_count(), 3);
+        sync.sync(5);
+        assert_eq!(sync.pending_count(), 0);
+    }
+
+    /// Deposit multiple seeds and sync returns them all in order.
+    #[test]
+    fn sync_returns_all_deposited_seeds() {
+        let sync = EnsembleSync::new(1);
+        let s1 = InputSeed::new(vec![0x01], SeedOrigin::Fuzzer);
+        let s2 = InputSeed::new(vec![0x02], SeedOrigin::Fuzzer);
+        let s3 = InputSeed::new(vec![0x03], SeedOrigin::Fuzzer);
+        sync.deposit(s1.clone());
+        sync.deposit(s2.clone());
+        sync.deposit(s3.clone());
+        let seeds = sync.sync(1);
+        assert_eq!(seeds.len(), 3);
+        // Order preserved (Vec drain from front).
+        assert_eq!(seeds[0].data.as_ref(), &[0x01_u8][..]);
+        assert_eq!(seeds[1].data.as_ref(), &[0x02_u8][..]);
+        assert_eq!(seeds[2].data.as_ref(), &[0x03_u8][..]);
+    }
+
+    /// `should_sync()` at iteration 0 with interval 0 returns false (zero-interval path).
+    #[test]
+    fn zero_interval_returns_false_regardless_of_iteration() {
+        let sync = EnsembleSync::new(0);
+        // All of these hit the `if self.interval == 0 { return false; }` branch.
+        for iter in [0u64, 1, 10, 1000, u64::MAX / 2] {
+            assert!(!sync.should_sync(iter));
+        }
+    }
+
+    /// `should_sync()` when `iteration == last_sync + interval` (exact boundary).
+    #[test]
+    fn should_sync_exact_boundary() {
+        let sync = EnsembleSync::new(7);
+        // last_sync=0, interval=7 → should_sync(7) must be true (>=)
+        assert!(sync.should_sync(7));
+    }
+
+    /// `should_sync()` one below exact boundary returns false.
+    #[test]
+    fn should_sync_one_below_boundary() {
+        let sync = EnsembleSync::new(7);
+        assert!(!sync.should_sync(6));
+    }
+
+    /// interval=1 means sync is due at every iteration.
+    #[test]
+    fn interval_one_syncs_every_iteration() {
+        let sync = EnsembleSync::new(1);
+        assert!(sync.should_sync(1));
+        assert!(sync.should_sync(2));
+        assert!(sync.should_sync(100));
+    }
+
+    /// Large interval — should_sync returns false until threshold.
+    #[test]
+    fn large_interval_sync() {
+        let sync = EnsembleSync::new(u64::MAX / 2);
+        assert!(!sync.should_sync(100));
+        assert!(sync.should_sync(u64::MAX / 2));
+    }
 }
