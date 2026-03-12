@@ -486,6 +486,108 @@ pub fn analyze_attack_surface(
 }
 
 // ---------------------------------------------------------------------------
+// Boundary verification
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BoundaryReport {
+    pub entry_pattern: String,
+    pub auth_pattern: String,
+    pub total_entry_tests: usize,
+    pub passing_tests: usize,
+    pub failing_tests: usize,
+    pub unprotected_paths: Vec<UnprotectedPath>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UnprotectedPath {
+    pub test_name: String,
+    /// Branches in the test trace — none matched the auth pattern.
+    pub branches_traversed: usize,
+    /// Files reached without auth.
+    pub files_reached: Vec<PathBuf>,
+}
+
+/// Verify all entry-point test paths pass through auth-check branches.
+///
+/// `auth_checks` is a substring pattern matching source lines that represent
+/// auth gates (e.g., "check_auth", "verify_token", "@login_required").
+pub fn verify_boundaries(
+    index: &BranchIndex,
+    target_root: &Path,
+    entry_pattern: &str,
+    auth_checks: &str,
+) -> BoundaryReport {
+    // Find auth-check branches by scanning source for the pattern
+    let mut auth_branches: HashSet<String> = HashSet::new();
+
+    for (file_id, rel_path) in &index.file_paths {
+        let full_path = target_root.join(rel_path);
+        let source = match std::fs::read_to_string(&full_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        for (i, line) in source.lines().enumerate() {
+            if line.contains(auth_checks) {
+                let line_num = (i + 1) as u32;
+                // Find all branches on or near this line
+                for profile in index.profiles.values() {
+                    if profile.branch.file_id == *file_id
+                        && (profile.branch.line == line_num
+                            || profile.branch.line == line_num + 1)
+                    {
+                        auth_branches.insert(branch_key(&profile.branch));
+                    }
+                }
+            }
+        }
+    }
+
+    // Filter entry-point tests
+    let entry_traces: Vec<_> = index
+        .traces
+        .iter()
+        .filter(|t| t.test_name.contains(entry_pattern))
+        .collect();
+
+    let mut unprotected = Vec::new();
+
+    for trace in &entry_traces {
+        let trace_keys: HashSet<String> =
+            trace.branches.iter().map(|b| branch_key(b)).collect();
+
+        let hits_auth = trace_keys.iter().any(|k| auth_branches.contains(k));
+
+        if !hits_auth {
+            let files_reached: Vec<PathBuf> = trace
+                .branches
+                .iter()
+                .filter_map(|b| index.file_paths.get(&b.file_id))
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .cloned()
+                .collect();
+
+            unprotected.push(UnprotectedPath {
+                test_name: trace.test_name.clone(),
+                branches_traversed: trace.branches.len(),
+                files_reached,
+            });
+        }
+    }
+
+    BoundaryReport {
+        entry_pattern: entry_pattern.to_string(),
+        auth_pattern: auth_checks.to_string(),
+        total_entry_tests: entry_traces.len(),
+        passing_tests: entry_traces.len() - unprotected.len(),
+        failing_tests: unprotected.len(),
+        unprotected_paths: unprotected,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Hot paths analysis
 // ---------------------------------------------------------------------------
 
@@ -1147,6 +1249,31 @@ mod tests {
         let score = compute_deploy_score(&index, 0, 0);
         assert_eq!(score.total_score, 100);
         assert!(score.recommendation.starts_with("GO"));
+    }
+
+    #[test]
+    fn verify_boundaries_no_entry_tests() {
+        let traces = vec![TestTrace {
+            test_name: "test_internal".into(),
+            branches: vec![br(1, 10, 0)],
+            duration_ms: 50,
+            status: ExecutionStatus::Pass,
+        }];
+        let index = BranchIndex {
+            profiles: BranchIndex::build_profiles(&traces),
+            traces,
+            file_paths: HashMap::from([(1, PathBuf::from("src/lib.py"))]),
+            total_branches: 1,
+            covered_branches: 1,
+            created_at: String::new(),
+            language: apex_core::types::Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+
+        let report = verify_boundaries(&index, Path::new("/nonexistent"), "test_api", "check_auth");
+        assert_eq!(report.total_entry_tests, 0);
+        assert_eq!(report.failing_tests, 0);
     }
 
     #[test]

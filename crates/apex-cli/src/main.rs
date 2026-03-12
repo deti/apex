@@ -74,6 +74,8 @@ enum Commands {
     Docs(DocsArgs),
     /// Map attack surface from entry-point reachability.
     AttackSurface(AttackSurfaceArgs),
+    /// Verify all entry-point paths pass through auth checks.
+    VerifyBoundaries(VerifyBoundariesArgs),
     /// CI gate: fail on unexpected behavioral changes vs base branch.
     RegressionCheck(RegressionCheckArgs),
     /// Assess change risk from branch coverage data.
@@ -321,6 +323,33 @@ struct AttackSurfaceArgs {
 }
 
 #[derive(Parser)]
+struct VerifyBoundariesArgs {
+    /// Path to the target repository.
+    #[arg(long, short)]
+    target: PathBuf,
+
+    /// Programming language of the target.
+    #[arg(long, short, value_enum)]
+    lang: LangArg,
+
+    /// Pattern matching entry-point tests (e.g., "test_api").
+    #[arg(long)]
+    entry_pattern: String,
+
+    /// Substring to match auth-check lines in source (e.g., "check_auth", "@login_required").
+    #[arg(long)]
+    auth_checks: String,
+
+    /// Exit with code 1 if any unprotected paths are found.
+    #[arg(long)]
+    strict: bool,
+
+    /// Output format.
+    #[arg(long, default_value = "text")]
+    output_format: OutputFormat,
+}
+
+#[derive(Parser)]
 struct RegressionCheckArgs {
     /// Path to the target repository.
     #[arg(long, short)]
@@ -472,6 +501,7 @@ async fn main() -> Result<()> {
         Commands::Complexity(args) => run_complexity(args).await,
         Commands::Docs(args) => run_docs(args).await,
         Commands::AttackSurface(args) => run_attack_surface(args).await,
+        Commands::VerifyBoundaries(args) => run_verify_boundaries(args).await,
         Commands::RegressionCheck(args) => run_regression_check(args).await,
         Commands::Risk(args) => run_risk(args).await,
         Commands::Hotpaths(args) => run_hotpaths(args).await,
@@ -2385,6 +2415,70 @@ async fn run_docs(args: DocsArgs) -> Result<()> {
 // ---------------------------------------------------------------------------
 // `apex attack-surface`
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// `apex verify-boundaries`
+// ---------------------------------------------------------------------------
+
+async fn run_verify_boundaries(args: VerifyBoundariesArgs) -> Result<()> {
+    let target_path = args.target.canonicalize()?;
+    let index = load_index(&target_path)?;
+
+    let report = apex_index::analysis::verify_boundaries(
+        &index,
+        &target_path,
+        &args.entry_pattern,
+        &args.auth_checks,
+    );
+
+    match args.output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        OutputFormat::Text => {
+            println!("Boundary Verification\n");
+            println!("  Entry pattern:     \"{}\"", report.entry_pattern);
+            println!("  Auth check:        \"{}\"", report.auth_pattern);
+            println!("  Entry tests:       {}", report.total_entry_tests);
+            println!(
+                "  Protected:         {} (pass through auth)",
+                report.passing_tests
+            );
+            println!(
+                "  Unprotected:       {} (NO auth branch hit)\n",
+                report.failing_tests
+            );
+
+            if report.total_entry_tests == 0 {
+                println!("No tests match the entry pattern. Try a broader pattern.");
+                return Ok(());
+            }
+
+            if !report.unprotected_paths.is_empty() {
+                println!("Unprotected paths:");
+                for path in &report.unprotected_paths {
+                    println!(
+                        "  {} — {} branches, reaches {} files",
+                        path.test_name,
+                        path.branches_traversed,
+                        path.files_reached.len()
+                    );
+                    for f in &path.files_reached {
+                        println!("    {}", f.display());
+                    }
+                }
+            } else {
+                println!("All entry-point test paths pass through auth checks.");
+            }
+        }
+    }
+
+    if args.strict && report.failing_tests > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------
 // `apex regression-check`
