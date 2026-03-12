@@ -676,4 +676,165 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, Severity::Medium);
     }
+
+    #[tokio::test]
+    async fn skips_comments_python() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/app.py"),
+            "# eval(request.data)\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn skips_comments_rust() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/main.rs"),
+            "// Command::new(format!(\"echo {}\", user));\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Rust);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn skips_test_attribute_lines() {
+        // Individual #[test] fns are NOT inside #[cfg(test)] blocks,
+        // so they are still scanned. Only #[cfg(test)] mod blocks are skipped.
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/main.rs"),
+            "#[test]\nfn test_cmd() { Command::new(\"echo\"); }\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Rust);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn skips_cfg_test_block() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/lib.rs"),
+            "pub fn real() {}\n\n#[cfg(test)]\nmod tests {\n    fn test_it() {\n        let _ = eval(\"1+1\");\n    }\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Rust);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sanitization_with_user_input_downgrades_once() {
+        // Python subprocess with shell=True (user input indicator) + shlex.quote (sanitization)
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/run.py"),
+            "import shlex\ndef run(request):\n    cmd = shlex.quote(request.input)\n    subprocess.call(cmd, shell=True)\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        // base=High, user input (shell=True + request) → stays High, sanitization (shlex.quote) → Medium
+        assert_eq!(findings[0].severity, Severity::Medium);
+    }
+
+    #[tokio::test]
+    async fn empty_source_no_findings() {
+        let mut files = HashMap::new();
+        files.insert(PathBuf::from("src/empty.py"), "".into());
+        let ctx = make_ctx(files, Language::Python);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn multiple_findings_different_lines() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/bad.py"),
+            "eval(x)\nexec(y)\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn c_system_with_argv_is_critical() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/main.c"),
+            "int main(int argc, char *argv[]) {\n    system(argv[1]);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::C);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+    }
+
+    #[tokio::test]
+    async fn ruby_html_safe_with_user_params() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("app/helpers/tag_helper.rb"),
+            "def render_tag(params)\n  params[:html].html_safe\nend\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Ruby);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    #[tokio::test]
+    async fn js_child_process_exec_critical() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/exec.js"),
+            "const cp = require('child_process');\nfunction run(req) {\n    cp.child_process.exec(req.body.cmd);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::JavaScript);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+    }
+
+    #[tokio::test]
+    async fn detector_name_is_correct() {
+        assert_eq!(SecurityPatternDetector.name(), "security-pattern");
+    }
+
+    #[test]
+    fn downgrade_low_stays_low() {
+        assert_eq!(downgrade(Severity::Low), Severity::Low);
+    }
+
+    #[test]
+    fn downgrade_info_stays_info() {
+        assert_eq!(downgrade(Severity::Info), Severity::Info);
+    }
+
+    #[test]
+    fn adjust_severity_no_indicators_defined() {
+        // Empty indicators = always dangerous, stays at base
+        let sev = adjust_severity(Severity::Critical, false, false, false);
+        assert_eq!(sev, Severity::Critical);
+    }
+
+    #[test]
+    fn adjust_severity_indicators_defined_but_absent() {
+        // Indicators defined but no match → downgrade
+        let sev = adjust_severity(Severity::Critical, false, false, true);
+        assert_eq!(sev, Severity::High);
+    }
+
+    #[test]
+    fn adjust_severity_user_input_and_sanitization() {
+        // Both present → base stays, then downgrade for sanitization
+        let sev = adjust_severity(Severity::Critical, true, true, true);
+        assert_eq!(sev, Severity::High);
+    }
 }

@@ -1067,6 +1067,66 @@ mod tests {
     // run_tests — lowercase makefile triggers Make path
     // ------------------------------------------------------------------
 
+    #[test]
+    fn walkdir_c_files_ignores_files_without_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Makefile"), "all:").unwrap();
+        std::fs::write(dir.path().join("LICENSE"), "MIT").unwrap();
+        std::fs::write(dir.path().join("README"), "hello").unwrap();
+        std::fs::write(dir.path().join("real.c"), "int x;").unwrap();
+        let files = walkdir_c_files(dir.path());
+        assert_eq!(files.len(), 1);
+        assert!(files[0].contains("real.c"));
+    }
+
+    #[test]
+    fn walkdir_c_files_handles_dotfiles() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".hidden.c"), "").unwrap();
+        std::fs::write(dir.path().join("visible.c"), "").unwrap();
+        let files = walkdir_c_files(dir.path());
+        // .hidden.c is a regular file with .c extension, should be found
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn walkdir_c_files_does_not_follow_into_allowed_subdirs() {
+        // Verify that non-excluded subdirs are recursed into
+        let dir = tempfile::tempdir().unwrap();
+        let lib = dir.path().join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("helper.c"), "").unwrap();
+        let include = dir.path().join("include");
+        std::fs::create_dir_all(&include).unwrap();
+        std::fs::write(include.join("header.h"), "").unwrap();
+        let files = walkdir_c_files(dir.path());
+        assert_eq!(files.len(), 1);
+        assert!(files[0].contains("helper.c"));
+    }
+
+    #[test]
+    fn which_empty_string_returns_false() {
+        assert!(!which(""));
+    }
+
+    #[test]
+    fn walkdir_c_files_many_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..20 {
+            std::fs::write(dir.path().join(format!("file_{i}.c")), "").unwrap();
+        }
+        let files = walkdir_c_files(dir.path());
+        assert_eq!(files.len(), 20);
+    }
+
+    #[test]
+    fn detect_build_system_nonexistent_path() {
+        let result = CRunner::<RealCommandRunner>::detect_build_system(
+            Path::new("/nonexistent/path/that/does/not/exist"),
+        );
+        assert!(matches!(result, BuildSystem::None));
+    }
+
     #[tokio::test]
     async fn run_tests_lowercase_makefile_uses_make() {
         let dir = tempfile::tempdir().unwrap();

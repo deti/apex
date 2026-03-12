@@ -328,6 +328,294 @@ mod tests {
     }
 
     #[test]
+    fn run_all_strategies_java_skips_fuzz_and_concolic() {
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        // Leave branch uncovered — should still skip fuzz+concolic for Java
+        let target = Target {
+            root: PathBuf::from("/tmp"),
+            language: Language::Java,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![b.clone()],
+            executed_branch_ids: vec![],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(run_all_strategies(
+            oracle.clone(),
+            &instrumented,
+            0.9,
+            100,
+            10,
+            None,
+            vec!["dummy".into()],
+            &cfg,
+        ));
+        assert!(result.is_ok());
+        // Coverage should remain 0% since fuzz was skipped
+        assert_eq!(oracle.coverage_percent(), 0.0);
+    }
+
+    #[test]
+    fn run_all_strategies_wasm_skips_fuzz_and_concolic() {
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+        let target = Target {
+            root: PathBuf::from("/tmp"),
+            language: Language::Wasm,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![],
+            executed_branch_ids: vec![],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(run_all_strategies(
+            oracle,
+            &instrumented,
+            0.0,
+            0,
+            0,
+            None,
+            vec!["dummy".into()],
+            &cfg,
+        ));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn run_all_strategies_ruby_skips_fuzz_and_concolic() {
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+        let target = Target {
+            root: PathBuf::from("/tmp"),
+            language: Language::Ruby,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![],
+            executed_branch_ids: vec![],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(run_all_strategies(
+            oracle,
+            &instrumented,
+            0.0,
+            0,
+            0,
+            None,
+            vec!["dummy".into()],
+            &cfg,
+        ));
+        assert!(result.is_ok());
+    }
+
+    /// When all branches are already covered, run_fuzz_strategy should exit
+    /// immediately without iterating.
+    #[test]
+    fn run_fuzz_strategy_all_covered_exits_immediately() {
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        oracle.mark_covered(&b, SeedId::new());
+
+        let target = Target {
+            root: PathBuf::from("/tmp"),
+            language: Language::C,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![b.clone()],
+            executed_branch_ids: vec![b],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(run_fuzz_strategy(
+            oracle.clone(),
+            &instrumented,
+            0.0, // coverage_target = 0 means any coverage is enough
+            1000,
+            vec!["/nonexistent/binary".into()],
+            &cfg,
+        ));
+        assert!(result.is_ok());
+        // Should be 100% since the only branch was pre-covered
+        assert_eq!(oracle.coverage_percent(), 100.0);
+    }
+
+    /// When oracle has no branches at all, run_fuzz_strategy should exit
+    /// immediately (uncovered_branches is empty).
+    #[test]
+    fn run_fuzz_strategy_empty_oracle_exits_immediately() {
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+
+        let target = Target {
+            root: PathBuf::from("/tmp"),
+            language: Language::C,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![],
+            executed_branch_ids: vec![],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(run_fuzz_strategy(
+            oracle,
+            &instrumented,
+            0.0,
+            1000,
+            vec!["/nonexistent/binary".into()],
+            &cfg,
+        ));
+        assert!(result.is_ok());
+    }
+
+    /// run_fuzz_strategy with zero max_iters should not loop at all.
+    #[test]
+    fn run_fuzz_strategy_zero_iters() {
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+
+        let target = Target {
+            root: PathBuf::from("/tmp"),
+            language: Language::C,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![b.clone()],
+            executed_branch_ids: vec![],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(run_fuzz_strategy(
+            oracle.clone(),
+            &instrumented,
+            0.9,
+            0, // zero iterations
+            vec!["/nonexistent/binary".into()],
+            &cfg,
+        ));
+        assert!(result.is_ok());
+        // Branch should remain uncovered since we never ran
+        assert_eq!(oracle.coverage_percent(), 0.0);
+    }
+
+    /// run_all_strategies with Python + empty oracle skips concolic
+    /// because uncovered_branches is empty.
+    #[test]
+    fn run_all_strategies_python_empty_oracle_skips_concolic() {
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+        let target = Target {
+            root: PathBuf::from("/tmp"),
+            language: Language::Python,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![],
+            executed_branch_ids: vec![],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(run_all_strategies(
+            oracle,
+            &instrumented,
+            0.9,
+            0,
+            0,
+            None,
+            vec!["dummy".into()],
+            &cfg,
+        ));
+        assert!(result.is_ok());
+    }
+
+    /// run_all_strategies with C + zero fuzz_iters completes without error.
+    #[test]
+    fn run_all_strategies_c_zero_fuzz_iters() {
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+
+        let target = Target {
+            root: PathBuf::from("/tmp"),
+            language: Language::C,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![b.clone()],
+            executed_branch_ids: vec![],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(run_all_strategies(
+            oracle.clone(),
+            &instrumented,
+            0.9,
+            0, // zero fuzz iterations
+            0,
+            None,
+            vec!["/nonexistent/binary".into()],
+            &cfg,
+        ));
+        assert!(result.is_ok());
+        // Branch stays uncovered
+        assert_eq!(oracle.coverage_percent(), 0.0);
+    }
+
+    #[test]
     fn run_all_strategies_python_skips_concolic_when_target_reached() {
         let cfg = ApexConfig::default();
         let oracle = Arc::new(CoverageOracle::new());

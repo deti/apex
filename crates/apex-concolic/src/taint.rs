@@ -133,6 +133,120 @@ mod tests {
     }
 
     #[test]
+    fn multiple_params_tainted() {
+        let tainted = propagate_taint(
+            &["x".into(), "y".into()],
+            &[("z".into(), vec!["x".into(), "y".into()])],
+        );
+        assert!(tainted.contains("x"));
+        assert!(tainted.contains("y"));
+        assert!(tainted.contains("z"));
+    }
+
+    #[test]
+    fn diamond_dependency_taint() {
+        // x -> a, x -> b, a + b -> c
+        let tainted = propagate_taint(
+            &["x".into()],
+            &[
+                ("a".into(), vec!["x".into()]),
+                ("b".into(), vec!["x".into()]),
+                ("c".into(), vec!["a".into(), "b".into()]),
+            ],
+        );
+        assert!(tainted.contains("a"));
+        assert!(tainted.contains("b"));
+        assert!(tainted.contains("c"));
+    }
+
+    #[test]
+    fn propagate_no_params() {
+        let tainted = propagate_taint(&[], &[("y".into(), vec!["x".into()])]);
+        assert!(tainted.is_empty());
+    }
+
+    #[test]
+    fn propagate_no_assignments() {
+        let tainted = propagate_taint(&["x".into(), "y".into()], &[]);
+        assert_eq!(tainted.len(), 2);
+        assert!(tainted.contains("x"));
+        assert!(tainted.contains("y"));
+    }
+
+    #[test]
+    fn assignment_rhs_has_no_tainted_deps() {
+        // a = f(CONST1, CONST2) - no tainted vars in rhs
+        let tainted = propagate_taint(
+            &["x".into()],
+            &[("a".into(), vec!["CONST1".into(), "CONST2".into()])],
+        );
+        assert!(tainted.contains("x"));
+        assert!(!tainted.contains("a"));
+    }
+
+    #[test]
+    fn reverse_order_assignments_still_propagate() {
+        // Assignments in reverse dependency order - needs multiple fixpoint passes
+        let tainted = propagate_taint(
+            &["x".into()],
+            &[
+                ("c".into(), vec!["b".into()]),  // b not yet tainted
+                ("b".into(), vec!["a".into()]),   // a not yet tainted
+                ("a".into(), vec!["x".into()]),   // x is tainted
+            ],
+        );
+        assert!(tainted.contains("a"));
+        assert!(tainted.contains("b"));
+        assert!(tainted.contains("c"));
+    }
+
+    #[test]
+    fn filter_multiple_tainted_vars_in_condition() {
+        let tainted: HashSet<String> = ["x".into(), "y".into()].into();
+        let branches = vec![(
+            BranchId::new(1, 10, 0, 0),
+            "x + y > 5".into(),
+            vec!["x".into(), "y".into(), "CONST".into()],
+        )];
+        let filtered = filter_tainted_branches(&branches, &tainted);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].tainted_vars.len(), 2);
+        assert!(filtered[0].tainted_vars.contains(&"x".to_string()));
+        assert!(filtered[0].tainted_vars.contains(&"y".to_string()));
+    }
+
+    #[test]
+    fn filter_all_branches_tainted() {
+        let tainted: HashSet<String> = ["x".into()].into();
+        let branches = vec![
+            (BranchId::new(1, 10, 0, 0), "x > 0".into(), vec!["x".into()]),
+            (BranchId::new(1, 20, 0, 0), "x < 5".into(), vec!["x".into()]),
+        ];
+        let filtered = filter_tainted_branches(&branches, &tainted);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn tainted_branch_fields() {
+        let tb = TaintedBranch {
+            branch_id: BranchId::new(1, 42, 3, 1),
+            tainted_vars: vec!["a".into(), "b".into()],
+            condition: "a > b".into(),
+        };
+        assert_eq!(tb.branch_id.line, 42);
+        assert_eq!(tb.tainted_vars.len(), 2);
+        assert_eq!(tb.condition, "a > b");
+
+        // Test Debug derive
+        let debug_str = format!("{:?}", tb);
+        assert!(debug_str.contains("TaintedBranch"));
+
+        // Test Clone derive
+        let cloned = tb.clone();
+        assert_eq!(cloned.condition, tb.condition);
+    }
+
+    #[test]
     fn mixed_taint_in_condition() {
         let tainted: HashSet<String> = ["x".into()].into();
         let branches = vec![(

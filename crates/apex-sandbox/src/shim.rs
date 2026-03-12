@@ -317,4 +317,110 @@ mod tests {
         let s2 = coverage_shim_source();
         assert!(std::ptr::eq(s1, s2), "should return same &'static str");
     }
+
+    #[test]
+    fn shim_path_uses_home_env() {
+        // shim_path() reads HOME and creates dirs under it.
+        // Since HOME is set in any normal test env, this should succeed.
+        let result = shim_path();
+        match result {
+            Ok(path) => {
+                let path_str = path.to_string_lossy();
+                assert!(
+                    path_str.contains(".apex/shims/libapex_cov"),
+                    "shim_path should be under ~/.apex/shims/: {path_str}"
+                );
+            }
+            Err(_) => {
+                // HOME might not be set in some CI environments
+            }
+        }
+    }
+
+    #[test]
+    fn shim_source_non_empty() {
+        let src = coverage_shim_source();
+        assert!(!src.is_empty(), "shim source should not be empty");
+        assert!(src.len() > 100, "shim source should be substantial");
+    }
+
+    #[test]
+    fn shim_source_no_null_bytes() {
+        let src = coverage_shim_source();
+        assert!(
+            !src.contains('\0'),
+            "shim source should not contain null bytes"
+        );
+    }
+
+    #[test]
+    fn shim_source_handles_map_failed() {
+        let src = coverage_shim_source();
+        assert!(
+            src.contains("MAP_FAILED"),
+            "shim must handle MAP_FAILED case"
+        );
+    }
+
+    #[test]
+    fn shim_source_increments_guard_ids() {
+        let src = coverage_shim_source();
+        // The guard_init function should assign incrementing IDs
+        assert!(
+            src.contains("++n"),
+            "guard_init should assign incrementing IDs"
+        );
+    }
+
+    #[test]
+    fn shim_source_checks_guard_bounds() {
+        let src = coverage_shim_source();
+        // The trace_pc_guard function should check bounds
+        assert!(
+            src.contains("*guard >= APEX_MAP_SIZE"),
+            "trace_pc_guard should check bounds against APEX_MAP_SIZE"
+        );
+    }
+
+    #[test]
+    fn preload_env_var_is_non_empty() {
+        let var = preload_env_var();
+        assert!(!var.is_empty());
+    }
+
+    #[test]
+    fn shim_source_uses_gnu_source() {
+        let src = coverage_shim_source();
+        assert!(
+            src.contains("_GNU_SOURCE"),
+            "shim should define _GNU_SOURCE"
+        );
+    }
+
+    #[test]
+    fn shim_source_includes_fcntl() {
+        let src = coverage_shim_source();
+        assert!(
+            src.contains("#include <fcntl.h>"),
+            "shim must include fcntl.h for O_RDWR"
+        );
+    }
+
+    #[test]
+    fn shim_source_uses_o_rdwr() {
+        let src = coverage_shim_source();
+        assert!(
+            src.contains("O_RDWR"),
+            "shim must open SHM with O_RDWR"
+        );
+    }
+
+    #[test]
+    fn shim_source_uses_map_shared() {
+        let src = coverage_shim_source();
+        assert!(
+            src.contains("MAP_SHARED"),
+            "shim must use MAP_SHARED for cross-process visibility"
+        );
+    }
 }

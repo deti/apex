@@ -173,6 +173,41 @@ After each round, print:
 | `No such file: apex_target` | Fuzz strategy needs a compiled binary target, not a Cargo workspace |
 | `solver timeout` | Driller hit a complex constraint — increase timeout or skip to fuzz |
 
+## Post-Run Intelligence
+
+After coverage improvement rounds complete, suggest intelligence analysis:
+
+```bash
+# Build per-test branch index (unlocks all intelligence commands)
+cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+  index --target <TARGET> --lang <LANG> --parallel 4
+
+# Deploy readiness check
+cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+  deploy-score --target <TARGET>
+
+# Find minimal test set
+cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+  test-optimize --target <TARGET>
+```
+
+Available intelligence commands (all require `apex index` first):
+- `test-optimize` — minimal covering test set
+- `test-prioritize` — order tests by changed-file relevance
+- `flaky-detect` — find nondeterministic tests
+- `dead-code` — never-executed branches
+- `lint` — runtime-prioritized findings
+- `complexity` — exercised vs static complexity
+- `diff` — behavioral diff vs base branch
+- `regression-check` — CI gate for behavioral changes
+- `risk` — change risk assessment
+- `hotpaths` — execution frequency ranking
+- `contracts` — invariant discovery
+- `deploy-score` — deployment confidence (0-100)
+- `docs` — behavioral documentation
+- `attack-surface` — entry-point reachability
+- `verify-boundaries` — auth gate verification
+
 ## Output Interpretation
 
 After a run, interpret results:

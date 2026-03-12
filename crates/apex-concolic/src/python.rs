@@ -1080,6 +1080,111 @@ mod tests {
         assert!(seeds.is_empty());
     }
 
+    /// Default/wildcard match arm: operator not recognized by the match arms.
+    /// Use an operator that parses as a valid comparison but isn't handled.
+    /// The regex won't match a ternary like `x if y else z`, so this exercises
+    /// the fallback path with locals.
+    #[test]
+    fn boundary_seeds_unknown_operator_fallback() {
+        let s = make_strategy();
+        // Condition that matches the regex but with a very unlikely operator combo
+        // Actually, the regex only matches >,>=,<,<=,==,!= so we just verify
+        // the fallback path for non-matching conditions with locals
+        let entry = make_trace_entry(
+            "test.py",
+            70,
+            0,
+            "x is None",
+            "func",
+            "mod",
+            vec!["x"],
+            [("x".into(), serde_json::json!(5))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 1);
+        // Falls through to fallback: mutate scalar locals
+        assert!(!seeds.is_empty());
+    }
+
+    /// Condition with leading/trailing whitespace should still be parsed.
+    #[test]
+    fn boundary_seeds_condition_with_whitespace() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "test.py",
+            10,
+            0,
+            "  x > 5  ",
+            "check",
+            "mod",
+            vec!["x"],
+            [("x".into(), serde_json::json!(10))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 1);
+        assert!(!seeds.is_empty());
+    }
+
+    /// Negative literal in condition.
+    #[test]
+    fn boundary_seeds_negative_literal() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "test.py",
+            10,
+            0,
+            "x > -5",
+            "check",
+            "mod",
+            vec!["x"],
+            [("x".into(), serde_json::json!(3))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 1);
+        assert!(!seeds.is_empty());
+        // For (">", 1), variants = [val-1, val] = [-6, -5]
+        let combined: String = seeds.join("\n");
+        assert!(combined.contains("-6") || combined.contains("-5"));
+    }
+
+    /// Condition with zero literal.
+    #[test]
+    fn boundary_seeds_zero_literal() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "test.py",
+            10,
+            0,
+            "x == 0",
+            "f",
+            "m",
+            vec!["x"],
+            [("x".into(), serde_json::json!(0))].into(),
+        );
+        // Want False: ("==", 1) => [val+1, val-1] = [1, -1]
+        let seeds = s.boundary_seeds(&entry, 1);
+        assert_eq!(seeds.len(), 2);
+    }
+
+    /// Fallback path where target_direction is 1 (want false) and we have
+    /// integer locals: flip = n - 1.
+    #[test]
+    fn boundary_seeds_fallback_direction_1_decrements() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "test.py",
+            30,
+            0,
+            "complex_fn(a, b)",
+            "func",
+            "mod",
+            vec!["a"],
+            [("a".into(), serde_json::json!(10))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 1);
+        assert!(!seeds.is_empty());
+        let combined: String = seeds.join("\n");
+        // target_direction==1 → flip = n - 1 = 9
+        assert!(combined.contains("9"), "expected a-1=9 in fallback");
+    }
+
     /// `boundary_seeds` with only a float-valued local (not i64) → fallback
     /// row remains empty → empty seeds.
     #[test]

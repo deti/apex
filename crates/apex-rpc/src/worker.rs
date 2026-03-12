@@ -523,6 +523,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pull_once_partial_skip() {
+        let Some((mut worker, service, oracle)) = setup_worker().await else {
+            return;
+        };
+
+        service
+            .enqueue_seeds(vec![
+                InputSeed {
+                    id: "s1".into(),
+                    data: vec![1],
+                    origin: "fuzzer".into(),
+                },
+                InputSeed {
+                    id: "s2".into(),
+                    data: vec![2],
+                    origin: "fuzzer".into(),
+                },
+                InputSeed {
+                    id: "s3".into(),
+                    data: vec![3],
+                    origin: "fuzzer".into(),
+                },
+            ])
+            .await;
+
+        // Only process seeds with even data, skip odd
+        let (count, pct) = worker
+            .pull_once(10, |seed| {
+                if seed.data[0] % 2 == 0 {
+                    Some(make_result(&seed.id, vec![make_branch(seed.data[0] as u32)]))
+                } else {
+                    None
+                }
+            })
+            .await
+            .unwrap();
+
+        // Only seed s2 (data=2) should be processed, covering branch line=2
+        assert_eq!(count, 1);
+        assert!((pct - 25.0).abs() < 0.01);
+        assert_eq!(oracle.covered_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_pull_once_with_max_seeds_limit() {
+        let Some((mut worker, service, oracle)) = setup_worker().await else {
+            return;
+        };
+
+        service
+            .enqueue_seeds(vec![
+                InputSeed {
+                    id: "s1".into(),
+                    data: vec![1],
+                    origin: "fuzzer".into(),
+                },
+                InputSeed {
+                    id: "s2".into(),
+                    data: vec![2],
+                    origin: "fuzzer".into(),
+                },
+                InputSeed {
+                    id: "s3".into(),
+                    data: vec![3],
+                    origin: "fuzzer".into(),
+                },
+            ])
+            .await;
+
+        // Request max_seeds=2, so only 2 should be processed
+        let (count, _pct) = worker
+            .pull_once(2, |seed| {
+                Some(make_result(&seed.id, vec![make_branch(seed.data[0] as u32)]))
+            })
+            .await
+            .unwrap();
+
+        // Only 2 seeds fetched, covering branches at lines 1 and 2
+        assert_eq!(count, 2);
+        assert_eq!(oracle.covered_count(), 2);
+
+        // The third seed (s3) should still be in the queue
+        let remaining = worker.get_seeds(10).await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, "s3");
+    }
+
+    #[tokio::test]
+    async fn test_submit_results_empty_vec() {
+        let Some((mut worker, _service, oracle)) = setup_worker().await else {
+            return;
+        };
+
+        let (count, pct) = worker.submit_results(vec![]).await.unwrap();
+        assert_eq!(count, 0);
+        assert!((pct - 0.0).abs() < 0.01);
+        assert_eq!(oracle.covered_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_submit_results_duplicate_branches() {
+        let Some((mut worker, _service, oracle)) = setup_worker().await else {
+            return;
+        };
+
+        // Submit same branch twice in one batch
+        let results = vec![
+            make_result("s1", vec![make_branch(1)]),
+            make_result("s2", vec![make_branch(1)]),
+        ];
+        let (new_count, pct) = worker.submit_results(results).await.unwrap();
+
+        // Only 1 new branch (second is a duplicate)
+        assert_eq!(new_count, 1);
+        assert!((pct - 25.0).abs() < 0.01);
+        assert_eq!(oracle.covered_count(), 1);
+    }
+
+    #[tokio::test]
     async fn test_register_rejected_returns_permission_denied() {
         let Some(mut worker) = setup_rejecting_worker().await else {
             return;
