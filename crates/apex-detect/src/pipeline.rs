@@ -36,6 +36,12 @@ impl DetectorPipeline {
         if cfg.enabled.contains(&"static".to_string()) {
             detectors.push(Box::new(StaticAnalysisDetector::new(&cfg.static_analysis)));
         }
+        if cfg.enabled.contains(&"security".to_string()) {
+            detectors.push(Box::new(SecurityPatternDetector));
+        }
+        if cfg.enabled.contains(&"secrets".to_string()) {
+            detectors.push(Box::new(HardcodedSecretDetector));
+        }
 
         Self { detectors }
     }
@@ -295,7 +301,7 @@ mod tests {
     fn from_config_enables_all_by_default() {
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
-        assert_eq!(pipeline.detectors.len(), 4);
+        assert_eq!(pipeline.detectors.len(), 6);
     }
 
     #[test]

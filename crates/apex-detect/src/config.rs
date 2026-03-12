@@ -6,6 +6,8 @@ fn default_enabled() -> Vec<String> {
         "deps".into(),
         "panic".into(),
         "static".into(),
+        "security".into(),
+        "secrets".into(),
     ]
 }
 
@@ -124,6 +126,8 @@ mod tests {
         assert!(cfg.enabled.contains(&"deps".to_string()));
         assert!(cfg.enabled.contains(&"unsafe".to_string()));
         assert!(cfg.enabled.contains(&"static".to_string()));
+        assert!(cfg.enabled.contains(&"security".to_string()));
+        assert!(cfg.enabled.contains(&"secrets".to_string()));
     }
 
     #[test]
@@ -160,7 +164,7 @@ clippy_extra_args = ["-W", "clippy::pedantic"]
     #[test]
     fn empty_toml_gives_defaults() {
         let cfg: DetectConfig = toml::from_str("").unwrap();
-        assert_eq!(cfg.enabled.len(), 4);
+        assert_eq!(cfg.enabled.len(), 6);
         assert_eq!(cfg.severity_threshold, "low");
     }
 }
