@@ -3,27 +3,105 @@
 [![CI](https://github.com/allexdav2/apex/actions/workflows/ci.yml/badge.svg)](https://github.com/allexdav2/apex/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-APEX drives any repository toward 100% branch coverage by combining
-instrumentation, fuzzing, concolic execution, symbolic solving, and
-AI-guided test synthesis into a single autonomous pipeline.
+APEX is a **Claude Code-first** coverage exploration system. It drives any
+repository toward 100% branch coverage by combining instrumentation, fuzzing,
+concolic execution, symbolic solving, and AI-guided test synthesis — all
+orchestrated through Claude Code agents and slash commands.
 
-## Features
+While APEX includes a standalone CLI, the primary interface is Claude Code.
+The agents analyze your codebase, identify coverage gaps, write tests,
+select strategies, and iterate autonomously inside your editor.
 
-- **Multi-language support** — Python, JavaScript, Java, Rust, C, WebAssembly
-- **Coverage-guided fuzzing** — MOpt-mutator scheduling with corpus management
-- **Concolic execution** — concrete + symbolic hybrid exploration
-- **Symbolic constraint solving** — SMT-LIB2 solver with optional Z3 backend
-- **AI agent orchestration** — LLM-driven test generation and refinement
-- **Bug detection** — panic pattern analysis, security auditing
-- **CI integration** — `apex ratchet` fails builds when coverage drops
-- **Sandboxed execution** — process isolation, shared-memory bitmaps, optional Firecracker microVMs
+## Using APEX with Claude Code
 
-## Quick Start
+### Install
+
+Clone the repo and install the agents into your project:
 
 ```bash
-# Build
+git clone https://github.com/allexdav2/apex.git
+cd apex
 cargo build --release
 
+# Install agents and commands into your project's .claude/ directory
+./agents/install.sh
+```
+
+### Prerequisites
+
+```bash
+cargo install cargo-llvm-cov
+
+# On macOS with Homebrew LLVM:
+export LLVM_COV=/opt/homebrew/opt/llvm/bin/llvm-cov
+export LLVM_PROFDATA=/opt/homebrew/opt/llvm/bin/llvm-profdata
+```
+
+### Slash Commands
+
+Run these directly in Claude Code:
+
+| Command | What it does |
+|---------|-------------|
+| `/apex-run` | Full autonomous coverage loop — measures gaps, writes tests, selects strategies, re-measures |
+| `/apex-run /path/to/project python 5 0.95` | Run against a specific project with language, rounds, and target |
+| `/apex-status` | Show coverage table for the workspace |
+| `/apex-status apex-fuzz` | Coverage for a specific crate |
+| `/apex-gaps` | List the top uncovered regions with explanations and suggested tests |
+| `/apex-gaps apex-coverage` | Gaps in a specific crate |
+| `/apex-generate apex-fuzz` | Generate tests targeting uncovered branches in a crate |
+| `/apex-ci 0.8` | CI coverage gate — fails if below threshold |
+
+### Agents (auto-invoked)
+
+These agents are triggered automatically by Claude Code when your message matches:
+
+| Agent | Trigger examples |
+|-------|-----------------|
+| **apex-coverage-analyst** | "what's our coverage?", "which parts are uncovered?" |
+| **apex-test-writer** | "write tests for X", "improve coverage in Y" |
+| **apex-runner** | "run apex against Z", "run apex on itself" |
+
+### Typical Workflow
+
+```
+You:    /apex-run
+APEX:   Round 1/5 — Coverage: 62% → 71% (+9%)
+        ████████████████████████████████░░░░░░░░░░░░ 71%
+        +142 branches covered | 203 remaining | 8 tests written
+
+        Round 2/5 — Coverage: 71% → 78% (+7%)
+        ...
+
+You:    /apex-gaps apex-fuzz
+APEX:   15 uncovered regions in apex-fuzz:
+        1. mutators.rs:45-52 — havoc mutation with empty input
+           → Test: feed empty Vec<u8> to HavocMutator::mutate()
+        ...
+        Writing 8 tests could bring coverage from 78% to ~85%
+
+You:    /apex-generate apex-fuzz
+APEX:   Generated 8 tests in crates/apex-fuzz/src/mutators.rs
+        cargo test -p apex-fuzz: 8 passed
+        Coverage: 78% → 84%
+```
+
+### Strategy Selection
+
+The `/apex-run` agent loop automatically selects the best strategy per gap:
+
+| Target | Primary strategy | Fallback |
+|--------|-----------------|----------|
+| Rust workspace | Source-level tests | fuzz (if binary harness exists) |
+| Python project | Source-level tests | concolic (for constraint paths) |
+| C/Rust binary | fuzz | driller (when fuzz stalls) |
+| JavaScript | Source-level tests | — |
+
+## Standalone CLI
+
+APEX also works as a standalone CLI without Claude Code:
+
+```bash
 # Run against a Python project
 apex run --target ./my-project --lang python
 
@@ -37,9 +115,20 @@ apex doctor
 apex audit --target ./my-project --lang python
 ```
 
+## Features
+
+- **Multi-language** — Python, JavaScript, Java, Rust, C, WebAssembly
+- **Coverage-guided fuzzing** — MOpt-mutator scheduling with corpus management
+- **Concolic execution** — concrete + symbolic hybrid exploration
+- **Symbolic constraint solving** — SMT-LIB2 solver with optional Z3 backend
+- **AI agent orchestration** — LLM-driven test generation and refinement
+- **Bug detection** — panic pattern analysis, security auditing
+- **CI integration** — `apex ratchet` fails builds when coverage drops
+- **Sandboxed execution** — process isolation, shared-memory bitmaps, optional Firecracker microVMs
+
 ## Architecture
 
-APEX is organized as a Rust workspace with 14 crates:
+APEX is a Rust workspace with 14 crates:
 
 | Crate | Description |
 |-------|-------------|
