@@ -1,3 +1,4 @@
+use apex_core::command::CommandSpec;
 use apex_core::error::{ApexError, Result};
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -20,14 +21,13 @@ impl Detector for UnsafeReachabilityDetector {
     }
 
     async fn analyze(&self, ctx: &AnalysisContext) -> Result<Vec<Finding>> {
-        let output = tokio::process::Command::new("cargo")
-            .args(["geiger", "--output-format", "json", "--all-features"])
-            .current_dir(&ctx.target_root)
-            .output()
-            .await
+        let spec = CommandSpec::new("cargo", &ctx.target_root)
+            .args(["geiger", "--output-format", "json", "--all-features"]);
+
+        let output = ctx.runner.run_command(&spec).await
             .map_err(|e| ApexError::Detect(format!("cargo-geiger: {e}")))?;
 
-        if !output.status.success() {
+        if output.exit_code != 0 {
             let stderr = String::from_utf8_lossy(&output.stderr);
             if stderr.contains("no such command") || stderr.contains("not found") {
                 tracing::info!("cargo-geiger not installed, skipping unsafe analysis");
@@ -96,7 +96,65 @@ pub fn parse_geiger_output(json_str: &str, target_pkg: &str) -> Result<Vec<Findi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DetectConfig;
+    use crate::context::AnalysisContext;
     use crate::finding::FindingCategory;
+    use apex_core::command::CommandOutput;
+    use apex_core::fixture_runner::FixtureRunner;
+    use apex_coverage::CoverageOracle;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn make_ctx_with_runner(runner: FixtureRunner) -> AnalysisContext {
+        AnalysisContext {
+            target_root: PathBuf::from("/tmp/test"),
+            language: apex_core::types::Language::Rust,
+            oracle: Arc::new(CoverageOracle::new()),
+            file_paths: HashMap::new(),
+            known_bugs: vec![],
+            source_cache: HashMap::new(),
+            fuzz_corpus: None,
+            config: DetectConfig::default(),
+            runner: Arc::new(runner),
+        }
+    }
+
+    #[tokio::test]
+    async fn analyze_with_geiger_output() {
+        let geiger_json = r#"{
+            "packages": [{
+                "package": {"name": "test", "version": "0.1.0"},
+                "unsafety": {
+                    "used": {"functions": {"unsafe_": 2}, "exprs": {"unsafe_": 1}},
+                    "unused": {"functions": {"unsafe_": 0}, "exprs": {"unsafe_": 0}}
+                }
+            }]
+        }"#;
+        let runner = FixtureRunner::new()
+            .on("cargo", CommandOutput::success(geiger_json.as_bytes().to_vec()));
+        let ctx = make_ctx_with_runner(runner);
+        let findings = UnsafeReachabilityDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].title.contains("unsafe"));
+    }
+
+    #[tokio::test]
+    async fn analyze_geiger_not_installed() {
+        let runner = FixtureRunner::new()
+            .on("cargo", CommandOutput::failure(101, b"error: no such command: `geiger`".to_vec()));
+        let ctx = make_ctx_with_runner(runner);
+        let findings = UnsafeReachabilityDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn analyze_geiger_fails_with_other_error() {
+        let runner = FixtureRunner::new()
+            .on("cargo", CommandOutput::failure(1, b"some other error".to_vec()));
+        let ctx = make_ctx_with_runner(runner);
+        let result = UnsafeReachabilityDetector.analyze(&ctx).await;
+        assert!(result.is_err());
+    }
 
     #[test]
     fn parse_geiger_json_with_unsafe() {

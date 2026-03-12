@@ -3,6 +3,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use apex_core::command::CommandRunner;
 use apex_core::types::{BugReport, Language};
 use apex_coverage::CoverageOracle;
 
@@ -18,6 +19,7 @@ pub struct AnalysisContext {
     pub source_cache: HashMap<PathBuf, String>,
     pub fuzz_corpus: Option<PathBuf>,
     pub config: DetectConfig,
+    pub runner: Arc<dyn CommandRunner>,
 }
 
 impl fmt::Debug for AnalysisContext {
@@ -28,6 +30,7 @@ impl fmt::Debug for AnalysisContext {
             .field("file_paths", &self.file_paths.len())
             .field("source_cache", &self.source_cache.len())
             .field("fuzz_corpus", &self.fuzz_corpus)
+            .field("runner", &"<CommandRunner>")
             .finish()
     }
 }
@@ -51,11 +54,13 @@ mod tests {
             },
             fuzz_corpus: Some(PathBuf::from("/corpus")),
             config: DetectConfig::default(),
+            runner: Arc::new(apex_core::command::RealCommandRunner),
         };
         let dbg = format!("{:?}", ctx);
         assert!(dbg.contains("AnalysisContext"));
         assert!(dbg.contains("/tmp/test"));
         assert!(dbg.contains("Python"));
+        assert!(dbg.contains("CommandRunner"));
         // source_cache shows count, not full contents
         assert!(dbg.contains("1"));
         assert!(dbg.contains("/corpus"));
@@ -72,6 +77,7 @@ mod tests {
             source_cache: HashMap::new(),
             fuzz_corpus: None,
             config: DetectConfig::default(),
+            runner: Arc::new(apex_core::command::RealCommandRunner),
         };
         let dbg = format!("{:?}", ctx);
         assert!(dbg.contains("None"));

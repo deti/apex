@@ -1,3 +1,4 @@
+use apex_core::command::CommandSpec;
 use apex_core::error::{ApexError, Result};
 use async_trait::async_trait;
 use std::collections::hash_map::DefaultHasher;
@@ -30,11 +31,10 @@ impl Detector for DependencyAuditDetector {
     }
 
     async fn analyze(&self, ctx: &AnalysisContext) -> Result<Vec<Finding>> {
-        let output = tokio::process::Command::new("cargo")
-            .args(["audit", "--json"])
-            .current_dir(&ctx.target_root)
-            .output()
-            .await
+        let spec = CommandSpec::new("cargo", &ctx.target_root)
+            .args(["audit", "--json"]);
+
+        let output = ctx.runner.run_command(&spec).await
             .map_err(|e| ApexError::Detect(format!("cargo-audit: {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -153,7 +153,62 @@ pub fn parse_cargo_audit_output(raw: &str) -> Result<Vec<Finding>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DetectConfig;
+    use crate::context::AnalysisContext;
     use crate::finding::FindingCategory;
+    use apex_core::command::CommandOutput;
+    use apex_core::fixture_runner::FixtureRunner;
+    use apex_coverage::CoverageOracle;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn make_ctx_with_runner(runner: FixtureRunner) -> AnalysisContext {
+        AnalysisContext {
+            target_root: PathBuf::from("/tmp/test"),
+            language: apex_core::types::Language::Rust,
+            oracle: Arc::new(CoverageOracle::new()),
+            file_paths: HashMap::new(),
+            known_bugs: vec![],
+            source_cache: HashMap::new(),
+            fuzz_corpus: None,
+            config: DetectConfig::default(),
+            runner: Arc::new(runner),
+        }
+    }
+
+    #[tokio::test]
+    async fn analyze_with_vulns() {
+        let audit_json = r#"{
+            "vulnerabilities": {
+                "found": 1,
+                "list": [{
+                    "advisory": {
+                        "id": "RUSTSEC-2023-0044",
+                        "title": "openssl: X.509 bypass",
+                        "severity": "high"
+                    },
+                    "package": {"name": "openssl", "version": "0.10.38"},
+                    "versions": {"patched": [">=0.10.55"]}
+                }]
+            }
+        }"#;
+        let runner = FixtureRunner::new()
+            .on("cargo", CommandOutput::success(audit_json.as_bytes().to_vec()));
+        let ctx = make_ctx_with_runner(runner);
+        let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].title.contains("RUSTSEC-2023-0044"));
+    }
+
+    #[tokio::test]
+    async fn analyze_no_vulns() {
+        let audit_json = r#"{"vulnerabilities": {"found": 0, "list": []}}"#;
+        let runner = FixtureRunner::new()
+            .on("cargo", CommandOutput::success(audit_json.as_bytes().to_vec()));
+        let ctx = make_ctx_with_runner(runner);
+        let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
+    }
 
     #[test]
     fn parse_cargo_audit_json_with_vulns() {

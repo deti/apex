@@ -196,6 +196,7 @@ mod tests {
             source_cache: std::collections::HashMap::new(),
             fuzz_corpus: None,
             config: crate::config::DetectConfig::default(),
+            runner: Arc::new(apex_core::command::RealCommandRunner),
         }
     }
 
