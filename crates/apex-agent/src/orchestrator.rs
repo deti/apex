@@ -1396,4 +1396,98 @@ mod tests {
             "expected observe() to be called at least once"
         );
     }
+
+    #[tokio::test]
+    async fn run_stops_when_all_branches_covered() {
+        // Register branches then pre-cover them all — run() should exit immediately.
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        oracle.mark_covered(&b, apex_core::types::SeedId::new());
+        assert_eq!(oracle.uncovered_branches().len(), 0);
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(StubSandbox);
+        let cluster = AgentCluster::new(oracle, sandbox, test_target());
+        // Should return immediately with Ok
+        cluster.run().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_stops_on_deadline() {
+        // Register uncovered branches but set deadline to 0 so it fires immediately.
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        struct NeverStrategy;
+        #[async_trait::async_trait]
+        impl Strategy for NeverStrategy {
+            fn name(&self) -> &str { "never" }
+            async fn suggest_inputs(&self, _ctx: &ExplorationContext) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(StubSandbox);
+        let cluster = AgentCluster::new(oracle, sandbox, test_target())
+            .with_strategy(Box::new(NeverStrategy))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: Some(0), // immediate deadline
+                stall_threshold: 100,
+            });
+        cluster.run().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_stops_on_stall() {
+        // Strategy always returns empty → stall_count increments → stops at threshold.
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        struct EmptyStrategy;
+        #[async_trait::async_trait]
+        impl Strategy for EmptyStrategy {
+            fn name(&self) -> &str { "empty" }
+            async fn suggest_inputs(&self, _ctx: &ExplorationContext) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(StubSandbox);
+        let cluster = AgentCluster::new(oracle, sandbox, test_target())
+            .with_strategy(Box::new(EmptyStrategy))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: Some(10),
+                stall_threshold: 3,
+            });
+        cluster.run().await.unwrap();
+    }
+
+    #[test]
+    fn monitor_action_accessible() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let sandbox: Arc<dyn Sandbox> = Arc::new(StubSandbox);
+        let cluster = AgentCluster::new(oracle, sandbox, test_target());
+        let action = cluster.monitor_action();
+        // Fresh monitor should say Continue
+        assert_eq!(action, MonitorAction::Normal);
+    }
+
+    #[test]
+    fn bug_summary_empty_on_new_cluster() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let sandbox: Arc<dyn Sandbox> = Arc::new(StubSandbox);
+        let cluster = AgentCluster::new(oracle, sandbox, test_target());
+        let summary = cluster.bug_summary();
+        assert_eq!(summary.total, 0);
+    }
 }
