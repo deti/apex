@@ -143,6 +143,16 @@ pub fn parse_llvm_json(
                 Err(_) => continue,
             };
 
+            // Skip test files — we only want production branch coverage.
+            let rel_str = rel.to_string_lossy();
+            if rel_str.starts_with("tests/")
+                || rel_str.contains("/tests/")
+                || rel_str.ends_with("_test.rs")
+                || rel_str.ends_with("_tests.rs")
+            {
+                continue;
+            }
+
             let fid = fnv1a(&rel.to_string_lossy());
             file_paths.entry(fid).or_insert_with(|| rel.clone());
 
@@ -1055,5 +1065,49 @@ mod tests {
         assert_eq!(all.len(), 2);
         // file_paths uses entry(), so same file_id maps to one entry
         assert_eq!(fps.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_llvm_json_skips_test_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json = format!(
+            r#"{{
+  "data": [
+    {{
+      "files": [
+        {{
+          "filename": "{root}/src/lib.rs",
+          "segments": [[1, 1, 5, true, true, false]]
+        }},
+        {{
+          "filename": "{root}/tests/integration.rs",
+          "segments": [[1, 1, 3, true, true, false]]
+        }},
+        {{
+          "filename": "{root}/src/foo_test.rs",
+          "segments": [[1, 1, 2, true, true, false]]
+        }},
+        {{
+          "filename": "{root}/crates/bar/tests/unit.rs",
+          "segments": [[1, 1, 1, true, true, false]]
+        }},
+        {{
+          "filename": "{root}/src/helpers_tests.rs",
+          "segments": [[1, 1, 1, true, true, false]]
+        }}
+      ]
+    }}
+  ]
+}}"#,
+            root = root.display()
+        );
+        let (all, executed, fps) = parse_llvm_json(json.as_bytes(), root).unwrap();
+        // Only src/lib.rs should survive — all test files filtered out
+        assert_eq!(fps.len(), 1);
+        let path = fps.values().next().unwrap();
+        assert_eq!(path, &PathBuf::from("src/lib.rs"));
+        assert_eq!(all.len(), 1);
+        assert_eq!(executed.len(), 1);
     }
 }
