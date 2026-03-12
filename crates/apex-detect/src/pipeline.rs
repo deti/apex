@@ -114,7 +114,7 @@ pub fn deduplicate(findings: &mut Vec<Finding>) {
     let mut merged: Vec<Finding> = Vec::new();
 
     for finding in findings.drain(..) {
-        let key = (finding.file.clone(), finding.line, finding.category.clone());
+        let key = (finding.file.clone(), finding.line, finding.category);
         if let Some(&idx) = seen.get(&key) {
             if finding.severity.rank() < merged[idx].severity.rank() {
                 let existing: &mut Finding = &mut merged[idx];
