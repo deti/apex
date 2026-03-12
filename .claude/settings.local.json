@@ -126,7 +126,8 @@
       "Bash(git tag:*)",
       "Bash(GIT_SSL_NO_VERIFY=1 gh release create v0.1.0 --title \"APEX v0.1.0\" --notes \"$\\(cat <<'EOF'\nInitial release of APEX — Autonomous Path EXploration.\n\nDrives any repository toward 100% branch coverage through instrumentation, fuzzing, concolic execution, symbolic solving, and AI-guided test synthesis.\n\n### Highlights\n\n- **Multi-language support** — Python, JavaScript, Java, Rust, C, WebAssembly\n- **Coverage-guided fuzzing** with MOpt mutator scheduling\n- **Concolic execution** — concrete + symbolic hybrid exploration\n- **Symbolic constraint solving** — SMT-LIB2 with optional Z3 backend\n- **AI agent orchestration** — LLM-driven test generation and refinement\n- **Bug detection** — panic patterns, security auditing\n- **CI integration** — `apex ratchet` coverage gate\n- **Sandboxed execution** — process isolation, optional Firecracker microVMs\n\n### Optional Feature Flags\n\nHeavy deps behind feature flags: `z3-solver`, `libafl-backend`, `pyo3-tracer`, `llvm-instrument`, `firecracker`, `wasm-instrument`, `kani-prover`\n\nSee [README]\\(https://github.com/allexdav2/apex#readme\\) for quick start and full documentation.\nEOF\n\\)\" 2>&1)",
       "WebFetch(domain:registry.npmjs.org)",
-      "Bash(GIT_SSL_NO_VERIFY=1 git push origin main 2>&1)"
+      "Bash(GIT_SSL_NO_VERIFY=1 git push origin main 2>&1)",
+      "Bash(bash agents/install.sh)"
     ]
   },
   "sandbox": {

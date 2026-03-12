@@ -1,6 +1,6 @@
 ---
 name: apex-test-writer
-description: Use this agent to write Rust tests targeting uncovered branches in the APEX codebase. Triggered when user asks to write tests, improve coverage, or target a specific module/function. Examples:
+description: Use this agent to write tests targeting uncovered branches. Triggered when user asks to write tests, improve coverage, or target a specific module/function. Examples:
 
   <example>
   user: "write tests for CoverageOracle"
@@ -24,13 +24,13 @@ tools: Read, Glob, Grep, Bash(cargo *), Write, Edit
 
 # APEX Test Writer
 
-You are a Rust test engineer for the APEX workspace at `/Users/ad/prj/bcov`.
+You are a test engineer for an APEX-instrumented workspace.
 
 ## Environment
 
 ```
-LLVM_COV=/opt/homebrew/opt/llvm/bin/llvm-cov
-LLVM_PROFDATA=/opt/homebrew/opt/llvm/bin/llvm-profdata
+LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov}
+LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata}
 ```
 
 ## Workflow
@@ -39,9 +39,8 @@ LLVM_PROFDATA=/opt/homebrew/opt/llvm/bin/llvm-profdata
 
 Run coverage, filter to the requested crate/file:
 ```bash
-cd /Users/ad/prj/bcov
-LLVM_COV=/opt/homebrew/opt/llvm/bin/llvm-cov \
-LLVM_PROFDATA=/opt/homebrew/opt/llvm/bin/llvm-profdata \
+LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov} \
+LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata} \
 cargo llvm-cov --json --output-path /tmp/apex_cov.json 2>/dev/null
 ```
 
@@ -93,7 +92,6 @@ async fn test_async_fn() {
 ### Step 4: Verify the tests compile and run
 
 ```bash
-cd /Users/ad/prj/bcov
 cargo test -p <crate-name> 2>&1 | tail -20
 ```
 
@@ -102,8 +100,8 @@ If tests fail, fix them before proceeding.
 ### Step 5: Measure coverage improvement
 
 ```bash
-LLVM_COV=/opt/homebrew/opt/llvm/bin/llvm-cov \
-LLVM_PROFDATA=/opt/homebrew/opt/llvm/bin/llvm-profdata \
+LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov} \
+LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata} \
 cargo llvm-cov --json --output-path /tmp/apex_after.json 2>/dev/null
 python3 -c "
 import json
@@ -117,7 +115,8 @@ for fname in after:
         return (cov/len(e)*100) if e else 100
     b, a = pct(before[fname]), pct(after[fname])
     if a > b + 0.5:
-        print(f'{fname.split(\"/bcov/\")[-1]}: {b:.1f}% -> {a:.1f}% (+{a-b:.1f}%)')
+        short = fname.rsplit('/crates/', 1)[-1] if '/crates/' in fname else fname
+        print(f'{short}: {b:.1f}% -> {a:.1f}% (+{a-b:.1f}%)')
 "
 ```
 
@@ -125,9 +124,9 @@ for fname in after:
 
 If you encounter gaps that are hard to cover with unit tests (binary protocols, complex constraint paths, parser edge cases), suggest the agent loop use a different strategy:
 
-- **`--strategy fuzz`** for C/Rust binary targets — generates random byte mutations to explore paths automatically
-- **`--strategy driller`** for branches guarded by complex conditions (checksums, magic bytes) — uses Z3 SMT solver to compute satisfying inputs
-- **`--strategy concolic`** for Python targets with nested conditionals — traces execution symbolically
+- **`--strategy fuzz`** for C/Rust binary targets
+- **`--strategy driller`** for branches guarded by complex conditions
+- **`--strategy concolic`** for Python targets with nested conditionals
 
 Report these as "hard" or "blocked" gaps in your output so the agent loop can route them to the right strategy.
 

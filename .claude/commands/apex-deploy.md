@@ -19,14 +19,14 @@ Defaults: target=`.`, lang=`python`.
 
 Verify `.apex/index.json` exists. If missing, build it:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   index --target <TARGET> --lang <LANG> --parallel 4 2>&1
 ```
 
 ### Step 1: Run audit for detector findings
 
 ```bash
-AUDIT=$(cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+AUDIT=$(cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   audit --target <TARGET> --lang <LANG> --output-format json 2>/dev/null)
 ```
 
@@ -35,7 +35,7 @@ Parse to count total findings and critical findings.
 ### Step 2: Compute deploy score
 
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   deploy-score --target <TARGET> \
   --detector-findings <N> --critical-findings <N> \
   --output-format json 2>/dev/null
@@ -44,17 +44,16 @@ cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
 ### Step 3: Check risk of recent changes
 
 ```bash
-# Auto-detect changed files
 CHANGED=$(cd <TARGET> && git diff --name-only HEAD~1 2>/dev/null | tr '\n' ',')
 
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   risk --target <TARGET> --changed-files "$CHANGED" --output-format json 2>/dev/null
 ```
 
 ### Step 4: Regression check (if base branch known)
 
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   regression-check --target <TARGET> --lang <LANG> --base main --output-format json 2>/dev/null
 ```
 

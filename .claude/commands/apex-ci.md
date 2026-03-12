@@ -16,15 +16,15 @@ Examples:
 
 2. Run:
    ```bash
-   LLVM_COV=/opt/homebrew/opt/llvm/bin/llvm-cov \
-   LLVM_PROFDATA=/opt/homebrew/opt/llvm/bin/llvm-profdata \
-   cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
-     ratchet --target /Users/ad/prj/bcov --lang rust \
+   LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov} \
+   LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata} \
+   cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
+     ratchet --target . --lang rust \
      --min-coverage <THRESHOLD> 2>&1
    ```
 
 3. Show the result clearly:
-   - PASS ✓ or FAIL ✗
+   - PASS or FAIL
    - Current coverage % vs required %
    - If failing: which files drag the average down most
 

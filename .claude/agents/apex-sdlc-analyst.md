@@ -46,7 +46,7 @@ You analyze codebases using APEX's per-test branch index to provide intelligence
 The branch index must exist before running intelligence commands. If `.apex/index.json` is missing, build it first:
 
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   index --target <TARGET> --lang <LANG> --parallel 4
 ```
 
@@ -58,19 +58,19 @@ All commands read from `.apex/index.json` built by `apex index`.
 
 **Test Optimization** — find minimal test set maintaining coverage:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   test-optimize --target <TARGET> --output-format json
 ```
 
 **Test Prioritization** — order tests by relevance to changes:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   test-prioritize --target <TARGET> --changed-files file1.py,file2.py
 ```
 
 **Flaky Detection** — find nondeterministic tests via branch-set divergence:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   flaky-detect --target <TARGET> --lang <LANG> --runs 5 --parallel 4 --output-format json
 ```
 
@@ -78,19 +78,19 @@ cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
 
 **Dead Code** — branches never executed by any test:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   dead-code --target <TARGET> --output-format json
 ```
 
 **Lint** — runtime-prioritized findings (hot code first):
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   lint --target <TARGET> --lang <LANG> --output-format json
 ```
 
 **Complexity** — exercised vs static complexity per function:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   complexity --target <TARGET> --output-format json
 ```
 
@@ -98,37 +98,37 @@ cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
 
 **Behavioral Diff** — compare branch coverage between branches:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   diff --target <TARGET> --lang <LANG> --base main
 ```
 
 **Regression Check** — CI gate for unexpected behavioral changes:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   regression-check --target <TARGET> --lang <LANG> --base main
 ```
 
 **Risk Assessment** — score changes by coverage and blast radius:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   risk --target <TARGET> --changed-files file1.py,file2.py --output-format json
 ```
 
 **Hot Paths** — rank branches by execution frequency:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   hotpaths --target <TARGET> --top 20 --output-format json
 ```
 
 **Contracts** — discover invariants (always/never-taken branches):
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   contracts --target <TARGET> --output-format json
 ```
 
 **Deploy Score** — aggregate 0-100 deployment confidence:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   deploy-score --target <TARGET> --detector-findings 0 --critical-findings 0 --output-format json
 ```
 
@@ -136,7 +136,7 @@ cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
 
 **Behavioral Docs** — generate documentation from execution traces:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   docs --target <TARGET> --output-format json
 ```
 
@@ -144,13 +144,13 @@ cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
 
 **Attack Surface** — map reachable code from entry points:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   attack-surface --target <TARGET> --lang <LANG> --entry-pattern test_api --output-format json
 ```
 
 **Verify Boundaries** — check auth gates on entry-point paths:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   verify-boundaries --target <TARGET> --lang <LANG> \
   --entry-pattern test_api --auth-checks check_auth
 ```

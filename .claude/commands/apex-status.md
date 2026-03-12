@@ -1,6 +1,6 @@
 # APEX Status
 
-Show current branch coverage for the APEX workspace.
+Show current branch coverage for the workspace.
 
 ## Usage
 ```
@@ -14,10 +14,9 @@ Examples:
 
 1. Run `cargo llvm-cov --json` with LLVM env vars set:
    ```bash
-   LLVM_COV=/opt/homebrew/opt/llvm/bin/llvm-cov \
-   LLVM_PROFDATA=/opt/homebrew/opt/llvm/bin/llvm-profdata \
-   cargo llvm-cov --json --output-path /tmp/apex_status.json \
-     --manifest-path /Users/ad/prj/bcov/Cargo.toml 2>&1 | tail -3
+   LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov} \
+   LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata} \
+   cargo llvm-cov --json --output-path /tmp/apex_status.json 2>&1 | tail -3
    ```
 
 2. Parse `/tmp/apex_status.json` with Python and display a table:

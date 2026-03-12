@@ -33,7 +33,7 @@ ls <TARGET>/pom.xml <TARGET>/build.gradle 2>/dev/null
 
 Check APEX binary is available:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- doctor 2>&1
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- doctor 2>&1
 ```
 
 If doctor fails, show what's missing and how to fix it. Stop here.
@@ -60,7 +60,7 @@ print(f'INDEX_OK tests={tests} covered={covered} total={total} pct={pct:.1f} cre
 
 If no index exists, build one:
 ```bash
-cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   index --target <TARGET> --lang <LANG> --parallel 4 2>&1
 ```
 
@@ -69,7 +69,7 @@ cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
 Run these in sequence:
 
 ```bash
-APEX=/Users/ad/prj/bcov/Cargo.toml
+APEX=$APEX_HOME/Cargo.toml
 
 # Deploy score (the single most important number)
 cargo run --bin apex --manifest-path $APEX -- \
@@ -139,25 +139,20 @@ Index: fresh (built YYYY-MM-DD) | Last commit: <hash> <message>
 - Affected tests: N (run these first: test_a, test_b, test_c)
 
 ### Recommended Actions
-1. [Highest impact action — e.g., "Write tests for src/auth.py — 12 uncovered branches in hot path"]
-2. [Second — e.g., "Fix 2 critical security findings in src/api.py"]
-3. [Third — e.g., "Remove 45 redundant tests (test-optimize)"]
+1. [Highest impact action]
+2. [Second]
+3. [Third]
 ```
 
 ### Recommended Actions Logic
 
-Prioritize recommendations by:
+Prioritize by:
 1. **Critical security findings** — always first if any exist
 2. **Uncovered branches in changed files** — immediate risk
 3. **Flaky tests** — eroding CI trust
 4. **Coverage gaps in hot paths** — highest-traffic untested code
 5. **Dead code cleanup** — reduce maintenance burden
 6. **Test suite optimization** — reduce CI time
-
-For each recommendation, give a concrete next step:
-- "Run `/apex-generate <file>` to write tests"
-- "Run `apex flaky-detect` to identify nondeterminism"
-- "Run `apex verify-boundaries` to check auth coverage"
 
 ### Follow-up Suggestions
 

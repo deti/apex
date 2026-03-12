@@ -18,7 +18,7 @@ Defaults: target=`.`, lang=`python`, parallel=`4`.
 
 1. Run the index build:
    ```bash
-   cargo run --bin apex --manifest-path /Users/ad/prj/bcov/Cargo.toml -- \
+   cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
      index --target <TARGET> --lang <LANG> --parallel <N> 2>&1
    ```
 

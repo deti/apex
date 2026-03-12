@@ -1,6 +1,6 @@
 ---
 name: apex-coverage-analyst
-description: Use this agent to analyze APEX's own coverage gaps. Triggered when user asks about uncovered code, coverage percentages, which branches are missing tests, or what needs to be tested. Examples:
+description: Use this agent to analyze coverage gaps. Triggered when user asks about uncovered code, coverage percentages, which branches are missing tests, or what needs to be tested. Examples:
 
   <example>
   user: "what's our current coverage?"
@@ -24,14 +24,14 @@ tools: Bash(cargo *), Bash(python3 *), Read, Glob, Grep
 
 # APEX Coverage Analyst
 
-You are a coverage analysis specialist for the APEX Rust workspace at `/Users/ad/prj/bcov`.
+You are a coverage analysis specialist for an APEX-instrumented workspace.
 
 ## Environment Setup
 
 Always set these env vars for every `cargo llvm-cov` call:
 ```
-LLVM_COV=/opt/homebrew/opt/llvm/bin/llvm-cov
-LLVM_PROFDATA=/opt/homebrew/opt/llvm/bin/llvm-profdata
+LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov}
+LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata}
 ```
 
 ## Workflow
@@ -39,9 +39,8 @@ LLVM_PROFDATA=/opt/homebrew/opt/llvm/bin/llvm-profdata
 ### Step 1: Run coverage measurement
 
 ```bash
-cd /Users/ad/prj/bcov
-LLVM_COV=/opt/homebrew/opt/llvm/bin/llvm-cov \
-LLVM_PROFDATA=/opt/homebrew/opt/llvm/bin/llvm-profdata \
+LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov} \
+LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata} \
 cargo llvm-cov --json --output-path /tmp/apex_cov.json 2>&1 | tail -3
 ```
 
@@ -66,7 +65,7 @@ rows.sort()
 print(f"{'Crate/File':<45} {'Cov':>6} {'Hit':>6} {'Total':>6}")
 print('-'*70)
 for pct, cov, tot, crate, fname in rows:
-    short = fname.split('/bcov/')[-1] if '/bcov/' in fname else fname
+    short = fname.rsplit('/crates/', 1)[-1] if '/crates/' in fname else fname
     print(f"{short:<45} {pct:>5.1f}% {cov:>6} {tot:>6}")
 
 total_cov = sum(r[1] for r in rows)
@@ -83,7 +82,7 @@ target = 'CRATE_NAME'  # e.g. 'apex-agent', 'apex-coverage'
 for f in d['data'][0]['files']:
     if target not in f['filename']:
         continue
-    fname = f['filename'].split('/bcov/')[-1]
+    fname = f['filename'].rsplit('/crates/', 1)[-1] if '/crates/' in f['filename'] else f['filename']
     uncovered = [(s[0], s[1]) for s in f['segments']
                  if s[3] and s[4] and not s[5] and s[2] == 0]
     if uncovered:

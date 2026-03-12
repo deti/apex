@@ -28,7 +28,7 @@ If missing, tell the user to run `/apex-index` first and stop.
 Run these in sequence (all use `--output-format json` for parsing):
 
 ```bash
-APEX=/Users/ad/prj/bcov/Cargo.toml
+APEX=$APEX_HOME/Cargo.toml
 
 # 1. Test optimization
 cargo run --bin apex --manifest-path $APEX -- test-optimize --target <TARGET> --output-format json 2>/dev/null
@@ -65,8 +65,6 @@ cargo run --bin apex --manifest-path $APEX -- test-prioritize --target <TARGET> 
 ```
 
 ### Present the Report
-
-Format as a structured intelligence report:
 
 ```
 ## APEX Intelligence Report
