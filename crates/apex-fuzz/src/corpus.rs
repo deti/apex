@@ -637,4 +637,194 @@ mod tests {
         c.entries[0].distance_to_target = Some(3.14);
         assert!((c.entries[0].distance_to_target.unwrap() - 3.14).abs() < 1e-9);
     }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn add_with_zero_coverage_gain_energy_defaults_to_one() {
+        // coverage_gain.max(1) == 1 when gain=0
+        let mut c = Corpus::new(10);
+        c.add(vec![1], 0); // gain=0 → energy = 0.max(1) as f64 = 1.0
+        assert!((c.entries[0].energy - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn corpus_entry_fuzz_count_starts_at_zero() {
+        let mut c = Corpus::new(10);
+        c.add(vec![42], 5);
+        assert_eq!(c.entries[0].fuzz_count, 0);
+    }
+
+    #[test]
+    fn corpus_entry_covered_edges_starts_empty() {
+        let mut c = Corpus::new(10);
+        c.add(vec![1], 1);
+        assert!(c.entries[0].covered_edges.is_empty());
+    }
+
+    #[test]
+    fn power_schedule_ne_explore_rare() {
+        assert_ne!(PowerSchedule::Explore, PowerSchedule::Rare);
+    }
+
+    #[test]
+    fn set_power_schedule_explore_then_fast_then_rare() {
+        let mut c = Corpus::new(10);
+        c.add(vec![1], 2);
+        // Exercise all three schedule recalculations on a non-empty corpus
+        c.set_power_schedule(PowerSchedule::Explore);
+        assert!((c.entries[0].energy - 1.0).abs() < 1e-9);
+        c.set_power_schedule(PowerSchedule::Fast);
+        // Fast: energy = 1/(fuzz_count.max(1) * data.len().max(1)) = 1/(1*1) = 1.0
+        assert!((c.entries[0].energy - 1.0).abs() < 1e-9);
+        c.set_power_schedule(PowerSchedule::Rare);
+        // No covered_edges → energy = 1.0
+        assert!((c.entries[0].energy - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn minimize_with_one_entry_covering_one_edge() {
+        let mut c = Corpus::new(10);
+        c.entries.push_back(CorpusEntry {
+            data: vec![1],
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 0,
+            covered_edges: vec![42],
+            distance_to_target: None,
+        });
+        let m = c.minimize();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m.entries[0].covered_edges, vec![42]);
+    }
+
+    #[test]
+    fn minimize_break_when_no_entry_covers_remaining() {
+        // After selecting all covering entries, remaining might be non-empty but
+        // no unused entry covers them — break arm fires.
+        // This happens when some edges appear only in already-selected entries
+        // but there's an unsatisfiable remaining set.
+        // We construct: entry0 covers [1,2], entry1 covers [1,2] (duplicate)
+        let mut c = Corpus::new(10);
+        c.entries.push_back(CorpusEntry {
+            data: vec![0],
+            coverage_gain: 2,
+            energy: 2.0,
+            fuzz_count: 0,
+            covered_edges: vec![1, 2],
+            distance_to_target: None,
+        });
+        c.entries.push_back(CorpusEntry {
+            data: vec![1],
+            coverage_gain: 2,
+            energy: 2.0,
+            fuzz_count: 0,
+            covered_edges: vec![1, 2], // same edges, no new coverage
+            distance_to_target: None,
+        });
+        let m = c.minimize();
+        // One entry covers all edges; after selecting it, remaining is empty
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn corpus_len_after_eviction_is_max() {
+        let mut c = Corpus::new(2);
+        c.add(vec![1], 1);
+        c.add(vec![2], 1);
+        c.add(vec![3], 1); // evicts vec![1]
+        c.add(vec![4], 1); // evicts vec![2]
+        assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn corpus_entry_clone() {
+        let entry = CorpusEntry {
+            data: vec![1, 2, 3],
+            coverage_gain: 5,
+            energy: 2.5,
+            fuzz_count: 10,
+            covered_edges: vec![1, 2],
+            distance_to_target: Some(1.5),
+        };
+        let cloned = entry.clone();
+        assert_eq!(cloned.data, entry.data);
+        assert_eq!(cloned.coverage_gain, entry.coverage_gain);
+        assert!((cloned.energy - entry.energy).abs() < 1e-9);
+        assert_eq!(cloned.fuzz_count, entry.fuzz_count);
+        assert_eq!(cloned.covered_edges, entry.covered_edges);
+        assert_eq!(cloned.distance_to_target, entry.distance_to_target);
+    }
+
+    #[test]
+    fn sample_pair_no_duplicate_indices() {
+        // Verify that j != i is always maintained
+        let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+        let mut c = Corpus::new(10);
+        c.add(vec![0xAA], 1);
+        c.add(vec![0xBB], 1);
+        for _ in 0..100 {
+            let (a, b) = c.sample_pair(&mut rng).unwrap();
+            // The two entries must be distinct objects (different data)
+            assert_ne!(a.data, b.data);
+        }
+    }
+
+    #[test]
+    fn rare_schedule_shared_edge_lowers_energy_compared_to_unique() {
+        // Entry 0: edge 1 (shared)
+        // Entry 1: edge 1 (shared)
+        // Entry 2: edge 2 (unique)
+        let mut c = Corpus::new(10);
+        c.entries.push_back(CorpusEntry {
+            data: vec![0],
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 0,
+            covered_edges: vec![1],
+            distance_to_target: None,
+        });
+        c.entries.push_back(CorpusEntry {
+            data: vec![1],
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 0,
+            covered_edges: vec![1],
+            distance_to_target: None,
+        });
+        c.entries.push_back(CorpusEntry {
+            data: vec![2],
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 0,
+            covered_edges: vec![2],
+            distance_to_target: None,
+        });
+        c.set_power_schedule(PowerSchedule::Rare);
+        // edge 1 count=2, edge 2 count=1
+        // entry 0 energy = 1/2 = 0.5
+        // entry 2 energy = 1/1 = 1.0 (unique)
+        assert!(c.entries[2].energy > c.entries[0].energy);
+        assert!((c.entries[0].energy - 0.5).abs() < 1e-9);
+        assert!((c.entries[2].energy - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fast_schedule_data_len_zero_treated_as_one() {
+        // data.len().max(1) → empty data uses 1
+        let mut c = Corpus::new(10);
+        c.entries.push_back(CorpusEntry {
+            data: vec![],  // len=0 → max(1)=1
+            coverage_gain: 1,
+            energy: 1.0,
+            fuzz_count: 1,
+            covered_edges: vec![],
+            distance_to_target: None,
+        });
+        c.set_power_schedule(PowerSchedule::Fast);
+        // energy = 1/(1*1) = 1.0
+        assert!((c.entries[0].energy - 1.0).abs() < 1e-9);
+    }
 }

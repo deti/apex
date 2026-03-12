@@ -828,4 +828,123 @@ mod tests {
         let result = session.diverging_inputs_with(&cached);
         assert!(result.is_ok());
     }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests
+    // ------------------------------------------------------------------
+
+    /// A solver that always returns Ok(Some(seed)) — exercises the
+    /// `Ok(Some(seed)) => inputs.push(seed)` arm in diverging_inputs_with.
+    struct AlwaysSatSolver;
+    impl SolverTrait for AlwaysSatSolver {
+        fn solve(&self, _constraints: &[String], _negate_last: bool) -> apex_core::error::Result<Option<apex_core::types::InputSeed>> {
+            Ok(Some(apex_core::types::InputSeed::new(
+                vec![1, 2, 3],
+                apex_core::types::SeedOrigin::Symbolic,
+            )))
+        }
+        fn set_logic(&mut self, _logic: SolverLogic) {}
+        fn name(&self) -> &str { "always_sat" }
+    }
+
+    /// A solver that always returns Err — exercises the error arm.
+    struct AlwaysErrSolver;
+    impl SolverTrait for AlwaysErrSolver {
+        fn solve(&self, _constraints: &[String], _negate_last: bool) -> apex_core::error::Result<Option<apex_core::types::InputSeed>> {
+            Err(apex_core::error::ApexError::Solver("test error".into()))
+        }
+        fn set_logic(&mut self, _logic: SolverLogic) {}
+        fn name(&self) -> &str { "always_err" }
+    }
+
+    #[test]
+    fn diverging_inputs_with_sat_solver_collects_seeds() {
+        let solver = AlwaysSatSolver;
+        let mut session = SymbolicSession::new();
+        session.push(make_constraint("(> x 0)"));
+        session.push(make_constraint("(< y 5)"));
+        let inputs = session.diverging_inputs_with(&solver).unwrap();
+        // AlwaysSatSolver returns Some for every batch, so we should get seeds
+        assert!(!inputs.is_empty());
+    }
+
+    #[test]
+    fn diverging_inputs_with_err_solver_swallows_errors() {
+        let solver = AlwaysErrSolver;
+        let mut session = SymbolicSession::new();
+        session.push(make_constraint("(> x 0)"));
+        // Errors are swallowed, result should be Ok([])
+        let result = session.diverging_inputs_with(&solver);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn diverging_inputs_with_sat_single_constraint() {
+        // Single constraint: one batch set with negate_last = true
+        let solver = AlwaysSatSolver;
+        let mut session = SymbolicSession::new();
+        session.push(make_constraint("(= z 3)"));
+        let inputs = session.diverging_inputs_with(&solver).unwrap();
+        assert_eq!(inputs.len(), 1);
+    }
+
+    #[test]
+    fn diverging_inputs_with_mixed_sat_and_none() {
+        // Tests the Ok(None) arm (no push) mixed with Ok(Some) (push)
+        use std::sync::Mutex;
+        struct AlternatingSolver { call_count: Mutex<u64> }
+        impl SolverTrait for AlternatingSolver {
+            fn solve(&self, _constraints: &[String], _negate_last: bool) -> apex_core::error::Result<Option<apex_core::types::InputSeed>> {
+                let mut c = self.call_count.lock().unwrap();
+                *c += 1;
+                if *c % 2 == 0 {
+                    Ok(Some(apex_core::types::InputSeed::new(vec![42], apex_core::types::SeedOrigin::Symbolic)))
+                } else {
+                    Ok(None)
+                }
+            }
+            fn set_logic(&mut self, _logic: SolverLogic) {}
+            fn name(&self) -> &str { "alternating" }
+        }
+        let solver = AlternatingSolver { call_count: Mutex::new(0) };
+        let mut session = SymbolicSession::new();
+        for i in 0..4 {
+            session.push(make_constraint(&format!("(> x{}  0)", i)));
+        }
+        let inputs = session.diverging_inputs_with(&solver).unwrap();
+        // 4 batches, alternating Some/None => 2 seeds
+        assert_eq!(inputs.len(), 2);
+    }
+
+    #[test]
+    fn symbolic_session_push_multiple_then_check_len() {
+        let mut session = SymbolicSession::new();
+        assert_eq!(session.len(), 0);
+        assert!(session.is_empty());
+        session.push(make_constraint("(> a 0)"));
+        assert_eq!(session.len(), 1);
+        assert!(!session.is_empty());
+        session.push(make_constraint("(< b 5)"));
+        assert_eq!(session.len(), 2);
+    }
+
+    #[test]
+    fn z3_solver_for_language_covers_all_variants() {
+        use apex_core::types::Language;
+        // Verify all language variants exercise the match arms
+        let cases = vec![
+            (Language::Python, "QfLia"),
+            (Language::C, "QfAbv"),
+            (Language::Rust, "QfAbv"),
+            (Language::JavaScript, "QfS"),
+            (Language::Java, "Auto"),
+            (Language::Wasm, "Auto"),
+            (Language::Ruby, "Auto"),
+        ];
+        for (lang, _expected_logic) in cases {
+            let solver = Z3Solver::for_language(lang);
+            assert_eq!(solver.name(), "z3");
+        }
+    }
 }

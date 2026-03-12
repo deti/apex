@@ -258,4 +258,121 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].tainted_vars, vec!["x".to_string()]);
     }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn propagate_taint_idempotent_second_pass() {
+        // After reaching fixpoint, a second call returns same result
+        let tainted1 = propagate_taint(&["x".into()], &[("y".into(), vec!["x".into()])]);
+        let tainted2 = propagate_taint(&["x".into()], &[("y".into(), vec!["x".into()])]);
+        assert_eq!(tainted1, tainted2);
+    }
+
+    #[test]
+    fn propagate_taint_already_tainted_lhs_not_set_again() {
+        // If lhs is already tainted, the rhs check is skipped (branch `!tainted.contains(lhs)`)
+        let tainted = propagate_taint(
+            &["x".into(), "y".into()],
+            &[("y".into(), vec!["x".into()])], // y is already tainted
+        );
+        // y should still be tainted, just from params
+        assert!(tainted.contains("y"));
+        assert_eq!(tainted.len(), 2); // only x and y
+    }
+
+    #[test]
+    fn propagate_taint_chain_converges_in_two_passes() {
+        // c depends on b, b depends on a, a depends on x
+        // In reverse order: needs 3 fixpoint passes
+        let tainted = propagate_taint(
+            &["x".into()],
+            &[
+                ("c".into(), vec!["b".into()]),
+                ("b".into(), vec!["a".into()]),
+                ("a".into(), vec!["x".into()]),
+            ],
+        );
+        assert!(tainted.contains("a"));
+        assert!(tainted.contains("b"));
+        assert!(tainted.contains("c"));
+        assert_eq!(tainted.len(), 4); // x, a, b, c
+    }
+
+    #[test]
+    fn filter_tainted_branches_condition_field_preserved() {
+        let tainted: HashSet<String> = ["var".into()].into();
+        let branches = vec![(
+            BranchId::new(5, 20, 3, 1),
+            "var > 10".into(),
+            vec!["var".into()],
+        )];
+        let filtered = filter_tainted_branches(&branches, &tainted);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].condition, "var > 10");
+        assert_eq!(filtered[0].branch_id.file_id, 5);
+        assert_eq!(filtered[0].branch_id.line, 20);
+    }
+
+    #[test]
+    fn filter_tainted_branches_only_tainted_vars_in_output() {
+        // cond_vars has [x, CONST, y], only x and y are tainted
+        let tainted: HashSet<String> = ["x".into(), "y".into()].into();
+        let branches = vec![(
+            BranchId::new(1, 10, 0, 0),
+            "x + CONST + y > 5".into(),
+            vec!["x".into(), "CONST".into(), "y".into()],
+        )];
+        let filtered = filter_tainted_branches(&branches, &tainted);
+        assert_eq!(filtered[0].tainted_vars.len(), 2);
+        assert!(filtered[0].tainted_vars.contains(&"x".to_string()));
+        assert!(filtered[0].tainted_vars.contains(&"y".to_string()));
+        assert!(!filtered[0].tainted_vars.contains(&"CONST".to_string()));
+    }
+
+    #[test]
+    fn propagate_taint_multiple_rhs_one_tainted_propagates() {
+        // z = f(a, b, x) where only x is tainted → z becomes tainted
+        let tainted = propagate_taint(
+            &["x".into()],
+            &[("z".into(), vec!["a".into(), "b".into(), "x".into()])],
+        );
+        assert!(tainted.contains("z"));
+    }
+
+    #[test]
+    fn propagate_taint_no_rhs_vars_does_not_propagate() {
+        // lhs = f() — empty rhs → never propagates
+        let tainted = propagate_taint(
+            &["x".into()],
+            &[("z".into(), vec![])],
+        );
+        assert!(!tainted.contains("z"));
+    }
+
+    #[test]
+    fn tainted_branch_debug_contains_condition() {
+        let tb = TaintedBranch {
+            branch_id: BranchId::new(1, 10, 0, 0),
+            tainted_vars: vec!["x".into()],
+            condition: "x > 5".into(),
+        };
+        let d = format!("{:?}", tb);
+        assert!(d.contains("x > 5"));
+    }
+
+    #[test]
+    fn filter_tainted_branches_skips_branch_with_all_untainted_vars() {
+        // All cond_vars are not tainted → branch filtered out
+        let tainted: HashSet<String> = ["x".into()].into();
+        let branches = vec![
+            (BranchId::new(1, 10, 0, 0), "a > b".into(), vec!["a".into(), "b".into()]),
+            (BranchId::new(1, 20, 0, 0), "x > 0".into(), vec!["x".into()]),
+        ];
+        let filtered = filter_tainted_branches(&branches, &tainted);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].branch_id.line, 20);
+    }
 }

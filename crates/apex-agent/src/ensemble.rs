@@ -241,4 +241,69 @@ mod tests {
         assert!(!sync.should_sync(100));
         assert!(sync.should_sync(u64::MAX / 2));
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `new()` stores interval correctly.
+    #[test]
+    fn new_stores_interval() {
+        let sync = EnsembleSync::new(42);
+        assert_eq!(sync.interval, 42);
+    }
+
+    /// `should_sync()` at iteration 0 with interval 1 is false (0 < 0+1).
+    #[test]
+    fn should_sync_zero_with_interval_one_is_false() {
+        let sync = EnsembleSync::new(1);
+        assert!(!sync.should_sync(0));
+    }
+
+    /// Interval u64::MAX — should_sync at any iteration < u64::MAX returns false.
+    #[test]
+    fn interval_max_never_syncs_within_range() {
+        let sync = EnsembleSync::new(u64::MAX);
+        assert!(!sync.should_sync(1_000_000));
+    }
+
+    /// `pending_count()` is 0 after new(), increments after deposit.
+    #[test]
+    fn pending_count_increments_on_deposit() {
+        let sync = EnsembleSync::new(5);
+        assert_eq!(sync.pending_count(), 0);
+        sync.deposit(InputSeed::new(vec![1], SeedOrigin::Fuzzer));
+        assert_eq!(sync.pending_count(), 1);
+        sync.deposit(InputSeed::new(vec![2], SeedOrigin::Fuzzer));
+        assert_eq!(sync.pending_count(), 2);
+    }
+
+    /// `sync()` at an iteration before `interval` resets timer anyway and drains.
+    #[test]
+    fn sync_before_interval_still_drains() {
+        let sync = EnsembleSync::new(100);
+        sync.deposit(InputSeed::new(vec![0xCC], SeedOrigin::Fuzzer));
+        // Sync before interval fires.
+        let drained = sync.sync(3);
+        assert_eq!(drained.len(), 1);
+        assert_eq!(sync.pending_count(), 0);
+    }
+
+    /// `default()` creates a sync with interval=20 and empty buffer.
+    #[test]
+    fn default_interval_and_buffer() {
+        let sync = EnsembleSync::default();
+        assert_eq!(sync.interval, 20);
+        assert_eq!(sync.pending_count(), 0);
+    }
+
+    /// `should_sync()` with interval=1 at iteration=0 is false (0 < 0+1).
+    #[test]
+    fn should_sync_interval_one_at_zero_is_false() {
+        let sync = EnsembleSync::new(1);
+        // last_sync=0, interval=1 → 0 >= 0+1 is false.
+        assert!(!sync.should_sync(0));
+        // iteration=1 → 1 >= 0+1 is true.
+        assert!(sync.should_sync(1));
+    }
 }

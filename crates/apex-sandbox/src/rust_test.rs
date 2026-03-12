@@ -210,4 +210,65 @@ mod tests {
         let sb = RustTestSandbox::new(make_oracle(), Arc::new(fps), PathBuf::from("/root"));
         assert_eq!(sb.target_root, PathBuf::from("/root"));
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `snapshot()` error message contains sandbox name.
+    #[test]
+    fn snapshot_error_message_contains_name() {
+        let sb = RustTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/tmp"));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let err = rt.block_on(async {
+            use apex_core::traits::Sandbox;
+            sb.snapshot().await
+        });
+        let msg = format!("{}", err.unwrap_err());
+        assert!(msg.contains("RustTestSandbox"), "error: {msg}");
+    }
+
+    /// `restore()` error message contains sandbox name.
+    #[test]
+    fn restore_error_message_contains_name() {
+        let sb = RustTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/tmp"));
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let err = rt.block_on(async {
+            use apex_core::traits::Sandbox;
+            sb.restore(SnapshotId::new()).await
+        });
+        let msg = format!("{}", err.unwrap_err());
+        assert!(msg.contains("RustTestSandbox"), "error: {msg}");
+    }
+
+    /// `language()` is `Rust`.
+    #[test]
+    fn language_is_rust() {
+        use apex_core::traits::Sandbox;
+        let sb = RustTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/r"));
+        assert_eq!(sb.language(), apex_core::types::Language::Rust);
+    }
+
+    /// Two sandboxes created with different roots differ in `target_root`.
+    #[test]
+    fn different_roots_are_different() {
+        let sb1 = RustTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/a"));
+        let sb2 = RustTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/b"));
+        assert_ne!(sb1.target_root, sb2.target_root);
+    }
+
+    /// Oracle is shared via Arc — mutations on the original Arc are visible
+    /// through the sandbox's copy.
+    #[test]
+    fn oracle_arc_is_shared() {
+        let oracle = make_oracle();
+        let sb = RustTestSandbox::new(oracle.clone(), make_file_paths(), PathBuf::from("/r"));
+        let b = apex_core::types::BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b]);
+        assert_eq!(sb.oracle.total_count(), 1);
+    }
 }

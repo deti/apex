@@ -553,4 +553,213 @@ mod tests {
         assert_eq!(entry, cloned);
         let _ = format!("{:?}", entry);
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// Counter already at 255 — `fetch_update` callback returns `None` (saturated).
+    /// The counter should remain at 255.
+    #[test]
+    #[serial]
+    fn counter_already_saturated_stays_at_255() {
+        reset_all();
+        let mut guard: u32 = 3;
+        COUNTERS[3].store(255, Ordering::Relaxed);
+        unsafe {
+            __sanitizer_cov_trace_pc_guard(&mut guard as *mut u32);
+        }
+        assert_eq!(COUNTERS[3].load(Ordering::Relaxed), 255);
+    }
+
+    /// `read_bitmap()` reads a zero-length slice correctly (all counters are reset).
+    #[test]
+    #[serial]
+    fn read_bitmap_all_zeros_after_reset() {
+        reset_all();
+        let bitmap = read_bitmap();
+        assert!(bitmap.iter().all(|&b| b == 0));
+        assert_eq!(bitmap.len(), MAX_EDGES);
+    }
+
+    /// `reset_bitmap()` called when counters are already zero does nothing harmful.
+    #[test]
+    #[serial]
+    fn reset_bitmap_idempotent() {
+        reset_all();
+        reset_bitmap();
+        reset_bitmap();
+        let bitmap = read_bitmap();
+        assert!(bitmap.iter().all(|&b| b == 0));
+    }
+
+    /// `num_guards()` after `reset_all()` returns 0.
+    #[test]
+    #[serial]
+    fn num_guards_zero_after_reset() {
+        reset_all();
+        assert_eq!(num_guards(), 0);
+    }
+
+    /// `reset_cmp_log()` called when already empty stays empty.
+    #[test]
+    #[serial]
+    fn reset_cmp_log_idempotent() {
+        reset_all();
+        reset_cmp_log();
+        reset_cmp_log();
+        assert!(read_cmp_log().is_empty());
+    }
+
+    /// CMP log with exactly MAX_CMP_ENTRIES entries — `count.min(MAX_CMP_ENTRIES)` returns
+    /// `MAX_CMP_ENTRIES` when CMP_COUNT == MAX_CMP_ENTRIES.
+    #[test]
+    #[serial]
+    fn read_cmp_log_exactly_max_entries() {
+        reset_all();
+        for i in 0..MAX_CMP_ENTRIES {
+            unsafe {
+                __sanitizer_cov_trace_cmp4(i as u32, i as u32 + 1);
+            }
+        }
+        let log = read_cmp_log();
+        assert_eq!(log.len(), MAX_CMP_ENTRIES);
+    }
+
+    /// `trace_cmp8` produces size=8 entries with correct byte widths.
+    #[test]
+    #[serial]
+    fn trace_cmp8_size_and_byte_widths() {
+        reset_all();
+        unsafe {
+            __sanitizer_cov_trace_cmp8(0xABCD_EF01_2345_6789, 0x1122_3344_5566_7788);
+        }
+        let log = read_cmp_log();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].size, 8);
+        assert_eq!(log[0].arg1.len(), 8);
+        assert_eq!(log[0].arg2.len(), 8);
+    }
+
+    /// `trace_cmp2` produces size=2 entries.
+    #[test]
+    #[serial]
+    fn trace_cmp2_size_two() {
+        reset_all();
+        unsafe {
+            __sanitizer_cov_trace_cmp2(0xABCD, 0x1234);
+        }
+        let log = read_cmp_log();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].size, 2);
+        assert_eq!(log[0].arg1.len(), 2);
+        assert_eq!(log[0].arg2.len(), 2);
+    }
+
+    /// `trace_cmp1` produces size=1 entries.
+    #[test]
+    #[serial]
+    fn trace_cmp1_size_one() {
+        reset_all();
+        unsafe {
+            __sanitizer_cov_trace_cmp1(0xAB, 0xCD);
+        }
+        let log = read_cmp_log();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].size, 1);
+        assert_eq!(log[0].arg1.len(), 1);
+        assert_eq!(log[0].arg2.len(), 1);
+    }
+
+    /// Multiple cmp calls of different sizes interleaved.
+    #[test]
+    #[serial]
+    fn mixed_cmp_sizes_all_recorded() {
+        reset_all();
+        unsafe {
+            __sanitizer_cov_trace_cmp1(1, 2);
+            __sanitizer_cov_trace_cmp2(10, 20);
+            __sanitizer_cov_trace_cmp4(100, 200);
+            __sanitizer_cov_trace_cmp8(1000, 2000);
+        }
+        let log = read_cmp_log();
+        assert_eq!(log.len(), 4);
+        assert_eq!(log[0].size, 1);
+        assert_eq!(log[1].size, 2);
+        assert_eq!(log[2].size, 4);
+        assert_eq!(log[3].size, 8);
+    }
+
+    /// After calling `reset_cmp_log()`, CMP_COUNT is reset so that subsequent
+    /// reads correctly reflect new entries from index 0.
+    #[test]
+    #[serial]
+    fn reset_cmp_log_and_re_record() {
+        reset_all();
+        unsafe {
+            __sanitizer_cov_trace_cmp4(1, 2);
+            __sanitizer_cov_trace_cmp4(3, 4);
+        }
+        assert_eq!(read_cmp_log().len(), 2);
+        reset_cmp_log();
+        assert!(read_cmp_log().is_empty());
+        // Record again after reset.
+        unsafe {
+            __sanitizer_cov_trace_cmp4(5, 6);
+        }
+        let log = read_cmp_log();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].arg1, 5u32.to_le_bytes().to_vec());
+    }
+
+    /// `guard_init` assigns guards starting at the current `NUM_GUARDS` offset.
+    #[test]
+    #[serial]
+    fn guard_init_accumulates_across_calls() {
+        reset_all();
+        let mut g1 = [0u32; 2];
+        let mut g2 = [0u32; 3];
+        unsafe {
+            __sanitizer_cov_trace_pc_guard_init(g1.as_mut_ptr(), g1.as_mut_ptr().add(2));
+        }
+        // NUM_GUARDS should be 2 now.
+        assert_eq!(NUM_GUARDS.load(Ordering::SeqCst), 2);
+        unsafe {
+            __sanitizer_cov_trace_pc_guard_init(g2.as_mut_ptr(), g2.as_mut_ptr().add(3));
+        }
+        // After second call: NUM_GUARDS = 5.
+        assert_eq!(NUM_GUARDS.load(Ordering::SeqCst), 5);
+        // g2 guards should have IDs starting from 2.
+        assert_eq!(g2[0], 2);
+        assert_eq!(g2[1], 3);
+        assert_eq!(g2[2], 4);
+    }
+
+    /// `MAX_EDGES` constant is correct.
+    #[test]
+    fn max_edges_constant() {
+        assert_eq!(MAX_EDGES, 65536);
+    }
+
+    /// `MAX_CMP_ENTRIES` constant is correct.
+    #[test]
+    fn max_cmp_entries_constant() {
+        assert_eq!(MAX_CMP_ENTRIES, 4096);
+    }
+
+    /// `CmpLogEntry` inequality — two entries with different args are not equal.
+    #[test]
+    fn cmp_log_entry_inequality() {
+        let a = CmpLogEntry {
+            arg1: vec![1],
+            arg2: vec![2],
+            size: 1,
+        };
+        let b = CmpLogEntry {
+            arg1: vec![3],
+            arg2: vec![4],
+            size: 1,
+        };
+        assert_ne!(a, b);
+    }
 }

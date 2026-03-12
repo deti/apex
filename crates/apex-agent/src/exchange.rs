@@ -232,4 +232,80 @@ mod tests {
         assert_eq!(all.len(), 50);
         assert_eq!(ex.pending_for_concolic(), 0);
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `SeedExchange::default()` is equivalent to `SeedExchange::new()`.
+    #[test]
+    fn default_equiv_new() {
+        let ex1 = SeedExchange::new();
+        let ex2 = SeedExchange::default();
+        assert_eq!(ex1.pending_for_concolic(), ex2.pending_for_concolic());
+        assert_eq!(ex1.pending_for_fuzz(), ex2.pending_for_fuzz());
+    }
+
+    /// `deposit_for_concolic` with an empty seed (zero-byte data).
+    #[test]
+    fn deposit_for_concolic_empty_seed() {
+        let ex = SeedExchange::new();
+        ex.deposit_for_concolic(make_seed(&[]));
+        assert_eq!(ex.pending_for_concolic(), 1);
+        let seeds = ex.take_for_concolic();
+        assert_eq!(seeds.len(), 1);
+        assert!(seeds[0].data.is_empty());
+    }
+
+    /// `deposit_for_fuzz` with an empty seed.
+    #[test]
+    fn deposit_for_fuzz_empty_seed() {
+        let ex = SeedExchange::new();
+        ex.deposit_for_fuzz(make_seed(&[]));
+        assert_eq!(ex.pending_for_fuzz(), 1);
+        let seeds = ex.take_for_fuzz();
+        assert_eq!(seeds.len(), 1);
+        assert!(seeds[0].data.is_empty());
+    }
+
+    /// After `take_for_fuzz`, a subsequent `take_for_fuzz` returns empty.
+    #[test]
+    fn take_fuzz_twice_second_empty() {
+        let ex = SeedExchange::new();
+        ex.deposit_for_fuzz(make_seed(b"x"));
+        ex.take_for_fuzz();
+        let second = ex.take_for_fuzz();
+        assert!(second.is_empty());
+    }
+
+    /// Interleaved deposits and takes maintain correct per-queue counts.
+    #[test]
+    fn interleaved_deposits_and_takes() {
+        let ex = SeedExchange::new();
+        ex.deposit_for_concolic(make_seed(b"c1"));
+        ex.deposit_for_fuzz(make_seed(b"f1"));
+        ex.deposit_for_concolic(make_seed(b"c2"));
+
+        assert_eq!(ex.pending_for_concolic(), 2);
+        assert_eq!(ex.pending_for_fuzz(), 1);
+
+        let c = ex.take_for_concolic();
+        assert_eq!(c.len(), 2);
+        assert_eq!(ex.pending_for_concolic(), 0);
+        assert_eq!(ex.pending_for_fuzz(), 1); // fuzz queue unchanged
+
+        let f = ex.take_for_fuzz();
+        assert_eq!(f.len(), 1);
+        assert_eq!(ex.pending_for_fuzz(), 0);
+    }
+
+    /// Seed data is preserved correctly through the fuzz queue.
+    #[test]
+    fn seed_data_preserved_in_fuzz_queue() {
+        let ex = SeedExchange::new();
+        let data = b"fuzz-data-12345";
+        ex.deposit_for_fuzz(make_seed(data));
+        let seeds = ex.take_for_fuzz();
+        assert_eq!(seeds[0].data.as_ref(), data);
+    }
 }

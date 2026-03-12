@@ -279,4 +279,118 @@ mod tests {
         }
         assert_eq!(m.stall_count, 4);
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `growth_rate()` with window size 1: `window.len() < 2` → returns 0.0.
+    #[test]
+    fn growth_rate_with_one_sample_is_zero() {
+        let mut m = CoverageMonitor::new(1);
+        m.record(0, 42);
+        assert_eq!(m.growth_rate(), 0.0);
+    }
+
+    /// Window size 0: no entries ever held → window stays empty.
+    #[test]
+    fn window_size_zero_stays_empty() {
+        let mut m = CoverageMonitor::new(0);
+        // With window_size=0, every record immediately pops from the front.
+        m.record(0, 10);
+        assert_eq!(m.window.len(), 0);
+    }
+
+    /// Coverage decreases from one sample to the next → stall_count increments
+    /// (decrease is not > prev so `grew` is false).
+    #[test]
+    fn coverage_decrease_counts_as_stall() {
+        let mut m = CoverageMonitor::new(5);
+        m.record(0, 100);
+        m.record(1, 80); // decreased → grew=false → stall_count++
+        assert_eq!(m.stall_count, 1);
+    }
+
+    /// Coverage stays exactly the same → stall_count increments.
+    #[test]
+    fn coverage_same_counts_as_stall() {
+        let mut m = CoverageMonitor::new(5);
+        m.record(0, 50);
+        m.record(1, 50);
+        assert_eq!(m.stall_count, 1);
+    }
+
+    /// stall_count == 2*window_size - 1 → SwitchStrategy (still below boundary).
+    #[test]
+    fn action_just_below_agent_cycle_boundary() {
+        let window_size = 5;
+        let mut m = CoverageMonitor::new(window_size);
+        m.record(0, 10);
+        for i in 1..(2 * window_size) {
+            m.record(i as u64, 10);
+        }
+        // stall_count = 2*5-1 = 9 < 2*5=10 → SwitchStrategy
+        assert_eq!(m.stall_count, 9);
+        assert_eq!(m.action(), MonitorAction::SwitchStrategy);
+    }
+
+    /// stall_count == 4*window_size - 1 → AgentCycle (just below Stop).
+    #[test]
+    fn action_just_below_stop_boundary() {
+        let window_size = 3;
+        let mut m = CoverageMonitor::new(window_size);
+        m.record(0, 10);
+        for i in 1..(4 * window_size) {
+            m.record(i as u64, 10);
+        }
+        // stall_count = 4*3-1 = 11 < 4*3=12 → AgentCycle
+        assert_eq!(m.stall_count, 11);
+        assert_eq!(m.action(), MonitorAction::AgentCycle);
+    }
+
+    /// `growth_rate()` with 3 entries.
+    #[test]
+    fn growth_rate_three_entries() {
+        let mut m = CoverageMonitor::new(5);
+        m.record(0, 0);
+        m.record(1, 30);
+        m.record(2, 60);
+        // rate = (60 - 0) / 3 = 20.0
+        let rate = m.growth_rate();
+        assert!((rate - 20.0).abs() < 1e-9, "rate={rate}");
+    }
+
+    /// Window full: oldest entry is evicted and growth_rate reflects only window contents.
+    #[test]
+    fn growth_rate_after_window_eviction() {
+        let mut m = CoverageMonitor::new(3);
+        m.record(0, 0);   // evicted
+        m.record(1, 10);  // front after eviction
+        m.record(2, 20);
+        m.record(3, 30);  // back
+        // Window: [(1,10), (2,20), (3,30)] → rate = (30-10)/3 ≈ 6.67
+        let rate = m.growth_rate();
+        assert!(rate > 0.0, "rate={rate}");
+    }
+
+    /// All MonitorAction variants can be printed with Debug.
+    #[test]
+    fn monitor_action_debug_format() {
+        let variants = [
+            MonitorAction::Normal,
+            MonitorAction::SwitchStrategy,
+            MonitorAction::AgentCycle,
+            MonitorAction::Stop,
+        ];
+        for v in &variants {
+            let _ = format!("{v:?}");
+        }
+    }
+
+    /// `new(0)` then `action()` — stall_count is 0, so Normal.
+    #[test]
+    fn new_zero_window_action_is_normal() {
+        let m = CoverageMonitor::new(0);
+        assert_eq!(m.action(), MonitorAction::Normal);
+    }
 }

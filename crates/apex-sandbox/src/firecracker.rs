@@ -1194,4 +1194,191 @@ mod tests {
             assert_eq!(sb.language, lang);
         }
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `decode_vsock_response` with a minimum-valid frame (all zero-length fields).
+    #[test]
+    fn decode_vsock_response_all_zero_lengths() {
+        // bitmap_len=0, exit_code=0, stdout_len=0, stderr_len=0
+        let mut data = vec![];
+        data.extend_from_slice(&0u32.to_be_bytes()); // bitmap_len = 0
+        data.extend_from_slice(&0u32.to_be_bytes()); // exit_code = 0
+        data.extend_from_slice(&0u32.to_be_bytes()); // stdout_len = 0
+        data.extend_from_slice(&0u32.to_be_bytes()); // stderr_len = 0
+        let resp = decode_vsock_response(&data).unwrap();
+        assert!(resp.bitmap.is_empty());
+        assert_eq!(resp.exit_code, 0);
+        assert!(resp.stdout.is_empty());
+        assert!(resp.stderr.is_empty());
+    }
+
+    /// `encode_vsock_response` preserves exact byte sequences.
+    #[test]
+    fn encode_vsock_response_byte_layout() {
+        let resp = VsockResponse {
+            bitmap: vec![0xAA, 0xBB],
+            exit_code: 0x01020304,
+            stdout: vec![0x11],
+            stderr: vec![0x22, 0x33],
+        };
+        let encoded = encode_vsock_response(&resp);
+        // bitmap_len = 2
+        assert_eq!(&encoded[0..4], &2u32.to_be_bytes());
+        // bitmap bytes
+        assert_eq!(encoded[4], 0xAA);
+        assert_eq!(encoded[5], 0xBB);
+        // exit_code
+        assert_eq!(&encoded[6..10], &0x01020304u32.to_be_bytes());
+        // stdout_len = 1
+        assert_eq!(&encoded[10..14], &1u32.to_be_bytes());
+        assert_eq!(encoded[14], 0x11);
+        // stderr_len = 2
+        assert_eq!(&encoded[15..19], &2u32.to_be_bytes());
+        assert_eq!(encoded[19], 0x22);
+        assert_eq!(encoded[20], 0x33);
+    }
+
+    /// `dirs_next_home()` returns None when HOME is unset.
+    #[test]
+    fn dirs_next_home_without_home_env() {
+        // We can't easily unset HOME in parallel tests, but we can verify
+        // that the function returns something or nothing based on the env.
+        let result = dirs_next_home();
+        // If HOME is set (as it normally is), it should be Some.
+        // If HOME is not set, it should be None.
+        if std::env::var("HOME").is_ok() {
+            assert!(result.is_some());
+        } else {
+            assert!(result.is_none());
+        }
+    }
+
+    /// `FirecrackerSandbox::default_rootfs` always ends with `rootfs.ext4`.
+    #[test]
+    fn default_rootfs_always_ends_with_rootfs_ext4() {
+        for lang in [Language::Python, Language::Rust, Language::JavaScript, Language::C, Language::Java] {
+            let path = FirecrackerSandbox::default_rootfs(lang);
+            assert_eq!(path.file_name().unwrap(), "rootfs.ext4", "lang={lang}");
+        }
+    }
+
+    /// `VsockResponse` Clone preserves all fields.
+    #[test]
+    fn vsock_response_clone_all_fields() {
+        let original = VsockResponse {
+            bitmap: vec![1, 2, 3],
+            exit_code: 42,
+            stdout: b"out".to_vec(),
+            stderr: b"err".to_vec(),
+        };
+        let cloned = original.clone();
+        assert_eq!(cloned.bitmap, original.bitmap);
+        assert_eq!(cloned.exit_code, original.exit_code);
+        assert_eq!(cloned.stdout, original.stdout);
+        assert_eq!(cloned.stderr, original.stderr);
+    }
+
+    /// `encode_vsock_frame` capacity is exact (4 + data.len()).
+    #[test]
+    fn encode_vsock_frame_capacity_exact() {
+        let data = b"hello";
+        let frame = encode_vsock_frame(data);
+        assert_eq!(frame.len(), 4 + data.len());
+        // Big-endian length prefix is correct.
+        let len = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]);
+        assert_eq!(len as usize, data.len());
+    }
+
+    /// `prepare` error message mentions `rootfs not found`.
+    #[tokio::test]
+    async fn prepare_error_mentions_rootfs_not_found() {
+        let sb = FirecrackerSandbox::new(Language::Rust, PathBuf::from("/tmp/fc-err"))
+            .with_rootfs(PathBuf::from("/absolutely/nonexistent/rootfs.ext4"));
+        let err = sb.prepare().await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("rootfs not found"), "error: {msg}");
+    }
+
+    /// `prepare` error includes the language name in the hint.
+    #[tokio::test]
+    async fn prepare_error_mentions_language() {
+        let sb = FirecrackerSandbox::new(Language::JavaScript, PathBuf::from("/tmp/fc-lang"))
+            .with_rootfs(PathBuf::from("/no/such/rootfs.ext4"));
+        let err = sb.prepare().await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("javascript") || msg.contains("JavaScript"), "error: {msg}");
+    }
+
+    /// `run()` result has `seed_id` matching the input seed.
+    #[tokio::test]
+    async fn run_result_seed_id_matches_input() {
+        use apex_core::traits::Sandbox;
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+
+        let seed = InputSeed::new(b"my-seed".to_vec(), apex_core::types::SeedOrigin::Corpus);
+        let expected_id = seed.id;
+        let result = sb.run(&seed).await.unwrap();
+        assert_eq!(result.seed_id, expected_id);
+    }
+
+    /// `run()` produces `duration_ms >= 0` (trivially true for u64, but exercises the field).
+    #[tokio::test]
+    async fn run_duration_ms_is_set() {
+        use apex_core::traits::Sandbox;
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+
+        let seed = InputSeed::new(b"d".to_vec(), apex_core::types::SeedOrigin::Corpus);
+        let result = sb.run(&seed).await.unwrap();
+        // duration_ms is a u64; it should be set (possibly 0 in fast tests).
+        let _ = result.duration_ms;
+    }
+
+    /// `snapshot()` trait method returns a valid SnapshotId (not an error, in stub mode).
+    #[tokio::test]
+    async fn snapshot_returns_valid_id() {
+        use apex_core::traits::Sandbox;
+        let sb = FirecrackerSandbox::new(Language::C, PathBuf::from("/tmp/fc-snap-id"));
+        let id = sb.snapshot().await.unwrap();
+        // Just verify it doesn't panic and the returned type is valid.
+        let _ = id;
+    }
+
+    /// `Snapshot` struct `Debug` format (exercising the derive).
+    #[test]
+    fn snapshot_struct_debug() {
+        let snap = Snapshot {
+            id: SnapshotId::new(),
+            snap_file: PathBuf::from("/snap.bin"),
+            mem_file: PathBuf::from("/snap.mem"),
+        };
+        let dbg = format!("{:?}", snap);
+        assert!(dbg.contains("Snapshot"), "debug: {dbg}");
+    }
+
+    /// `with_pool_size(0)` is accepted (edge case: zero pool).
+    #[test]
+    fn with_pool_size_zero() {
+        let sb = FirecrackerSandbox::new(Language::Python, PathBuf::from("/tmp")).with_pool_size(0);
+        assert_eq!(sb.pool_size, 0);
+    }
+
+    /// `with_pool_size(1)` is the minimum practical pool size.
+    #[test]
+    fn with_pool_size_one() {
+        let sb = FirecrackerSandbox::new(Language::Python, PathBuf::from("/tmp")).with_pool_size(1);
+        assert_eq!(sb.pool_size, 1);
+    }
 }

@@ -771,4 +771,185 @@ mod tests {
         assert_eq!(sb.timeout_ms, 10_000);
         assert!(sb.oracle.is_none());
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `build_spec` with no shim and no shm_name: neither env var is injected.
+    #[test]
+    fn build_spec_no_shim_no_shm_no_env() {
+        let mock = MockCmdRunner::new();
+        let sb = ProcessSandbox::with_runner(
+            Language::Python,
+            PathBuf::from("/tmp"),
+            vec!["python3".into(), "test.py".into()],
+            mock,
+        );
+        let input = make_input(b"hello");
+        let spec = sb.build_spec(&input, None).unwrap();
+        // No SHM or shim env vars should be present.
+        let has_shm = spec.env.iter().any(|(k, _)| k == SHM_ENV_VAR);
+        let has_preload = spec.env.iter().any(|(k, _)| {
+            k == "LD_PRELOAD" || k == "DYLD_INSERT_LIBRARIES"
+        });
+        assert!(!has_shm);
+        assert!(!has_preload);
+    }
+
+    /// `build_spec` with both shim and shm_name: both env vars injected.
+    #[test]
+    fn build_spec_with_shim_and_shm() {
+        let mock = MockCmdRunner::new();
+        let sb = ProcessSandbox::with_runner(
+            Language::C,
+            PathBuf::from("/tmp"),
+            vec!["./target".into()],
+            mock,
+        )
+        .with_shim(PathBuf::from("/lib/libapex.so"));
+
+        let input = make_input(b"data");
+        let spec = sb.build_spec(&input, Some("/apx_deadbeef")).unwrap();
+
+        let preload_var = crate::shim::preload_env_var();
+        let has_shim = spec.env.iter().any(|(k, v)| k == preload_var && v == "/lib/libapex.so");
+        let has_shm = spec.env.iter().any(|(k, v)| k == SHM_ENV_VAR && v == "/apx_deadbeef");
+        assert!(has_shim, "shim env var missing: {:?}", spec.env);
+        assert!(has_shm, "shm env var missing: {:?}", spec.env);
+    }
+
+    /// `language()` with each supported language.
+    #[test]
+    fn language_all_variants() {
+        use apex_core::traits::Sandbox;
+        for (lang, name) in [
+            (Language::Python, "python"),
+            (Language::Rust, "rust"),
+            (Language::C, "c"),
+            (Language::Java, "java"),
+            (Language::JavaScript, "javascript"),
+        ] {
+            let sb = ProcessSandbox::new(lang, PathBuf::from("/tmp"), vec!["cmd".into()]);
+            assert_eq!(sb.language(), lang, "language mismatch for {name}");
+        }
+    }
+
+    /// `with_coverage` enables coverage feedback (oracle set, branch_index populated).
+    #[test]
+    fn with_coverage_oracle_present() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        let index = vec![b.clone()];
+        let mock = MockCmdRunner::new();
+        let sb = ProcessSandbox::with_runner(
+            Language::Rust,
+            PathBuf::from("/tmp"),
+            vec!["./target".into()],
+            mock,
+        )
+        .with_coverage(oracle, index);
+
+        assert!(sb.oracle.is_some());
+        assert_eq!(sb.branch_index.len(), 1);
+        assert_eq!(sb.branch_index[0], b);
+    }
+
+    /// `bitmap_to_new_branches` with oracle set but empty branch_index always empty.
+    #[test]
+    fn bitmap_to_new_branches_oracle_but_empty_index() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let mock = MockCmdRunner::new();
+        let sb = ProcessSandbox::with_runner(
+            Language::C,
+            PathBuf::from("/tmp"),
+            vec!["./a.out".into()],
+            mock,
+        )
+        .with_coverage(oracle, vec![]); // empty branch_index
+
+        let bitmap = vec![1u8; 8];
+        let result = sb.bitmap_to_new_branches(&bitmap);
+        assert!(result.is_empty());
+    }
+
+    /// `run()` with exit code 2 (positive, non-zero, non-negative) → Fail.
+    #[tokio::test]
+    async fn run_positive_exit_code_two_is_fail() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_spec| {
+            Ok(apex_core::command::CommandOutput {
+                exit_code: 2,
+                stdout: Vec::new(),
+                stderr: b"error".to_vec(),
+            })
+        });
+
+        let sb = ProcessSandbox::with_runner(
+            Language::Python,
+            PathBuf::from("/tmp"),
+            vec!["python3".into()],
+            mock,
+        );
+
+        let input = make_input(b"test");
+        let result = sb.run(&input).await.unwrap();
+        assert_eq!(result.status, ExecutionStatus::Fail);
+    }
+
+    /// `run()` with exit code -1 → Crash (negative exit code arm).
+    #[tokio::test]
+    async fn run_minus_one_exit_is_crash() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_spec| {
+            Ok(apex_core::command::CommandOutput {
+                exit_code: -1,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        });
+
+        let sb = ProcessSandbox::with_runner(
+            Language::C,
+            PathBuf::from("/tmp"),
+            vec!["./a.out".into()],
+            mock,
+        );
+
+        let input = make_input(b"crash");
+        let result = sb.run(&input).await.unwrap();
+        assert_eq!(result.status, ExecutionStatus::Crash);
+    }
+
+    /// `snapshot()` error variant is `NotSupported`.
+    #[tokio::test]
+    async fn snapshot_is_not_supported_variant() {
+        use apex_core::traits::Sandbox;
+        let mock = MockCmdRunner::new();
+        let sb = ProcessSandbox::with_runner(
+            Language::Python,
+            PathBuf::from("/tmp"),
+            vec!["python3".into()],
+            mock,
+        );
+        let err = sb.snapshot().await.unwrap_err();
+        assert!(matches!(err, ApexError::NotSupported(_)));
+    }
+
+    /// `restore()` error variant is `NotSupported`.
+    #[tokio::test]
+    async fn restore_is_not_supported_variant() {
+        use apex_core::traits::Sandbox;
+        use apex_core::types::SnapshotId;
+        let mock = MockCmdRunner::new();
+        let sb = ProcessSandbox::with_runner(
+            Language::Python,
+            PathBuf::from("/tmp"),
+            vec!["python3".into()],
+            mock,
+        );
+        let err = sb.restore(SnapshotId::new()).await.unwrap_err();
+        assert!(matches!(err, ApexError::NotSupported(_)));
+    }
 }

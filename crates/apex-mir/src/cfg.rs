@@ -456,4 +456,140 @@ mod tests {
         assert!(f.successors(3).is_empty()); // Unreachable
         assert!(f.successors(4).is_empty()); // Abort
     }
+
+    // ------------------------------------------------------------------
+    // Additional gap-filling tests — debug, clone paths
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn debug_all_terminators() {
+        let terminators = vec![
+            Terminator::Return,
+            Terminator::Unreachable,
+            Terminator::Abort,
+            Terminator::Goto { target: 1 },
+            Terminator::SwitchInt { discriminant: "_x".into(), targets: vec![], otherwise: 0 },
+            Terminator::Call { func: "f".into(), destination: Some(1), cleanup: Some(2) },
+            Terminator::Call { func: "g".into(), destination: None, cleanup: None },
+            Terminator::Drop { target: 1, unwind: Some(2) },
+            Terminator::Drop { target: 1, unwind: None },
+        ];
+        for t in &terminators {
+            let d = format!("{:?}", t);
+            assert!(!d.is_empty());
+        }
+    }
+
+    #[test]
+    fn debug_all_statements() {
+        let stmts: Vec<Statement> = vec![
+            Statement::Nop,
+            Statement::StorageLive("_1".into()),
+            Statement::StorageDead("_2".into()),
+            Statement::Assign { place: "_0".into(), rvalue: "val".into() },
+        ];
+        for s in &stmts {
+            let d = format!("{:?}", s);
+            assert!(!d.is_empty());
+        }
+    }
+
+    #[test]
+    fn clone_all_terminators() {
+        let terminators = vec![
+            Terminator::Return,
+            Terminator::Unreachable,
+            Terminator::Abort,
+            Terminator::Goto { target: 1 },
+            Terminator::SwitchInt { discriminant: "_x".into(), targets: vec![(0, 1)], otherwise: 2 },
+            Terminator::Call { func: "f".into(), destination: Some(1), cleanup: Some(2) },
+            Terminator::Call { func: "g".into(), destination: None, cleanup: None },
+            Terminator::Drop { target: 1, unwind: Some(2) },
+            Terminator::Drop { target: 1, unwind: None },
+        ];
+        for t in &terminators {
+            let c = t.clone();
+            assert_eq!(t.successors(), c.successors());
+        }
+    }
+
+    #[test]
+    fn clone_all_statements() {
+        let stmts: Vec<Statement> = vec![
+            Statement::Nop,
+            Statement::StorageLive("_1".into()),
+            Statement::StorageDead("_2".into()),
+            Statement::Assign { place: "_0".into(), rvalue: "val".into() },
+        ];
+        for s in &stmts {
+            let _ = s.clone();
+        }
+    }
+
+    #[test]
+    fn mir_function_clone() {
+        let mut f = MirFunction::new("cloneable");
+        f.add_block(vec![Statement::Nop], Terminator::Return);
+        let f2 = f.clone();
+        assert_eq!(f2.name, f.name);
+        assert_eq!(f2.block_count(), f.block_count());
+    }
+
+    #[test]
+    fn basic_block_clone_and_debug() {
+        let bb = BasicBlock {
+            id: 42,
+            statements: vec![Statement::Nop],
+            terminator: Terminator::Return,
+        };
+        let bb2 = bb.clone();
+        assert_eq!(bb2.id, 42);
+        let d = format!("{:?}", bb);
+        assert!(d.contains("BasicBlock"));
+    }
+
+    #[test]
+    fn mir_function_debug() {
+        let mut f = MirFunction::new("debug_test");
+        f.add_block(vec![], Terminator::Return);
+        let d = format!("{:?}", f);
+        assert!(d.contains("MirFunction"));
+        assert!(d.contains("debug_test"));
+    }
+
+    #[test]
+    fn switch_int_with_large_discriminant_values() {
+        let t = Terminator::SwitchInt {
+            discriminant: "_disc".into(),
+            targets: vec![(i128::MAX, 1), (i128::MIN, 2), (0, 3)],
+            otherwise: 4,
+        };
+        let succs = t.successors();
+        assert_eq!(succs.len(), 4);
+        // Clone round-trip
+        let t2 = t.clone();
+        assert_eq!(t.successors(), t2.successors());
+    }
+
+    #[test]
+    fn branch_count_all_terminator_types() {
+        let mut f = MirFunction::new("all_types");
+        f.add_block(vec![], Terminator::Return);          // 0
+        f.add_block(vec![], Terminator::Unreachable);     // 0
+        f.add_block(vec![], Terminator::Abort);           // 0
+        f.add_block(vec![], Terminator::Goto { target: 0 }); // 1
+        f.add_block(vec![], Terminator::SwitchInt {       // 3
+            discriminant: "_0".into(),
+            targets: vec![(0, 0), (1, 0)],
+            otherwise: 0,
+        });
+        f.add_block(vec![], Terminator::Drop { target: 0, unwind: Some(0) }); // 2
+        f.add_block(vec![], Terminator::Drop { target: 0, unwind: None }); // 1
+        f.add_block(vec![], Terminator::Call { func: "f".into(), destination: Some(0), cleanup: Some(0) }); // 2
+        f.add_block(vec![], Terminator::Call { func: "f".into(), destination: Some(0), cleanup: None }); // 1
+        f.add_block(vec![], Terminator::Call { func: "f".into(), destination: None, cleanup: Some(0) }); // 1
+        f.add_block(vec![], Terminator::Call { func: "f".into(), destination: None, cleanup: None }); // 0
+        // Total: 0+0+0+1+3+2+1+2+1+1+0 = 11
+        assert_eq!(f.branch_count(), 11);
+    }
 }

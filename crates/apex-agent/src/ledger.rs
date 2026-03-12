@@ -471,4 +471,155 @@ mod tests {
         assert!(ledger.record(r2));
         assert_eq!(ledger.count(), 2);
     }
+
+    // ------------------------------------------------------------------
+    // Additional extract_location / BugLedger branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// Multi-line text with Python location not on the first line.
+    #[test]
+    fn extract_location_python_location_on_later_line() {
+        let stderr = "Traceback (most recent call last):\n  File \"module.py\", line 99, in do_thing\n    crash()";
+        let loc = extract_location(stderr);
+        assert_eq!(loc.as_deref(), Some("module.py:99"));
+    }
+
+    /// Rust location with column after line number (path:line:col → path:line).
+    #[test]
+    fn extract_location_rust_with_column() {
+        let loc = extract_location("thread 'main' panicked at 'index out of bounds', src/lib.rs:55:12");
+        assert_eq!(loc.as_deref(), Some("src/lib.rs:55"));
+    }
+
+    /// Location with forward-slash path but no dot (slash qualifies as separator).
+    #[test]
+    fn extract_location_slash_path_no_ext() {
+        // "/usr/bin/prog:10" — before="/usr/bin/prog" contains '/' so qualifies.
+        let loc = extract_location("/usr/bin/prog:10");
+        assert_eq!(loc.as_deref(), Some("/usr/bin/prog:10"));
+    }
+
+    /// `extract_location` with only whitespace → None.
+    #[test]
+    fn extract_location_whitespace_only() {
+        let loc = extract_location("   \n\t  ");
+        assert_eq!(loc, None);
+    }
+
+    /// Token `"foo.rs:abc"` — after the colon is non-digit → skip token.
+    #[test]
+    fn extract_location_token_digits_absent_after_colon() {
+        let loc = extract_location("see foo.rs:abc for details");
+        assert_eq!(loc, None);
+    }
+
+    /// `before` has length exactly 1 with a dot — `before.len() > 1` is false → skip.
+    #[test]
+    fn extract_location_before_has_len_one_with_dot_skipped() {
+        // "a.rs:10" splits at first colon to get before="a.rs", not "a".
+        // Actually the token is "a.rs:10", colon_pos=4 → before="a.rs" len=4 > 1 → OK.
+        // To get before.len()=1 we need "a:10" → before="a" len=1 → skip.
+        let loc = extract_location("error at a:10");
+        // before="a", no '.' or '/' → skip entirely.
+        assert_eq!(loc, None);
+    }
+
+    /// Multiple tokens in one line — first valid token is returned.
+    #[test]
+    fn extract_location_first_valid_token_returned() {
+        // Both "src/a.rs:10" and "src/b.rs:20" could match; first one wins.
+        let loc = extract_location("see src/a.rs:10 and src/b.rs:20");
+        assert_eq!(loc.as_deref(), Some("src/a.rs:10"));
+    }
+
+    /// OomKill status recorded with correct class.
+    #[test]
+    fn record_from_result_oomkill_class() {
+        let ledger = BugLedger::new();
+        let r = make_result(ExecutionStatus::OomKill, "killed by oom killer");
+        assert!(ledger.record_from_result(&r, 0));
+        assert_eq!(ledger.reports()[0].class, BugClass::OomKill);
+    }
+
+    /// `record_from_result` with Crash sets message from stderr.
+    #[test]
+    fn record_from_result_crash_message_from_stderr() {
+        let ledger = BugLedger::new();
+        let r = make_result(ExecutionStatus::Crash, "segmentation fault at src/main.rs:10");
+        ledger.record_from_result(&r, 0);
+        let reports = ledger.reports();
+        assert!(reports[0].message.contains("segmentation fault"));
+    }
+
+    /// `BugReport::dedup_key()` is consistent across multiple calls.
+    #[test]
+    fn dedup_key_is_consistent() {
+        let report = BugReport::new(BugClass::Crash, SeedId::new(), "boom".into());
+        let key1 = report.dedup_key();
+        let key2 = report.dedup_key();
+        assert_eq!(key1, key2);
+    }
+
+    /// Ledger `record()` returns false for an exact duplicate.
+    #[test]
+    fn record_duplicate_returns_false() {
+        let ledger = BugLedger::new();
+        let report = BugReport::new(BugClass::Crash, SeedId::new(), "dup".into());
+        assert!(ledger.record(report.clone()));
+        assert!(!ledger.record(report));
+        assert_eq!(ledger.count(), 1);
+    }
+
+    /// `summary()` on empty ledger has total=0.
+    #[test]
+    fn summary_empty_ledger() {
+        let ledger = BugLedger::new();
+        let s = ledger.summary();
+        assert_eq!(s.total, 0);
+        assert!(s.by_class.is_empty());
+    }
+
+    /// `extract_location` with Windows-style path (backslashes) — may not match
+    /// the '/' or '.' requirement, so returns None or the path.
+    #[test]
+    fn extract_location_with_colon_and_dot_extension() {
+        // "module.py:5" should be found.
+        let loc = extract_location("File module.py:5 caused error");
+        assert_eq!(loc.as_deref(), Some("module.py:5"));
+    }
+
+    /// `extract_location` Python pattern with large line number.
+    #[test]
+    fn extract_location_python_large_line_number() {
+        let loc = extract_location("  File \"src/bigfile.py\", line 9999, in handler\n    raise");
+        assert_eq!(loc.as_deref(), Some("src/bigfile.py:9999"));
+    }
+
+    /// `extract_location` with JS-style "at" prefix but parenthesized token.
+    #[test]
+    fn extract_location_js_at_parenthesized() {
+        let loc = extract_location("    at module.method (lib/util.js:77:3)");
+        assert_eq!(loc.as_deref(), Some("lib/util.js:77"));
+    }
+
+    /// `BugClass::from_status` for Pass → None (exercises the None branch).
+    #[test]
+    fn bug_class_from_status_pass_is_none() {
+        let c = apex_core::types::BugClass::from_status(ExecutionStatus::Pass);
+        assert!(c.is_none());
+    }
+
+    /// `BugClass::from_status` for Crash → Some(Crash).
+    #[test]
+    fn bug_class_from_status_crash_is_some() {
+        let c = apex_core::types::BugClass::from_status(ExecutionStatus::Crash);
+        assert_eq!(c, Some(BugClass::Crash));
+    }
+
+    /// `BugClass::from_status` for Timeout → Some(Timeout).
+    #[test]
+    fn bug_class_from_status_timeout_is_some() {
+        let c = apex_core::types::BugClass::from_status(ExecutionStatus::Timeout);
+        assert_eq!(c, Some(BugClass::Timeout));
+    }
 }

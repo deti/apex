@@ -466,4 +466,195 @@ mod tests {
 
         assert_eq!(branches.len(), 3);
     }
+
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests
+    // ------------------------------------------------------------------
+
+    /// `fnv1a_hash` determinism and the empty-string offset-basis.
+    #[test]
+    fn fnv1a_hash_empty_returns_offset_basis() {
+        assert_eq!(fnv1a_hash(""), 0xcbf2_9ce4_8422_2325);
+    }
+
+    /// `fnv1a_hash` produces distinct values for different inputs.
+    #[test]
+    fn fnv1a_hash_distinct_paths() {
+        let paths = ["src/a.py", "src/b.py", "lib/util.py"];
+        let hashes: std::collections::HashSet<u64> = paths.iter().map(|p| fnv1a_hash(p)).collect();
+        assert_eq!(hashes.len(), paths.len());
+    }
+
+    /// `with_timeout` builder — already tested, but also verify it chains.
+    #[test]
+    fn with_timeout_chains() {
+        let sb = PythonTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/p"))
+            .with_timeout(1_000)
+            .with_timeout(2_000); // second call wins
+        assert_eq!(sb.timeout_ms, 2_000);
+    }
+
+    /// `executed_branches_from_json` with `pair[1] >= 0` → direction 0.
+    /// `executed_branches_from_json` with `pair[1] < 0` → direction 1.
+    /// Both arms of the ternary are exercised.
+    #[test]
+    fn executed_branches_direction_both_arms() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("d.json");
+
+        let json = r#"{
+  "files": {
+    "/x/a.py": {
+      "executed_branches": [[10, 0], [20, -5]],
+      "missing_branches": [],
+      "all_branches": []
+    }
+  }
+}"#;
+        std::fs::write(&json_path, json).unwrap();
+
+        let sb = PythonTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/x"));
+        let branches = sb.executed_branches_from_json(&json_path).unwrap();
+        assert_eq!(branches.len(), 2);
+        // [10, 0]  → pair[1] == 0 >= 0  → direction 0
+        assert_eq!(branches[0].direction, 0);
+        // [20, -5] → pair[1] < 0        → direction 1
+        assert_eq!(branches[1].direction, 1);
+    }
+
+    /// `executed_branches_from_json` with `pair[1] > 0` (positive, not zero) → direction 0.
+    #[test]
+    fn executed_branches_positive_to_line_direction_zero() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("e.json");
+
+        let json = r#"{
+  "files": {
+    "/x/b.py": {
+      "executed_branches": [[5, 99]],
+      "missing_branches": [],
+      "all_branches": []
+    }
+  }
+}"#;
+        std::fs::write(&json_path, json).unwrap();
+
+        let sb = PythonTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/x"));
+        let branches = sb.executed_branches_from_json(&json_path).unwrap();
+        assert_eq!(branches.len(), 1);
+        // pair[1] = 99 >= 0 → direction = 0
+        assert_eq!(branches[0].direction, 0);
+        assert_eq!(branches[0].line, 5);
+    }
+
+    /// `executed_branches_from_json` with a negative `pair[0]`
+    /// → `unsigned_abs()` produces a positive line number.
+    #[test]
+    fn executed_branches_negative_from_line_uses_unsigned_abs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("f.json");
+
+        let json = r#"{
+  "files": {
+    "/x/c.py": {
+      "executed_branches": [[-7, 0]],
+      "missing_branches": [],
+      "all_branches": []
+    }
+  }
+}"#;
+        std::fs::write(&json_path, json).unwrap();
+
+        let sb = PythonTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/x"));
+        let branches = sb.executed_branches_from_json(&json_path).unwrap();
+        assert_eq!(branches.len(), 1);
+        // pair[0] = -7 → unsigned_abs() = 7 as u32
+        assert_eq!(branches[0].line, 7);
+    }
+
+    /// `snapshot()` error message contains the sandbox name.
+    #[tokio::test]
+    async fn snapshot_error_message() {
+        use apex_core::traits::Sandbox;
+        let sb = PythonTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/p"));
+        let err = sb.snapshot().await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("PythonTestSandbox"), "error: {msg}");
+    }
+
+    /// `restore()` error message contains the sandbox name.
+    #[tokio::test]
+    async fn restore_error_message() {
+        use apex_core::traits::Sandbox;
+        let sb = PythonTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/p"));
+        let err = sb.restore(SnapshotId::new()).await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("PythonTestSandbox"), "error: {msg}");
+    }
+
+    /// `executed_branches_from_json` with an empty executed_branches list → no branches.
+    #[test]
+    fn executed_branches_from_json_empty_executed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("g.json");
+
+        let json = r#"{
+  "files": {
+    "/x/d.py": {
+      "executed_branches": [],
+      "missing_branches": [[1, 2]],
+      "all_branches": [[1, 2]]
+    }
+  }
+}"#;
+        std::fs::write(&json_path, json).unwrap();
+
+        let sb = PythonTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/x"));
+        let branches = sb.executed_branches_from_json(&json_path).unwrap();
+        assert!(branches.is_empty());
+    }
+
+    /// `strip_prefix` succeeds: relative path used for file_id hash.
+    /// `strip_prefix` fails: absolute path used as fallback.
+    #[test]
+    fn executed_branches_strip_prefix_vs_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target_dir = tmp.path().to_path_buf();
+        let json_path = tmp.path().join("h.json");
+
+        let abs_inside = format!("{}/src/mod.py", target_dir.display());
+        let abs_outside = "/other/root/foo.py";
+
+        let json = format!(
+            r#"{{
+  "files": {{
+    "{abs_inside}": {{
+      "executed_branches": [[1, 0]],
+      "missing_branches": [],
+      "all_branches": []
+    }},
+    "{abs_outside}": {{
+      "executed_branches": [[2, 0]],
+      "missing_branches": [],
+      "all_branches": []
+    }}
+  }}
+}}"#
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let sb = PythonTestSandbox::new(make_oracle(), make_file_paths(), target_dir.clone());
+        let branches = sb.executed_branches_from_json(&json_path).unwrap();
+        assert_eq!(branches.len(), 2);
+
+        // The branch from abs_inside should use the relative path "src/mod.py".
+        let expected_inside = fnv1a_hash("src/mod.py");
+        // The branch from abs_outside uses the full absolute path.
+        let expected_outside = fnv1a_hash(abs_outside);
+
+        let file_ids: std::collections::HashSet<u64> =
+            branches.iter().map(|b| b.file_id).collect();
+        assert!(file_ids.contains(&expected_inside), "expected inside fid");
+        assert!(file_ids.contains(&expected_outside), "expected outside fid");
+    }
 }
