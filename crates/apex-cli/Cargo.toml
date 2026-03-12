@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 description = "CLI binary for APEX — autonomous path exploration tool"
 
+[lib]
+name = "apex_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "apex"
 path = "src/main.rs"
