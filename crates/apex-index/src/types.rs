@@ -343,6 +343,213 @@ mod tests {
     }
 
     #[test]
+    fn dead_branches_returns_zero_hit_profiles() {
+        let mut profiles = HashMap::new();
+        // Insert a profile with hit_count == 0 (dead)
+        let dead_branch = make_branch(1, 30, 0);
+        let dead_key = branch_key(&dead_branch);
+        profiles.insert(
+            dead_key.clone(),
+            BranchProfile {
+                branch: dead_branch,
+                hit_count: 0,
+                test_count: 0,
+                test_names: vec![],
+            },
+        );
+        // Insert a profile with hit_count > 0 (alive)
+        let live_branch = make_branch(1, 40, 0);
+        let live_key = branch_key(&live_branch);
+        profiles.insert(
+            live_key,
+            BranchProfile {
+                branch: live_branch,
+                hit_count: 3,
+                test_count: 2,
+                test_names: vec!["t1".into(), "t2".into()],
+            },
+        );
+
+        let index = BranchIndex {
+            traces: vec![],
+            profiles,
+            file_paths: HashMap::new(),
+            total_branches: 2,
+            covered_branches: 1,
+            created_at: String::new(),
+            language: Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+
+        let dead = index.dead_branches();
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].hit_count, 0);
+        assert_eq!(branch_key(&dead[0].branch), dead_key);
+    }
+
+    #[test]
+    fn dead_branches_empty_when_all_hit() {
+        let traces = vec![TestTrace {
+            test_name: "t1".into(),
+            branches: vec![make_branch(1, 10, 0)],
+            duration_ms: 10,
+            status: ExecutionStatus::Pass,
+        }];
+        let index = BranchIndex {
+            traces: traces.clone(),
+            profiles: BranchIndex::build_profiles(&traces),
+            file_paths: HashMap::new(),
+            total_branches: 1,
+            covered_branches: 1,
+            created_at: String::new(),
+            language: Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+
+        assert!(index.dead_branches().is_empty());
+    }
+
+    #[test]
+    fn load_nonexistent_file_returns_error() {
+        let result = BranchIndex::load(Path::new("/nonexistent/path/index.json"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_invalid_json_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bad.json");
+        std::fs::write(&path, "not valid json {{{").unwrap();
+
+        let result = BranchIndex::load(&path);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn save_creates_parent_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("a/b/c/index.json");
+
+        let index = BranchIndex {
+            traces: vec![],
+            profiles: HashMap::new(),
+            file_paths: HashMap::new(),
+            total_branches: 0,
+            covered_branches: 0,
+            created_at: String::new(),
+            language: Language::Rust,
+            target_root: PathBuf::new(),
+            source_hash: "deadbeef".into(),
+        };
+
+        index.save(&path).unwrap();
+        assert!(path.exists());
+
+        let loaded = BranchIndex::load(&path).unwrap();
+        assert_eq!(loaded.source_hash, "deadbeef");
+        assert!(matches!(loaded.language, Language::Rust));
+    }
+
+    #[test]
+    fn branch_key_includes_condition_index() {
+        let mut b = make_branch(1, 10, 0);
+        b.condition_index = Some(3);
+        let key = branch_key(&b);
+        assert!(key.ends_with(":3"), "expected condition_index in key, got: {key}");
+
+        // Without condition_index, should end with :255
+        let b2 = make_branch(1, 10, 0);
+        let key2 = branch_key(&b2);
+        assert!(key2.ends_with(":255"), "expected 255 sentinel, got: {key2}");
+    }
+
+    #[test]
+    fn hash_source_files_deterministic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("hello.py");
+        std::fs::write(&src, "print('hello')").unwrap();
+
+        let h1 = hash_source_files(tmp.path(), Language::Python);
+        let h2 = hash_source_files(tmp.path(), Language::Python);
+        assert_eq!(h1, h2);
+        assert!(!h1.is_empty());
+    }
+
+    #[test]
+    fn hash_source_files_changes_with_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("lib.py");
+        std::fs::write(&src, "x = 1").unwrap();
+        let h1 = hash_source_files(tmp.path(), Language::Python);
+
+        std::fs::write(&src, "x = 2").unwrap();
+        let h2 = hash_source_files(tmp.path(), Language::Python);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn hash_source_files_ignores_wrong_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("data.txt"), "not python").unwrap();
+
+        let h = hash_source_files(tmp.path(), Language::Python);
+        // With no matching files, should still produce a hash (empty digest)
+        assert!(!h.is_empty());
+
+        // Now add a .py file and confirm it changes
+        std::fs::write(tmp.path().join("main.py"), "pass").unwrap();
+        let h2 = hash_source_files(tmp.path(), Language::Python);
+        assert_ne!(h, h2);
+    }
+
+    #[test]
+    fn hash_source_files_skips_hidden_and_special_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Only this top-level file should be hashed
+        std::fs::write(tmp.path().join("main.py"), "print(1)").unwrap();
+        let h_baseline = hash_source_files(tmp.path(), Language::Python);
+
+        // Adding files in hidden/special dirs should NOT change the hash
+        let hidden = tmp.path().join(".hidden");
+        std::fs::create_dir(&hidden).unwrap();
+        std::fs::write(hidden.join("secret.py"), "secret").unwrap();
+
+        let cache = tmp.path().join("__pycache__");
+        std::fs::create_dir(&cache).unwrap();
+        std::fs::write(cache.join("mod.py"), "cached").unwrap();
+
+        let nm = tmp.path().join("node_modules");
+        std::fs::create_dir(&nm).unwrap();
+        std::fs::write(nm.join("dep.py"), "dep").unwrap();
+
+        let h_after = hash_source_files(tmp.path(), Language::Python);
+        assert_eq!(h_baseline, h_after, "hidden/special dir files should be skipped");
+    }
+
+    #[test]
+    fn hash_source_files_nonexistent_dir() {
+        let h = hash_source_files(Path::new("/nonexistent/dir"), Language::Python);
+        // Should not panic, returns empty-input hash
+        assert!(!h.is_empty());
+    }
+
+    #[test]
+    fn hash_source_files_language_extensions() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("lib.rs"), "fn main() {}").unwrap();
+        std::fs::write(tmp.path().join("lib.py"), "pass").unwrap();
+
+        let h_rust = hash_source_files(tmp.path(), Language::Rust);
+        let h_python = hash_source_files(tmp.path(), Language::Python);
+        // Different languages pick different files, so hashes differ
+        assert_ne!(h_rust, h_python);
+    }
+
+    #[test]
     fn uncovered_branch_ids_finds_missing() {
         let traces = vec![TestTrace {
             test_name: "test_a".into(),

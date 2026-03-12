@@ -550,4 +550,227 @@ fn implicit_close() -> () {
         // extract_fn_name falls back to whitespace split when no `(` present.
         assert_eq!(extract_fn_name("fn bare {"), "bare");
     }
+
+    #[test]
+    fn extract_fn_name_no_parens_no_space() {
+        // No '(' and no space after name — uses full remaining string.
+        assert_eq!(extract_fn_name("fn solitary"), "solitary");
+    }
+
+    #[test]
+    fn parse_unrecognized_statement_ignored() {
+        // Lines inside a bb that do not match any statement/terminator pattern
+        // should be silently ignored without affecting the block.
+        let mir = "\
+fn unknown_stmt() -> () {
+    bb0: {
+        StorageLive(_1);
+        nop;
+        some_random_directive
+        _0 = _1;
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        // Only StorageLive and Assign are recognized; the two junk lines are skipped.
+        let stmts = &funcs[0].blocks[0].statements;
+        assert_eq!(stmts.len(), 2);
+        assert!(matches!(&stmts[0], Statement::StorageLive(v) if v == "_1"));
+        assert!(matches!(&stmts[1], Statement::Assign { place, rvalue } if place == "_0" && rvalue == "_1"));
+    }
+
+    #[test]
+    fn parse_goto_invalid_target_ignored() {
+        // goto with a non-parseable target — parse_bb_ref returns None,
+        // so the terminator is never set and the bb gets default Return.
+        let mir = "\
+fn goto_bad() -> () {
+    bb0: {
+        goto -> notabb;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        // bb0 was never flushed by goto (target invalid), so it gets flushed
+        // by the closing `}` with default Return terminator.
+        assert_eq!(funcs[0].block_count(), 1);
+        assert!(matches!(funcs[0].blocks[0].terminator, Terminator::Return));
+    }
+
+    #[test]
+    fn parse_fn_start_flushes_previous_without_open_bb() {
+        // First function has no bb when second function starts.
+        // Exercises fn-start flush path where current_bb_id is None.
+        let mir = "\
+fn first() -> () {
+fn second() -> () {
+    bb0: {
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 2);
+        assert_eq!(funcs[0].name, "first");
+        assert_eq!(funcs[0].block_count(), 0); // no bb was open
+        assert_eq!(funcs[1].name, "second");
+        assert_eq!(funcs[1].block_count(), 1);
+    }
+
+    #[test]
+    fn parse_brace_depth_close_without_open_bb() {
+        // Function closes via brace_depth=0 but has no open bb at that point.
+        // Exercises the brace-depth-zero flush where current_bb_id is None.
+        let mir = "\
+fn no_bb_close() -> () {
+    // just some non-bb content
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "no_bb_close");
+        assert_eq!(funcs[0].block_count(), 0);
+    }
+
+    #[test]
+    fn parse_trailing_function_no_open_bb() {
+        // Trailing flush with a function that has no open bb.
+        // Exercises lines 157-165 where current_bb_id is None.
+        let mir = "fn trailing_no_bb() -> () {";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].name, "trailing_no_bb");
+        assert_eq!(funcs[0].block_count(), 0);
+    }
+
+    #[test]
+    fn parse_assignment_line_without_equals_sign() {
+        // A line ending in `;` but containing no ` = ` should not produce
+        // an Assign statement.
+        let mir = "\
+fn no_assign() -> () {
+    bb0: {
+        _debug x => _1;
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        // The `_debug x => _1;` line has no ` = `, so no statement is added.
+        assert_eq!(funcs[0].blocks[0].statements.len(), 0);
+    }
+
+    #[test]
+    fn parse_multiple_stmts_then_terminator() {
+        // Multiple statements followed by a terminator, verifying order.
+        let mir = "\
+fn multi_stmt() -> () {
+    bb0: {
+        StorageLive(_1);
+        _0 = Add(_1, _2);
+        StorageDead(_1);
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        let stmts = &funcs[0].blocks[0].statements;
+        assert_eq!(stmts.len(), 3);
+        assert!(matches!(&stmts[0], Statement::StorageLive(v) if v == "_1"));
+        assert!(matches!(&stmts[1], Statement::Assign { place, rvalue } if place == "_0" && rvalue == "Add(_1, _2)"));
+        assert!(matches!(&stmts[2], Statement::StorageDead(v) if v == "_1"));
+        assert!(matches!(funcs[0].blocks[0].terminator, Terminator::Return));
+    }
+
+    #[test]
+    fn parse_bb_header_flushes_previous_bb_without_terminator() {
+        // A new bb header flushes the previous bb that had no explicit terminator.
+        // Exercises the bb-header flush at lines 65-72.
+        let mir = "\
+fn flush_bb() -> () {
+    bb0: {
+        StorageLive(_1);
+    bb1: {
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].block_count(), 2);
+        // bb0 was flushed by bb1 header with default Return
+        assert!(matches!(funcs[0].blocks[0].terminator, Terminator::Return));
+        assert_eq!(funcs[0].blocks[0].statements.len(), 1);
+    }
+
+    #[test]
+    fn parse_three_functions_sequential() {
+        // Three functions in sequence to stress the flush logic.
+        let mir = "\
+fn a() -> () {
+    bb0: {
+        return;
+    }
+}
+fn b() -> () {
+    bb0: {
+        goto -> bb1;
+    }
+    bb1: {
+        unreachable;
+    }
+}
+fn c() -> () {
+    bb0: {
+        abort;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 3);
+        assert_eq!(funcs[0].name, "a");
+        assert_eq!(funcs[1].name, "b");
+        assert_eq!(funcs[2].name, "c");
+        assert_eq!(funcs[1].block_count(), 2);
+        assert!(matches!(
+            funcs[1].blocks[0].terminator,
+            Terminator::Goto { target: 1 }
+        ));
+        assert!(matches!(
+            funcs[1].blocks[1].terminator,
+            Terminator::Unreachable
+        ));
+        assert!(matches!(funcs[2].blocks[0].terminator, Terminator::Abort));
+    }
+
+    #[test]
+    fn parse_bb_invalid_id_in_header() {
+        // bb header with non-numeric id — parse_bb_ref returns None,
+        // so no bb_id is set and the block content is ignored.
+        let mir = "\
+fn bad_bb_id() -> () {
+    bbXYZ: {
+        StorageLive(_1);
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        // bbXYZ did not parse, so no block was created.
+        assert_eq!(funcs[0].block_count(), 0);
+    }
+
+    #[test]
+    fn parse_nested_braces_in_statement() {
+        // A statement containing braces should still track brace depth correctly.
+        let mir = "\
+fn nested_braces() -> () {
+    bb0: {
+        _0 = SomeStruct { field: 1 };
+        return;
+    }
+}";
+        let funcs = parse_mir_output(mir);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].block_count(), 1);
+        // The inner braces bump depth up then back down, but the function
+        // should still close properly.
+        assert!(matches!(funcs[0].blocks[0].terminator, Terminator::Return));
+    }
 }

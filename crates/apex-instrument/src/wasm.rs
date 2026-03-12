@@ -641,6 +641,196 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
+    // Default impl test
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_wasm_instrumentor_default() {
+        let inst = WasmInstrumentor::default();
+        assert!(inst.branch_ids.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // branch_ids() accessor test
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_branch_ids_accessor() {
+        let inst = WasmInstrumentor::new();
+        assert!(inst.branch_ids().is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // fnv1a_hash deterministic known-value tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_fnv1a_hash_known_values() {
+        // Empty string
+        let h_empty = fnv1a_hash("");
+        assert_eq!(h_empty, 0xcbf2_9ce4_8422_2325);
+        // Same input always same output
+        assert_eq!(fnv1a_hash("test.wasm"), fnv1a_hash("test.wasm"));
+        // Different inputs produce different hashes
+        assert_ne!(fnv1a_hash("a.wasm"), fnv1a_hash("b.wasm"));
+    }
+
+    // ------------------------------------------------------------------
+    // spawn_error exercises (non-feature-gated)
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_instrument_with_spawn_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("mod.wasm"), build_minimal_wasm(2)).unwrap();
+
+        let target = Target {
+            root: tmp.path().to_path_buf(),
+            language: apex_core::types::Language::Wasm,
+            test_command: Vec::new(),
+        };
+
+        // Runner that fails to spawn (simulating wasm-opt not found at all)
+        let runner = Arc::new(FakeRunner::spawn_error());
+        let instrumentor = WasmInstrumentor::with_runner(runner);
+        let result = instrumentor.instrument(&target).await.unwrap();
+
+        // spawn error means wasm-opt check fails, falls back to synthetic
+        assert_eq!(result.branch_ids.len(), 4); // 2 funcs x 2 directions
+    }
+
+    // ------------------------------------------------------------------
+    // find_wasm_files in multiple subdirs
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_find_wasm_files_in_all_subdirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        for subdir in &["build", "dist", "out", "pkg"] {
+            let dir = tmp.path().join(subdir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(format!("{subdir}.wasm")), &[0u8]).unwrap();
+        }
+        let found = WasmInstrumentor::find_wasm_files(tmp.path());
+        assert_eq!(found.len(), 4);
+    }
+
+    #[test]
+    fn test_find_wasm_files_nonexistent_dir() {
+        let found = WasmInstrumentor::find_wasm_files(Path::new("/nonexistent/dir"));
+        assert!(found.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // synthetic_branches_from_wasm with invalid wasm (fallback to 4)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_synthetic_branches_invalid_wasm_defaults_to_4() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("bad.wasm");
+        std::fs::write(&path, b"not wasm at all").unwrap();
+
+        let mut fps = HashMap::new();
+        let branches = WasmInstrumentor::synthetic_branches_from_wasm(&path, &mut fps);
+        // count_wasm_functions returns None => unwrap_or(4) => 4 funcs x 2 = 8 branches
+        assert_eq!(branches.len(), 8);
+    }
+
+    #[test]
+    fn test_synthetic_branches_missing_file_defaults_to_4() {
+        let mut fps = HashMap::new();
+        let branches = WasmInstrumentor::synthetic_branches_from_wasm(
+            Path::new("/nonexistent/missing.wasm"),
+            &mut fps,
+        );
+        assert_eq!(branches.len(), 8);
+        assert_eq!(fps.len(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // count_wasm_functions edge cases
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_count_wasm_truncated_section_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("trunc.wasm");
+        // Valid header but truncated LEB128 section size (continuation bit set, no next byte)
+        let bytes = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x03, 0x80];
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(count_wasm_functions(&path), None);
+    }
+
+    #[test]
+    fn test_count_wasm_section_skipping() {
+        // Wasm with a custom section (id=0) before the function section (id=3)
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("skip.wasm");
+        let mut bytes = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        // Custom section (id=0), size=3, payload="abc"
+        bytes.push(0);
+        bytes.push(3);
+        bytes.extend_from_slice(b"abc");
+        // Function section (id=3), size=2, count=1, type_idx=0
+        bytes.push(3);
+        bytes.push(2);
+        bytes.push(1);
+        bytes.push(0);
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(count_wasm_functions(&path), Some(1));
+    }
+
+    #[test]
+    fn test_count_wasm_just_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("hdr.wasm");
+        let bytes = vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(count_wasm_functions(&path), None);
+    }
+
+    #[test]
+    fn test_count_wasm_bad_magic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("badmagic.wasm");
+        let bytes = vec![0xFF, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        std::fs::write(&path, &bytes).unwrap();
+        assert_eq!(count_wasm_functions(&path), None);
+    }
+
+    #[test]
+    fn test_count_wasm_too_short_for_magic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("short.wasm");
+        std::fs::write(&path, &[0x00, 0x61]).unwrap();
+        assert_eq!(count_wasm_functions(&path), None);
+    }
+
+    // ------------------------------------------------------------------
+    // read_leb128 edge cases
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_leb128_max_before_overflow() {
+        // 9 bytes of continuation + final byte: encodes a value near 63-bit max
+        // Value 0x7F repeated: each contributes 7 bits
+        let bytes = vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F];
+        let result = read_leb128(&bytes);
+        assert!(result.is_some());
+        let (val, consumed) = result.unwrap();
+        assert_eq!(consumed, 9);
+        assert_eq!(val, 0x7FFF_FFFF_FFFF_FFFF);
+    }
+
+    #[test]
+    fn test_leb128_shift_overflow_returns_none() {
+        // 10 continuation bytes: shift goes to 70 >= 63, breaks and returns None
+        let bytes = vec![0x80; 10];
+        assert_eq!(read_leb128(&bytes), None);
+    }
+
+    // ------------------------------------------------------------------
     // wasm-opt instrumentation tests (feature-gated)
     // ------------------------------------------------------------------
 

@@ -1277,6 +1277,351 @@ mod tests {
     }
 
     #[test]
+    fn extract_func_name_js() {
+        // JS uses generic fallback — keeps up to first non-alphanumeric (comma excluded by trim)
+        let name = extract_func_name("function handleRequest(req, res) {", apex_core::types::Language::JavaScript);
+        assert_eq!(name, "handleRequest(req");
+    }
+
+    #[test]
+    fn extract_func_name_ruby() {
+        // Ruby uses Python-style "def " prefix strip + split on '('
+        let name = extract_func_name("def process_payment(amount)", apex_core::types::Language::Ruby);
+        assert_eq!(name, "process_payment(amount");
+    }
+
+    #[test]
+    fn extract_func_name_java() {
+        // Java uses generic fallback
+        let name = extract_func_name("public void processOrder(Order order) {", apex_core::types::Language::Java);
+        assert_eq!(name, "processOrder(Order");
+    }
+
+    #[test]
+    fn extract_func_name_generic_fallback() {
+        let name = extract_func_name("fn do_stuff() {", apex_core::types::Language::Wasm);
+        assert_eq!(name, "do_stuff");
+    }
+
+    #[test]
+    fn extract_functions_rust_multiple() {
+        let source = vec![
+            "pub fn foo() {",
+            "    let x = 1;",
+            "}",
+            "",
+            "fn bar(a: i32) -> i32 {",
+            "    a + 1",
+            "}",
+        ];
+        let funcs = extract_functions(&source, apex_core::types::Language::Rust);
+        assert_eq!(funcs.len(), 2);
+        assert_eq!(funcs[0].0, "foo");
+        assert_eq!(funcs[0].1, 1); // line 1
+        assert_eq!(funcs[0].2, 4); // ends before bar starts at line 5
+        assert_eq!(funcs[1].0, "bar");
+        assert_eq!(funcs[1].1, 5);
+        assert_eq!(funcs[1].2, 7); // last line
+    }
+
+    #[test]
+    fn extract_functions_python() {
+        let source = vec![
+            "def hello():",
+            "    print('hi')",
+            "",
+            "def goodbye():",
+            "    print('bye')",
+        ];
+        let funcs = extract_functions(&source, apex_core::types::Language::Python);
+        assert_eq!(funcs.len(), 2);
+        assert_eq!(funcs[0].0, "hello");
+        assert_eq!(funcs[1].0, "goodbye");
+    }
+
+    #[test]
+    fn extract_functions_skips_comments() {
+        let source = vec![
+            "// fn not_a_function() {",
+            "/// fn also_not() {",
+            "fn real_function() {",
+            "    42",
+            "}",
+        ];
+        let funcs = extract_functions(&source, apex_core::types::Language::Rust);
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0].0, "real_function");
+    }
+
+    #[test]
+    fn extract_functions_js_arrow() {
+        let source = vec![
+            "const handler = (req) => {",
+            "    return 42;",
+            "};",
+        ];
+        let funcs = extract_functions(&source, apex_core::types::Language::JavaScript);
+        assert_eq!(funcs.len(), 1);
+    }
+
+    #[test]
+    fn flaky_detect_single_run_not_flaky() {
+        let run1 = vec![TestTrace {
+            test_name: "test_a".into(),
+            branches: vec![br(1, 10, 0)],
+            duration_ms: 50,
+            status: ExecutionStatus::Pass,
+        }];
+        let flaky = detect_flaky_tests(&[run1], &HashMap::new());
+        assert!(flaky.is_empty());
+    }
+
+    #[test]
+    fn flaky_detect_with_file_paths() {
+        let mut file_paths = HashMap::new();
+        file_paths.insert(1u64, PathBuf::from("src/lib.rs"));
+
+        let run1 = vec![TestTrace {
+            test_name: "test_a".into(),
+            branches: vec![br(1, 10, 0)],
+            duration_ms: 50,
+            status: ExecutionStatus::Pass,
+        }];
+        let run2 = vec![TestTrace {
+            test_name: "test_a".into(),
+            branches: vec![br(1, 10, 0), br(1, 20, 0)],
+            duration_ms: 60,
+            status: ExecutionStatus::Pass,
+        }];
+
+        let flaky = detect_flaky_tests(&[run1, run2], &file_paths);
+        assert_eq!(flaky.len(), 1);
+        // Should resolve file path
+        assert!(flaky[0].divergent_branches.iter().any(|d| d.file_path.is_some()));
+    }
+
+    #[test]
+    fn flaky_sorted_by_divergent_count() {
+        let run1 = vec![
+            TestTrace {
+                test_name: "test_a".into(),
+                branches: vec![br(1, 10, 0)],
+                duration_ms: 50,
+                status: ExecutionStatus::Pass,
+            },
+            TestTrace {
+                test_name: "test_b".into(),
+                branches: vec![br(1, 20, 0), br(1, 30, 0)],
+                duration_ms: 50,
+                status: ExecutionStatus::Pass,
+            },
+        ];
+        let run2 = vec![
+            TestTrace {
+                test_name: "test_a".into(),
+                branches: vec![br(1, 10, 1)],
+                duration_ms: 50,
+                status: ExecutionStatus::Pass,
+            },
+            TestTrace {
+                test_name: "test_b".into(),
+                branches: vec![br(1, 20, 1), br(1, 30, 1)],
+                duration_ms: 50,
+                status: ExecutionStatus::Pass,
+            },
+        ];
+
+        let flaky = detect_flaky_tests(&[run1, run2], &HashMap::new());
+        assert_eq!(flaky.len(), 2);
+        // test_b has more divergent branches, should be first
+        assert!(flaky[0].divergent_branches.len() >= flaky[1].divergent_branches.len());
+    }
+
+    #[test]
+    fn deploy_score_caution_with_moderate_findings() {
+        let traces = vec![TestTrace {
+            test_name: "t1".into(),
+            branches: vec![br(1, 10, 0)],
+            duration_ms: 50,
+            status: ExecutionStatus::Pass,
+        }];
+        let index = BranchIndex {
+            profiles: BranchIndex::build_profiles(&traces),
+            traces,
+            file_paths: HashMap::from([(1, PathBuf::from("src/a.py"))]),
+            total_branches: 1,
+            covered_branches: 1,
+            created_at: String::new(),
+            language: apex_core::types::Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+
+        let score = compute_deploy_score(&index, 12, 0);
+        assert_eq!(score.detector_score, 5);
+    }
+
+    #[test]
+    fn deploy_score_partial_detector_penalty() {
+        let traces = vec![TestTrace {
+            test_name: "t1".into(),
+            branches: vec![br(1, 10, 0)],
+            duration_ms: 50,
+            status: ExecutionStatus::Pass,
+        }];
+        let index = BranchIndex {
+            profiles: BranchIndex::build_profiles(&traces),
+            traces,
+            file_paths: HashMap::from([(1, PathBuf::from("src/a.py"))]),
+            total_branches: 1,
+            covered_branches: 1,
+            created_at: String::new(),
+            language: apex_core::types::Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+
+        let score = compute_deploy_score(&index, 3, 0);
+        // 25 - (3 * 2) = 19
+        assert_eq!(score.detector_score, 19);
+    }
+
+    #[test]
+    fn risk_no_changed_files_match() {
+        let traces = vec![TestTrace {
+            test_name: "t1".into(),
+            branches: vec![br(1, 10, 0)],
+            duration_ms: 50,
+            status: ExecutionStatus::Pass,
+        }];
+        let index = BranchIndex {
+            profiles: BranchIndex::build_profiles(&traces),
+            traces,
+            file_paths: HashMap::from([(1, PathBuf::from("src/lib.py"))]),
+            total_branches: 1,
+            covered_branches: 1,
+            created_at: String::new(),
+            language: apex_core::types::Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+
+        let risk = assess_risk(&index, &["nonexistent.py".to_string()]);
+        assert_eq!(risk.level, "LOW");
+        assert_eq!(risk.changed_branches, 0);
+        assert!(risk.reasons.iter().any(|r| r.contains("No changed files")));
+    }
+
+    #[test]
+    fn risk_medium_moderate_coverage() {
+        let traces = vec![TestTrace {
+            test_name: "t1".into(),
+            branches: vec![br(1, 10, 0)],
+            duration_ms: 50,
+            status: ExecutionStatus::Pass,
+        }];
+        let mut profiles = BranchIndex::build_profiles(&traces);
+        // Add a few uncovered branches
+        for line in 100..105 {
+            let b = br(1, line, 0);
+            profiles.insert(
+                branch_key(&b),
+                crate::BranchProfile {
+                    branch: b,
+                    hit_count: 0,
+                    test_count: 0,
+                    test_names: vec![],
+                },
+            );
+        }
+
+        let index = BranchIndex {
+            profiles,
+            traces,
+            file_paths: HashMap::from([(1, PathBuf::from("src/lib.py"))]),
+            total_branches: 6,
+            covered_branches: 1,
+            created_at: String::new(),
+            language: apex_core::types::Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+
+        let risk = assess_risk(&index, &["src/lib.py".to_string()]);
+        // ~17% coverage: score = 40 (low cov) + 10 (uncovered > 0)
+        assert!(risk.score >= 20);
+    }
+
+    #[test]
+    fn hotpaths_empty_index() {
+        let index = BranchIndex {
+            profiles: HashMap::new(),
+            traces: vec![],
+            file_paths: HashMap::new(),
+            total_branches: 0,
+            covered_branches: 0,
+            created_at: String::new(),
+            language: apex_core::types::Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+        let hot = analyze_hotpaths(&index, 10);
+        assert!(hot.is_empty());
+    }
+
+    #[test]
+    fn hotpaths_truncates_to_top_n() {
+        let traces = vec![TestTrace {
+            test_name: "t1".into(),
+            branches: vec![br(1, 10, 0), br(1, 20, 0), br(1, 30, 0), br(1, 40, 0), br(1, 50, 0)],
+            duration_ms: 50,
+            status: ExecutionStatus::Pass,
+        }];
+        let index = BranchIndex {
+            profiles: BranchIndex::build_profiles(&traces),
+            traces,
+            file_paths: HashMap::from([(1, PathBuf::from("src/a.py"))]),
+            total_branches: 5,
+            covered_branches: 5,
+            created_at: String::new(),
+            language: apex_core::types::Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+        let hot = analyze_hotpaths(&index, 3);
+        assert_eq!(hot.len(), 3);
+    }
+
+    #[test]
+    fn attack_surface_pct_calculation() {
+        let traces = vec![
+            TestTrace {
+                test_name: "test_api_get".into(),
+                branches: vec![br(1, 10, 0), br(1, 20, 0)],
+                duration_ms: 50,
+                status: ExecutionStatus::Pass,
+            },
+        ];
+
+        let index = BranchIndex {
+            profiles: BranchIndex::build_profiles(&traces),
+            traces,
+            file_paths: HashMap::from([(1, PathBuf::from("src/api.py"))]),
+            total_branches: 10,
+            covered_branches: 2,
+            created_at: String::new(),
+            language: apex_core::types::Language::Python,
+            target_root: PathBuf::new(),
+            source_hash: String::new(),
+        };
+
+        let report = analyze_attack_surface(&index, "test_api");
+        assert_eq!(report.entry_tests, 1);
+        assert_eq!(report.reachable_branches, 2);
+        assert!((report.attack_surface_pct - 20.0).abs() < 0.1);
+    }
+
+    #[test]
     fn deploy_score_blocked_by_critical_findings() {
         let traces = vec![TestTrace {
             test_name: "t1".into(),
