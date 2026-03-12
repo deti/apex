@@ -1637,6 +1637,11 @@ async fn run_index(args: IndexArgs) -> Result<()> {
                 .await
                 .map_err(|e| color_eyre::eyre::eyre!("index build failed: {e}"))?
         }
+        Language::Rust => {
+            apex_index::rust::build_rust_index(&target_path, args.parallel)
+                .await
+                .map_err(|e| color_eyre::eyre::eyre!("index build failed: {e}"))?
+        }
         other => {
             return Err(color_eyre::eyre::eyre!(
                 "indexing not yet supported for {other}"
