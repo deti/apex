@@ -241,6 +241,7 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, Severity::Critical);
         assert_eq!(findings[0].category, FindingCategory::SecuritySmell);
+        assert_eq!(findings[0].cwe_ids, vec![798]);
     }
 
     #[tokio::test]

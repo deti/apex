@@ -287,6 +287,7 @@ def fetch(url):
         assert_eq!(findings.len(), 1, "expected 1 finding, got: {findings:?}");
         assert_eq!(findings[0].category, FindingCategory::PathTraversal);
         assert_eq!(findings[0].severity, Severity::Medium);
+        assert_eq!(findings[0].cwe_ids, vec![22]);
     }
 
     // 2. Python function using safe_join → no finding
