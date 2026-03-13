@@ -2583,7 +2583,7 @@ fn run_features(args: FeaturesArgs) -> Result<()> {
 
             // Data rows
             for feat_name in &feature_names {
-                print!("{:<20}", feat_name);
+                print!("{feat_name:<20}");
                 for lang in &languages {
                     let features = lang.supported_features();
                     if let Some(f) = features.iter().find(|f| f.name == *feat_name) {
@@ -2592,7 +2592,7 @@ fn run_features(args: FeaturesArgs) -> Result<()> {
                         } else {
                             format!("{} ({})", f.status, f.tool)
                         };
-                        print!(" {:<15}", cell);
+                        print!(" {cell:<15}");
                     } else {
                         print!(" {:<15}", "-");
                     }
