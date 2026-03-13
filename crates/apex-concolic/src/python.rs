@@ -190,6 +190,156 @@ impl PythonConcolicStrategy {
             }
         }
 
+        // --- String method patterns (startswith/endswith) ---
+        if assignments.is_empty() {
+            let re_str_method = regex_lite::Regex::new(
+                r#"^(\w+)\.(startswith|endswith)\(['\"](.+?)['\"]\)$"#
+            ).ok();
+            if let Some(re) = re_str_method {
+                if let Some(caps) = re.captures(condition.trim()) {
+                    let name = caps[1].to_string();
+                    let method = caps[2].to_string();
+                    let affix = caps[3].to_string();
+                    match (method.as_str(), target_direction) {
+                        ("startswith", 0) => {
+                            assignments.push(vec![(name.clone(), serde_json::json!(format!("{affix}suffix")))]);
+                        }
+                        ("startswith", _) => {
+                            assignments.push(vec![(name.clone(), serde_json::json!("__no_match__"))]);
+                        }
+                        ("endswith", 0) => {
+                            assignments.push(vec![(name.clone(), serde_json::json!(format!("prefix{affix}")))]);
+                        }
+                        ("endswith", _) => {
+                            assignments.push(vec![(name.clone(), serde_json::json!("__no_match__"))]);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // --- Membership: x in [list] ---
+        if assignments.is_empty() {
+            let re_in_list = regex_lite::Regex::new(
+                r#"^(\w+)\s+in\s+\[(.+)\]$"#
+            ).ok();
+            if let Some(re) = re_in_list {
+                if let Some(caps) = re.captures(condition.trim()) {
+                    let name = caps[1].to_string();
+                    let items_str = caps[2].to_string();
+                    let items: Vec<String> = items_str.split(',')
+                        .map(|s| s.trim().trim_matches(|c: char| c == '\'' || c == '"').to_string())
+                        .collect();
+                    if target_direction == 0 {
+                        for item in items.iter().take(3) {
+                            assignments.push(vec![(name.clone(), serde_json::json!(item))]);
+                        }
+                    } else {
+                        assignments.push(vec![(name.clone(), serde_json::json!("__NOT_IN_LIST__"))]);
+                    }
+                }
+            }
+        }
+
+        // --- isinstance check ---
+        if assignments.is_empty() {
+            let re_isinstance = regex_lite::Regex::new(
+                r#"^isinstance\((\w+),\s*(\w+)\)$"#
+            ).ok();
+            if let Some(re) = re_isinstance {
+                if let Some(caps) = re.captures(condition.trim()) {
+                    let name = caps[1].to_string();
+                    let type_name = caps[2].to_string();
+                    if target_direction == 0 {
+                        let val = match type_name.as_str() {
+                            "str" => serde_json::json!(""),
+                            "int" => serde_json::json!(0),
+                            "float" => serde_json::json!(0.0),
+                            "bool" => serde_json::json!(true),
+                            "list" => serde_json::json!([]),
+                            "dict" => serde_json::json!({}),
+                            _ => serde_json::json!(""),
+                        };
+                        assignments.push(vec![(name.clone(), val)]);
+                    } else {
+                        let val = match type_name.as_str() {
+                            "str" => serde_json::json!(0),
+                            "int" | "float" => serde_json::json!("not_a_number"),
+                            _ => serde_json::json!(null),
+                        };
+                        assignments.push(vec![(name.clone(), val)]);
+                    }
+                }
+            }
+        }
+
+        // --- Substring contains: "://" in x ---
+        if assignments.is_empty() {
+            let re_substr = regex_lite::Regex::new(
+                r#"^['\"](.+?)['\"]\s+in\s+(\w+)$"#
+            ).ok();
+            if let Some(re) = re_substr {
+                if let Some(caps) = re.captures(condition.trim()) {
+                    let substring = caps[1].to_string();
+                    let name = caps[2].to_string();
+                    if target_direction == 0 {
+                        assignments.push(vec![(name.clone(), serde_json::json!(format!("prefix{substring}suffix")))]);
+                    } else {
+                        assignments.push(vec![(name.clone(), serde_json::json!("no_match_here"))]);
+                    }
+                }
+            }
+        }
+
+        // --- len check: len(x) > N ---
+        if assignments.is_empty() {
+            let re_len = regex_lite::Regex::new(
+                r#"^len\((\w+)\)\s*(>|>=|==|<|<=)\s*(\d+)$"#
+            ).ok();
+            if let Some(re) = re_len {
+                if let Some(caps) = re.captures(condition.trim()) {
+                    let name = caps[1].to_string();
+                    let op = caps[2].to_string();
+                    let n: usize = caps[3].parse().unwrap_or(0);
+                    let target_len = match (op.as_str(), target_direction) {
+                        (">", 0) | (">=", 0) => n + 1,
+                        (">", _) | (">=", _) => if n > 0 { n - 1 } else { 0 },
+                        ("<", 0) | ("<=", 0) => if n > 0 { n - 1 } else { 0 },
+                        ("<", _) | ("<=", _) => n + 1,
+                        ("==", 0) => n,
+                        ("==", _) => n + 1,
+                        _ => 1,
+                    };
+                    let val = "a".repeat(target_len);
+                    assignments.push(vec![(name.clone(), serde_json::json!(val))]);
+                }
+            }
+        }
+
+        // --- None/is check ---
+        if assignments.is_empty() {
+            let re_is = regex_lite::Regex::new(
+                r#"^(\w+)\s+is\s+(not None|None)$"#
+            ).ok();
+            if let Some(re) = re_is {
+                if let Some(caps) = re.captures(condition.trim()) {
+                    let name = caps[1].to_string();
+                    let check = caps[2].to_string();
+                    match (check.as_str(), target_direction) {
+                        ("None", 0) | ("not None", 1) => {
+                            // Want True for "is None" or False for "is not None" -> use None
+                            assignments.push(vec![(name.clone(), serde_json::json!(null))]);
+                        }
+                        _ => {
+                            // Want a non-None value
+                            assignments.push(vec![(name.clone(), serde_json::json!(0))]);
+                        }
+                    }
+                }
+            }
+        }
+
         // Fallback: mutate all scalar locals by ±1 and boundary values.
         if assignments.is_empty() {
             let mut row = Vec::new();
@@ -654,6 +804,94 @@ mod tests {
         );
         let seeds = s.boundary_seeds(&entry, 1);
         assert!(seeds.len() <= 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // boundary_seeds: string / type pattern tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn boundary_seeds_startswith() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "test.py", 10, 1, "x.startswith(\"http\")",
+            "check_url", "mod", vec!["x"],
+            [("x".into(), serde_json::json!("ftp://foo"))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 0); // want True
+        assert!(!seeds.is_empty());
+        let combined: String = seeds.join("\n");
+        assert!(combined.contains("http"), "should contain 'http' prefix: {combined}");
+    }
+
+    #[test]
+    fn boundary_seeds_in_list() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "test.py", 20, 1, "x in [\"GET\", \"POST\"]",
+            "handle", "views", vec!["x"],
+            [("x".into(), serde_json::json!("PUT"))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 0); // want True (in list)
+        assert!(!seeds.is_empty());
+        let combined: String = seeds.join("\n");
+        assert!(combined.contains("GET") || combined.contains("POST"));
+    }
+
+    #[test]
+    fn boundary_seeds_isinstance() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "test.py", 30, 1, "isinstance(x, str)",
+            "validate", "util", vec!["x"],
+            [("x".into(), serde_json::json!(42))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 0); // want True (is str)
+        assert!(!seeds.is_empty());
+        let combined: String = seeds.join("\n");
+        assert!(combined.contains("\"\""), "should contain empty string literal: {combined}");
+    }
+
+    #[test]
+    fn boundary_seeds_substring_contains() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "test.py", 40, 1, "\"://\" in x",
+            "parse_url", "net", vec!["x"],
+            [("x".into(), serde_json::json!("noprotocol"))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 0); // want True (contains ://)
+        assert!(!seeds.is_empty());
+        let combined: String = seeds.join("\n");
+        assert!(combined.contains("://"), "should contain '://' substring: {combined}");
+    }
+
+    #[test]
+    fn boundary_seeds_len_check() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "test.py", 50, 1, "len(x) > 0",
+            "process", "core", vec!["x"],
+            [("x".into(), serde_json::json!(""))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 0); // want True (len > 0)
+        assert!(!seeds.is_empty());
+        let combined: String = seeds.join("\n");
+        assert!(combined.contains("a") || combined.contains("x"), "should contain non-empty string: {combined}");
+    }
+
+    #[test]
+    fn boundary_seeds_none_check() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "test.py", 60, 0, "x is None",
+            "check_val", "util", vec!["x"],
+            [("x".into(), serde_json::json!(42))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 0); // want True (is None)
+        assert!(!seeds.is_empty());
+        let combined: String = seeds.join("\n");
+        assert!(combined.contains("None") || combined.contains("null"), "should contain None: {combined}");
     }
 
     // -----------------------------------------------------------------------
