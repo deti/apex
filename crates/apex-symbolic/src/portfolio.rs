@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use apex_core::{error::Result, types::InputSeed};
 
+use crate::gradient::GradientSolver;
 use crate::traits::{Solver, SolverLogic};
 
 /// A solver that wraps multiple backends and returns the first SAT result.
@@ -17,6 +18,13 @@ pub struct PortfolioSolver {
 impl PortfolioSolver {
     /// Create a new portfolio solver with the given backends and per-solver timeout.
     pub fn new(solvers: Vec<Box<dyn Solver>>, timeout: Duration) -> Self {
+        PortfolioSolver { solvers, timeout }
+    }
+
+    /// Create a portfolio with GradientSolver as the first (fastest) backend.
+    /// Additional solvers can be added with `add_solver()`.
+    pub fn with_gradient_first(timeout: Duration) -> Self {
+        let solvers: Vec<Box<dyn Solver>> = vec![Box::new(GradientSolver::new(100))];
         PortfolioSolver { solvers, timeout }
     }
 
@@ -304,5 +312,15 @@ mod tests {
         let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));
         let results = portfolio.solve_batch(&[], false);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn portfolio_with_gradient_first() {
+        let portfolio = PortfolioSolver::with_gradient_first(Duration::from_secs(5));
+        assert_eq!(portfolio.solvers.len(), 1);
+        assert_eq!(portfolio.solvers[0].name(), "gradient");
+        // Should solve simple constraint
+        let result = portfolio.solve(&["(= x 42)".to_string()], false).unwrap();
+        assert!(result.is_some());
     }
 }
