@@ -55,7 +55,38 @@ pub const PYTHON_SANITIZERS: &[&str] = &[
 
 /// Given a CPG with `ReachingDef` edges already materialized, find all taint
 /// flows from sources to sinks via backward reachability.
+///
+/// # Prerequisites
+///
+/// **`add_reaching_def_edges` must be called on the CPG before this function.**
+/// Without the `ReachingDef` edges, backward traversal has no data-flow links
+/// to follow and will return no flows regardless of source/sink presence.
+///
+/// ```ignore
+/// let mut cpg = build_python_cpg(source, "file.py");
+/// add_reaching_def_edges(&mut cpg);  // required first
+/// let flows = find_taint_flows(&cpg, 10);
+/// ```
+///
+/// # Sanitizers
+///
+/// Sanitizer calls (e.g. `shlex.quote`) break taint propagation. During backward
+/// BFS, if the traversal would pass through a sanitizer Call node — either as a
+/// direct predecessor via `ReachingDef` or as an RHS subexpression via `Argument`
+/// edges — that path is cut. This correctly handles the pattern:
+/// `safe = shlex.quote(user_input); subprocess.run(safe)` where the `Assignment`
+/// node for `safe` is the BFS node and `shlex.quote` is its `Argument` child.
 pub fn find_taint_flows(cpg: &Cpg, max_depth: usize) -> Vec<TaintFlow> {
+    // Caller must invoke add_reaching_def_edges(&mut cpg) before this function.
+    // Without ReachingDef edges the backward traversal has no data-flow links.
+    debug_assert!(
+        cpg.edges()
+            .any(|(_, _, k)| matches!(k, EdgeKind::ReachingDef { .. }))
+            || cpg.node_count() == 0,
+        "find_taint_flows called without any ReachingDef edges — \
+         did you forget to call add_reaching_def_edges first?"
+    );
+
     let sinks: Vec<NodeId> = cpg
         .nodes()
         .filter_map(|(id, k)| is_sink(k).then_some(id))
@@ -310,6 +341,35 @@ def run_command(user_input):
         // path must contain both source and sink
         assert!(flow.path.contains(&flow.source));
         assert!(flow.path.contains(&flow.sink));
+    }
+
+    #[test]
+    fn taint_sanitizer_blocks_flow() {
+        let source = r#"
+def run(user_input):
+    safe = shlex.quote(user_input)
+    subprocess.run(safe)
+"#;
+        let mut cpg = build_python_cpg(source, "test.py");
+        add_reaching_def_edges(&mut cpg);
+        let flows = find_taint_flows(&cpg, 10);
+        assert!(
+            flows.is_empty(),
+            "sanitizer should block taint flow from user_input to subprocess.run; got: {flows:?}"
+        );
+    }
+
+    #[test]
+    fn taint_unsanitized_flow_detected() {
+        let source = r#"
+def run(user_input):
+    cmd = user_input
+    subprocess.run(cmd)
+"#;
+        let mut cpg = build_python_cpg(source, "test.py");
+        add_reaching_def_edges(&mut cpg);
+        let flows = find_taint_flows(&cpg, 10);
+        assert!(!flows.is_empty(), "unsanitized flow should be detected");
     }
 
     #[test]
