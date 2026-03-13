@@ -42,6 +42,9 @@ impl DetectorPipeline {
         if cfg.enabled.contains(&"secrets".to_string()) {
             detectors.push(Box::new(HardcodedSecretDetector));
         }
+        if cfg.enabled.contains(&"path-normalize".to_string()) {
+            detectors.push(Box::new(PathNormalizationDetector));
+        }
 
         Self { detectors }
     }
@@ -302,7 +305,7 @@ mod tests {
     fn from_config_enables_all_by_default() {
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
-        assert_eq!(pipeline.detectors.len(), 6);
+        assert_eq!(pipeline.detectors.len(), 7);
     }
 
     #[test]
