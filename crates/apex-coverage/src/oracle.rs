@@ -1,3 +1,4 @@
+use crate::heuristic::BranchHeuristic;
 use apex_core::types::{BranchId, BranchState, CoverageLevel, ExecutionResult, SeedId};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,6 +15,7 @@ pub struct CoverageOracle {
     covered_count: AtomicUsize,
     total_count: AtomicUsize,
     level: Mutex<CoverageLevel>,
+    heuristics: DashMap<BranchId, BranchHeuristic>,
 }
 
 impl CoverageOracle {
@@ -23,6 +25,7 @@ impl CoverageOracle {
             covered_count: AtomicUsize::new(0),
             total_count: AtomicUsize::new(0),
             level: Mutex::new(CoverageLevel::Branch),
+            heuristics: DashMap::new(),
         }
     }
 
@@ -178,6 +181,28 @@ impl CoverageOracle {
 
     pub fn state_of(&self, id: &BranchId) -> Option<BranchState> {
         self.branches.get(id).map(|r| r.value().clone())
+    }
+
+    /// Record a branch heuristic, keeping only the best (highest score) per branch.
+    pub fn record_heuristic(&self, h: BranchHeuristic) {
+        let entry = self.heuristics.entry(h.branch_id.clone());
+        entry
+            .and_modify(|existing| {
+                if h.score > existing.score {
+                    *existing = h.clone();
+                }
+            })
+            .or_insert(h);
+    }
+
+    /// Retrieve the full heuristic for a branch, if any has been recorded.
+    pub fn heuristic_for(&self, branch: &BranchId) -> Option<BranchHeuristic> {
+        self.heuristics.get(branch).map(|r| r.value().clone())
+    }
+
+    /// Return the best heuristic score for a branch, or 0.0 if unknown.
+    pub fn best_heuristic(&self, branch: &BranchId) -> f64 {
+        self.heuristics.get(branch).map(|r| r.score).unwrap_or(0.0)
     }
 
     /// Mark a branch as proven unreachable (Z3 unsat).
@@ -593,6 +618,56 @@ mod tests {
         // Query with wrong file_id
         let pairs = oracle.mcdc_independence_pairs(99, 10);
         assert!(pairs.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Heuristic tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_record_and_retrieve_heuristic() {
+        let oracle = CoverageOracle::new();
+        let b = make_branch(1, 0);
+        let h = BranchHeuristic {
+            branch_id: b.clone(),
+            score: 0.75,
+            operand_a: Some(40),
+            operand_b: Some(42),
+        };
+        oracle.record_heuristic(h);
+        assert_eq!(oracle.best_heuristic(&b), 0.75);
+    }
+
+    #[test]
+    fn test_heuristic_keeps_best() {
+        let oracle = CoverageOracle::new();
+        let b = make_branch(1, 0);
+        oracle.record_heuristic(BranchHeuristic {
+            branch_id: b.clone(),
+            score: 0.5,
+            operand_a: None,
+            operand_b: None,
+        });
+        oracle.record_heuristic(BranchHeuristic {
+            branch_id: b.clone(),
+            score: 0.9,
+            operand_a: None,
+            operand_b: None,
+        });
+        oracle.record_heuristic(BranchHeuristic {
+            branch_id: b.clone(),
+            score: 0.3,
+            operand_a: None,
+            operand_b: None,
+        });
+        assert_eq!(oracle.best_heuristic(&b), 0.9);
+    }
+
+    #[test]
+    fn test_best_heuristic_unknown_branch() {
+        let oracle = CoverageOracle::new();
+        let b = make_branch(999, 0);
+        assert_eq!(oracle.best_heuristic(&b), 0.0);
     }
 
     use proptest::prelude::*;

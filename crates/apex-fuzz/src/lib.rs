@@ -172,6 +172,20 @@ impl Strategy for FuzzStrategy {
     }
 }
 
+/// Compute energy boost from near-miss branch heuristics.
+/// Near-miss = heuristic > 0.5 but < 1.0 (close to flipping but not yet covered).
+#[allow(dead_code)]
+fn near_miss_energy_boost(oracle: &CoverageOracle, uncovered: &[apex_core::types::BranchId]) -> f64 {
+    let mut boost = 0.0;
+    for branch in uncovered {
+        let h = oracle.best_heuristic(branch);
+        if h > 0.5 && h < 1.0 {
+            boost += h;
+        }
+    }
+    boost
+}
+
 // ---------------------------------------------------------------------------
 // libafl backend (optional feature) — see libafl_backend.rs
 // ---------------------------------------------------------------------------
@@ -321,6 +335,31 @@ mod tests {
         };
         let inputs = strategy.suggest_inputs(&ctx).await.unwrap();
         assert!(!inputs.is_empty());
+    }
+
+    #[test]
+    fn near_miss_energy_boost_calculation() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let b1 = apex_core::types::BranchId::new(1, 1, 0, 0);
+        let b2 = apex_core::types::BranchId::new(1, 2, 0, 0);
+        let b3 = apex_core::types::BranchId::new(1, 3, 0, 0);
+
+        oracle.record_heuristic(apex_coverage::BranchHeuristic {
+            branch_id: b1.clone(),
+            score: 0.8,
+            operand_a: None,
+            operand_b: None,
+        });
+        oracle.record_heuristic(apex_coverage::BranchHeuristic {
+            branch_id: b2.clone(),
+            score: 0.3,
+            operand_a: None,
+            operand_b: None,
+        });
+        // b3 has no heuristic (0.0 default)
+
+        let boost = near_miss_energy_boost(&oracle, &[b1, b2, b3]);
+        assert!((boost - 0.8).abs() < 0.001); // only b1 qualifies (0.5 < 0.8 < 1.0)
     }
 
     #[tokio::test]
