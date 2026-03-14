@@ -161,7 +161,7 @@ impl AgentCluster {
                 stall_count = if new_coverage { 0 } else { stall_count + 1 };
             }
 
-            if stall_count >= self.config.stall_threshold {
+            if self.config.stall_threshold > 0 && stall_count >= self.config.stall_threshold {
                 warn!(
                     "coverage stalled after {} iterations with no improvement",
                     stall_count

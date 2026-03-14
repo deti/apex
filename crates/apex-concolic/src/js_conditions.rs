@@ -212,9 +212,11 @@ fn try_parse_comparison(text: &str) -> Option<ConditionTree> {
     let left = parse_expr(left_str);
     let right = parse_expr(right_str);
 
-    // Null/undefined checks
+    // Null/undefined checks — only for equality/inequality operators
     let is_null_literal = |e: &Expr| matches!(e, Expr::Null);
-    if is_null_literal(&left) || is_null_literal(&right) {
+    if (is_null_literal(&left) || is_null_literal(&right))
+        && matches!(op, CompareOp::Eq | CompareOp::NotEq)
+    {
         let expr = if is_null_literal(&left) { right } else { left };
         let is_null = matches!(op, CompareOp::Eq);
         return Some(ConditionTree::NullCheck {
@@ -354,9 +356,14 @@ fn find_operator_outside_parens(text: &str, needle: &str) -> Option<usize> {
             _ => {}
         }
 
-        if depth == 0 && i + n <= bytes.len() && &text[i..i + n] == needle {
-            // For `&&` / `||`: make sure it's not part of `===`, `!==`, etc.
-            return Some(i);
+        if depth == 0 && i + n <= bytes.len() {
+            if !text.is_char_boundary(i) || !text.is_char_boundary(i + n) {
+                i += 1;
+                continue;
+            }
+            if &text[i..i + n] == needle {
+                return Some(i);
+            }
         }
         i += 1;
     }
@@ -365,37 +372,37 @@ fn find_operator_outside_parens(text: &str, needle: &str) -> Option<usize> {
 
 /// Find the leftmost occurrence of `needle` as a word boundary outside parens.
 fn find_word_outside_parens(text: &str, needle: &str) -> Option<usize> {
-    let mut start = 0;
-    while let Some(rel) = text[start..].find(needle) {
-        let pos = start + rel;
-        // Count paren depth up to pos
-        let depth = paren_depth_at(&text[..pos]);
-        if depth == 0 {
-            return Some(pos);
-        }
-        start = pos + needle.len();
-    }
-    None
-}
-
-fn paren_depth_at(text: &str) -> i32 {
+    let bytes = text.as_bytes();
+    let n = needle.len();
+    let needle_bytes = needle.as_bytes();
+    let mut i = 0;
     let mut depth = 0i32;
-    let mut in_str: Option<char> = None;
-    for ch in text.chars() {
+    let mut in_str: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
         if let Some(q) = in_str {
-            if ch == q {
+            if b == q {
                 in_str = None;
             }
+            i += 1;
             continue;
         }
-        match ch {
-            '"' | '\'' | '`' => in_str = Some(ch),
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => depth -= 1,
+        if b == b'"' || b == b'\'' || b == b'`' {
+            in_str = Some(b);
+            i += 1;
+            continue;
+        }
+        match b {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
             _ => {}
         }
+        if depth == 0 && i + n <= bytes.len() && &bytes[i..i + n] == needle_bytes {
+            return Some(i);
+        }
+        i += 1;
     }
-    depth
+    None
 }
 
 /// Find the comparison operator in `text` at paren depth 0.
@@ -443,14 +450,22 @@ fn strip_outer_parens(text: &str) -> Option<&str> {
         return None;
     }
     let inner = &text[1..text.len() - 1];
-    // Verify depth never goes negative
+    // Verify depth never goes negative, skipping characters inside string literals
     let mut depth = 0i32;
+    let mut in_str: Option<char> = None;
     for ch in inner.chars() {
+        if let Some(q) = in_str {
+            if ch == q {
+                in_str = None;
+            }
+            continue;
+        }
         match ch {
+            '"' | '\'' | '`' => in_str = Some(ch),
             '(' => depth += 1,
             ')' => {
                 if depth == 0 {
-                    return None; // early close — outer parens are not balanced wrappers
+                    return None;
                 }
                 depth -= 1;
             }
@@ -749,5 +764,43 @@ mod tests {
             }
             other => panic!("expected And at top level, got {:?}", other),
         }
+    }
+
+    // --- bug regression tests ---
+
+    #[test]
+    fn bug_multibyte_utf8_no_panic() {
+        let result = parse_js_condition("café === 'hello'");
+        assert!(matches!(result, ConditionTree::Compare { .. }));
+    }
+
+    #[test]
+    fn bug_unicode_emoji_no_panic() {
+        let result = parse_js_condition("x === '🎉'");
+        assert!(matches!(result, ConditionTree::Compare { .. }));
+    }
+
+    #[test]
+    fn bug_null_gt_stays_as_compare() {
+        let result = parse_js_condition("null > x");
+        assert!(matches!(result, ConditionTree::Compare { .. }));
+    }
+
+    #[test]
+    fn bug_x_lt_null_stays_as_compare() {
+        let result = parse_js_condition("x < null");
+        assert!(matches!(result, ConditionTree::Compare { .. }));
+    }
+
+    #[test]
+    fn bug_in_operator_inside_string_not_matched() {
+        let result = parse_js_condition(r#"x === "key in obj""#);
+        assert!(matches!(result, ConditionTree::Compare { .. }));
+    }
+
+    #[test]
+    fn bug_strip_parens_with_close_paren_in_string() {
+        let result = strip_outer_parens(r#"(x === ")")"#);
+        assert!(result.is_some(), "Should strip outer parens even with ) in string");
     }
 }
