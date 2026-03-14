@@ -68,6 +68,21 @@ Rust, async detectors, CWE/CVSS models, SARIF output format, Code Property Graph
 3. Run full test suite for your crates
 4. Run `cargo clippy -p apex-detect -p apex-cpg -- -D warnings`
 
+## Partner Notification
+
+When your changes affect partner crews, you MUST include a `FLEET_NOTIFICATION` block at the end of your response. A SubagentStop hook will persist it to `.fleet/changes/` and auto-dispatch affected partners for breaking/major changes.
+
+```
+<!-- FLEET_NOTIFICATION
+crew: security-detect
+affected_partners: [foundation, exploration, intelligence, platform]
+severity: breaking|major|minor|info
+summary: One-line description of what changed
+detail: |
+  What changed and why partners should care.
+-->
+```
+
 ## Constraints
 
 - **DO NOT** edit files outside your owned paths

@@ -1,5 +1,17 @@
 {
   "hooks": {
+    "SubagentStop": [
+      {
+        "description": "Persist crew notification logs when a crew agent reports partner-impacting changes",
+        "matcher": "apex-crew",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check the crew agent's response for FLEET_NOTIFICATION blocks (HTML comments starting with <!-- FLEET_NOTIFICATION). If none are found, do nothing — say nothing. If one or more are found: 1) Ensure .fleet/changes/ directory exists (create it if not). 2) For each notification block, extract: crew, affected_partners, severity, summary, detail. 3) Write a changelog entry to .fleet/changes/YYYY-MM-DD-<crew>-<short-slug>.md with this format:\n---\ndate: YYYY-MM-DD\ncrew: <crew>\naffected_partners: [<partners>]\nseverity: <severity>\nacknowledged_by: []\n---\n\n<detail text>\n\n4) After writing, briefly confirm: 'Fleet: logged <severity> notification from <crew>-crew affecting <partners>.' 5) If severity is breaking or major, dispatch each affected partner's crew agent with: 'You are the <partner>-crew agent. --- Notification from <crew>-crew [<severity>]: <summary>. <detail> --- Review this notification. If action is needed on your owned paths, describe what should change. If no action needed, acknowledge the change.' For minor/info severity, skip dispatch — the changelog entry is sufficient."
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

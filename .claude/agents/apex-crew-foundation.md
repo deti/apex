@@ -73,6 +73,22 @@ Your changes affect ALL other crews:
 5. If downstream breakage occurs, document exactly what each affected crate needs to change
 6. Run `cargo clippy -p apex-core -p apex-coverage -p apex-mir -- -D warnings`
 
+## Partner Notification
+
+When your changes affect partner crews, you MUST include a `FLEET_NOTIFICATION` block at the end of your response. A SubagentStop hook will persist it to `.fleet/changes/` and auto-dispatch affected partners for breaking/major changes.
+
+```
+<!-- FLEET_NOTIFICATION
+crew: foundation
+affected_partners: [security-detect, exploration, runtime, intelligence, platform]
+severity: breaking|major|minor|info
+summary: One-line description of what changed
+detail: |
+  What changed and why partners should care.
+  Include affected types, traits, or API surfaces.
+-->
+```
+
 ## Constraints
 
 - **DO NOT** edit files outside your owned paths

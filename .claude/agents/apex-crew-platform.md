@@ -74,6 +74,21 @@ You depend on ALL other crews:
    - Include both positive (should find issues) and negative (clean) cases
 4. Run `cargo clippy -p apex-cli -- -D warnings`
 
+## Partner Notification
+
+When your changes affect partner crews, you MUST include a `FLEET_NOTIFICATION` block at the end of your response. A SubagentStop hook will persist it to `.fleet/changes/` and auto-dispatch affected partners for breaking/major changes.
+
+```
+<!-- FLEET_NOTIFICATION
+crew: platform
+affected_partners: [foundation, runtime, intelligence, security-detect, exploration]
+severity: breaking|major|minor|info
+summary: One-line description of what changed
+detail: |
+  What changed and why partners should care.
+-->
+```
+
 ## Constraints
 
 - **DO NOT** edit files outside your owned paths

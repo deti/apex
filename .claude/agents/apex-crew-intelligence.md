@@ -74,6 +74,21 @@ Rust, tokio, LLM integration, prompt engineering, coordinator/worker RPC pattern
    - Verify graceful handling of worker disconnection
 4. Run `cargo clippy -p apex-agent -p apex-synth -p apex-rpc -- -D warnings`
 
+## Partner Notification
+
+When your changes affect partner crews, you MUST include a `FLEET_NOTIFICATION` block at the end of your response. A SubagentStop hook will persist it to `.fleet/changes/` and auto-dispatch affected partners for breaking/major changes.
+
+```
+<!-- FLEET_NOTIFICATION
+crew: intelligence
+affected_partners: [foundation, runtime, security-detect, platform]
+severity: breaking|major|minor|info
+summary: One-line description of what changed
+detail: |
+  What changed and why partners should care.
+-->
+```
+
 ## Constraints
 
 - **DO NOT** edit files outside your owned paths
