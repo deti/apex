@@ -4,14 +4,19 @@
 
 pub mod api_diff;
 pub mod config;
+pub mod config_drift;
+pub mod container_scan;
 pub mod context;
 pub mod cvss;
 pub mod detectors;
 pub mod finding;
+pub mod iac_scan;
 pub mod lockfile;
+pub mod mem_check;
 pub mod pipeline;
 pub mod ratchet;
 pub mod report;
+pub mod resource_profile;
 pub mod sarif;
 pub mod sbom;
 pub mod sca;
