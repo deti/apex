@@ -1,5 +1,7 @@
 use crate::ledger::BugLedger;
 use crate::monitor::{CoverageMonitor, MonitorAction};
+use crate::priority::{BranchCandidate, StrategyRecommendation};
+use crate::router::S2FRouter;
 use apex_core::{
     error::Result,
     traits::{Sandbox, Strategy},
@@ -41,6 +43,8 @@ pub struct AgentCluster {
     pub ledger: Arc<BugLedger>,
     /// Sliding-window coverage growth monitor for stall detection.
     pub monitor: Mutex<CoverageMonitor>,
+    /// S2F classifier-driven strategy router.
+    pub router: S2FRouter,
 }
 
 impl AgentCluster {
@@ -58,6 +62,7 @@ impl AgentCluster {
             file_paths: HashMap::new(),
             ledger: Arc::new(BugLedger::new()),
             monitor: Mutex::new(CoverageMonitor::new(10)),
+            router: S2FRouter::new(),
         }
     }
 
@@ -74,6 +79,11 @@ impl AgentCluster {
     pub fn with_file_paths(mut self, file_paths: HashMap<u64, PathBuf>) -> Self {
         self.file_paths = file_paths;
         self
+    }
+
+    /// Route a branch candidate through the S2F classifier to get a strategy recommendation.
+    pub fn route_strategy(&self, candidate: &BranchCandidate) -> StrategyRecommendation {
+        self.router.route(candidate)
     }
 
     pub async fn run(&self) -> Result<()> {
@@ -1709,5 +1719,64 @@ mod tests {
         let summary = cluster.bug_summary();
         assert_eq!(summary.total, 1);
         assert_eq!(summary.reports.len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // S2F Router integration
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cluster_has_router() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target());
+        assert!((cluster.router.classifier_threshold - 0.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cluster_route_strategy_easy() {
+        use apex_core::types::BranchId;
+        let oracle = Arc::new(CoverageOracle::new());
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target());
+        let candidate = BranchCandidate {
+            id: BranchId::new(1, 10, 0, 0),
+            heuristic: 0.9,
+            attempts_since_progress: 0,
+            depth_in_cfg: 2,
+            hit_count: 50,
+        };
+        let rec = cluster.route_strategy(&candidate);
+        assert_eq!(rec, StrategyRecommendation::Fuzz);
+    }
+
+    #[test]
+    fn cluster_route_strategy_needs_solver() {
+        use apex_core::types::BranchId;
+        let oracle = Arc::new(CoverageOracle::new());
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target());
+        let candidate = BranchCandidate {
+            id: BranchId::new(1, 10, 0, 0),
+            heuristic: 0.85,
+            attempts_since_progress: 0,
+            depth_in_cfg: 15,
+            hit_count: 100,
+        };
+        let rec = cluster.route_strategy(&candidate);
+        assert_eq!(rec, StrategyRecommendation::Gradient);
+    }
+
+    #[test]
+    fn cluster_route_strategy_needs_synth() {
+        use apex_core::types::BranchId;
+        let oracle = Arc::new(CoverageOracle::new());
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target());
+        let candidate = BranchCandidate {
+            id: BranchId::new(1, 10, 0, 0),
+            heuristic: 0.05,
+            attempts_since_progress: 20,
+            depth_in_cfg: 5,
+            hit_count: 10,
+        };
+        let rec = cluster.route_strategy(&candidate);
+        assert_eq!(rec, StrategyRecommendation::LlmSynth);
     }
 }

@@ -10,6 +10,8 @@ description = "Coverage-guided fuzzing with MOpt scheduling for APEX"
 [features]
 # Enable real libafl fuzzer backend.
 libafl-backend = ["libafl", "libafl_bolts"]
+# Enable QEMU-based binary fuzzing (Linux only).
+libafl-qemu = ["libafl", "libafl_bolts"]
 
 [dependencies]
 apex-core = { path = "../apex-core" }

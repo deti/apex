@@ -15,6 +15,7 @@ pub mod report;
 pub mod sarif;
 pub mod sbom;
 pub mod sca;
+pub mod vuln_pipeline;
 
 pub use config::DetectConfig;
 pub use context::AnalysisContext;

@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 description = "Bug detection and security analysis pipeline for APEX"
 
+[features]
+default = []
+gnn = ["ort"]
+ml = ["ort"]
+
 [dependencies]
 apex-core = { path = "../apex-core" }
 apex-cpg = { path = "../apex-cpg" }
@@ -21,6 +26,8 @@ toml = "0.8"
 tracing = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1"
+# Feature-gated: only with --features gnn or ml
+ort = { version = "2.0.0-rc.12", optional = true }
 
 [dev-dependencies]
 mockall = { workspace = true }

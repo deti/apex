@@ -14,6 +14,7 @@ pub mod libafl_backend;
 pub mod llm_mutator;
 pub mod mutators;
 pub mod plugin;
+pub mod qemu_backend;
 pub mod scheduler;
 pub mod seedmind;
 pub mod semantic_feedback;
