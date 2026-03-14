@@ -91,7 +91,7 @@ mod tests {
 
     impl Solver for IncrementingSolver {
         fn solve(&self, _constraints: &[String], _negate_last: bool) -> Result<Option<InputSeed>> {
-            let mut c = self.counter.lock().unwrap();
+            let mut c = self.counter.lock().unwrap_or_else(|e| e.into_inner());
             if *c >= self.max_solutions {
                 return Ok(None);
             }

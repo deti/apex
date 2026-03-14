@@ -1067,6 +1067,99 @@ mod tests {
         assert_eq!(fps.len(), 1);
     }
 
+    // -----------------------------------------------------------------------
+    // Bug-hunting: boundary / malformed input tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_llvm_json_empty_object() {
+        // Empty JSON `{}` — should error on missing "data" key
+        let result = parse_llvm_json(b"{}", Path::new("/tmp"));
+        assert!(result.is_err(), "empty object should fail: missing data array");
+    }
+
+    #[test]
+    fn test_parse_llvm_json_negative_line_col_silently_zeroed() {
+        // BUG: Negative line/col numbers become 0 via as_u64().unwrap_or(0).
+        // This is silent data loss — a segment at line -1 is indistinguishable
+        // from one at line 0. The parser should either reject or preserve.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json = format!(
+            r#"{{
+  "data": [{{
+    "files": [{{
+      "filename": "{}/src/neg.rs",
+      "segments": [
+        [-5, -3, 1, true, true, false],
+        [0, 0, 2, true, true, false]
+      ]
+    }}]
+  }}]
+}}"#,
+            root.display()
+        );
+        let (all, _, _) = parse_llvm_json(json.as_bytes(), root).unwrap();
+        // Both segments map to line=0, col=0 due to as_u64().unwrap_or(0) on negative ints.
+        // After dedup, only ONE remains — the negative-line segment is silently merged.
+        assert_eq!(
+            all.len(),
+            1,
+            "BUG CONFIRMED: negative line/col silently maps to 0,0 and deduplicates with real 0,0 segment"
+        );
+    }
+
+    #[test]
+    fn test_parse_llvm_json_col_truncated_above_u16_max() {
+        // BUG: Column values > 65535 are silently truncated by `as u16`.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json = format!(
+            r#"{{
+  "data": [{{
+    "files": [{{
+      "filename": "{}/src/bigcol.rs",
+      "segments": [
+        [1, 70000, 1, true, true, false]
+      ]
+    }}]
+  }}]
+}}"#,
+            root.display()
+        );
+        let (all, _, _) = parse_llvm_json(json.as_bytes(), root).unwrap();
+        assert_eq!(all.len(), 1);
+        // 70000 as u16 = 70000 % 65536 = 4464
+        assert_eq!(
+            all[0].col, 4464,
+            "BUG CONFIRMED: col 70000 truncated to {} instead of being rejected",
+            all[0].col
+        );
+    }
+
+    #[test]
+    fn test_parse_llvm_json_count_u64_max() {
+        // u64::MAX for count — should be treated as executed (count > 0).
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json = format!(
+            r#"{{
+  "data": [{{
+    "files": [{{
+      "filename": "{}/src/maxcount.rs",
+      "segments": [
+        [1, 1, 18446744073709551615, true, true, false]
+      ]
+    }}]
+  }}]
+}}"#,
+            root.display()
+        );
+        let (all, exec, _) = parse_llvm_json(json.as_bytes(), root).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(exec.len(), 1, "u64::MAX count should be treated as executed");
+    }
+
     #[test]
     fn test_parse_llvm_json_skips_test_files() {
         let tmp = tempfile::tempdir().unwrap();

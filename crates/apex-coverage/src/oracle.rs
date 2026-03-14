@@ -31,12 +31,12 @@ impl CoverageOracle {
 
     /// Set the coverage analysis level.
     pub fn set_coverage_level(&self, level: CoverageLevel) {
-        *self.level.lock().unwrap() = level;
+        *self.level.lock().unwrap_or_else(|e| e.into_inner()) = level;
     }
 
     /// Get the current coverage analysis level.
     pub fn coverage_level(&self) -> CoverageLevel {
-        *self.level.lock().unwrap()
+        *self.level.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Return MC/DC independence pairs for a given compound decision (file_id, line).

@@ -7,7 +7,20 @@
 use crate::finding::{Finding, FindingCategory, Severity};
 use regex::Regex;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 use uuid::Uuid;
+
+static FSTRING_SQL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"f["'](?i)(SELECT|INSERT|UPDATE|DELETE|DROP)\s.*\{[^}]+\}.*["']"#).unwrap()
+});
+
+static PERCENT_SQL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"["'](?i)(SELECT|INSERT|UPDATE|DELETE|DROP)\s.*%[sd].*["']\s*%"#).unwrap()
+});
+
+static CONCAT_SQL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"["'](?i)(SELECT|INSERT|UPDATE|DELETE|DROP)\s.*["']\s*\+"#).unwrap()
+});
 
 /// SQL execution function patterns.
 const SQL_EXEC_PATTERNS: &[&str] = &[
@@ -24,18 +37,6 @@ const SQL_EXEC_PATTERNS: &[&str] = &[
 pub fn scan_sql_injection(source: &str, file_path: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
 
-    // Pattern 1: f-string with SQL keywords
-    let fstring_sql =
-        Regex::new(r#"f["'](?i)(SELECT|INSERT|UPDATE|DELETE|DROP)\s.*\{[^}]+\}.*["']"#).unwrap();
-
-    // Pattern 2: % formatting with SQL keywords
-    let percent_sql =
-        Regex::new(r#"["'](?i)(SELECT|INSERT|UPDATE|DELETE|DROP)\s.*%[sd].*["']\s*%"#).unwrap();
-
-    // Pattern 3: String concatenation with SQL keywords
-    let concat_sql =
-        Regex::new(r#"["'](?i)(SELECT|INSERT|UPDATE|DELETE|DROP)\s.*["']\s*\+"#).unwrap();
-
     for (line_num, line) in source.lines().enumerate() {
         let line_1based = (line_num + 1) as u32;
         let trimmed = line.trim();
@@ -50,9 +51,9 @@ pub fn scan_sql_injection(source: &str, file_path: &str) -> Vec<Finding> {
             continue;
         }
 
-        let is_vuln = fstring_sql.is_match(trimmed)
-            || percent_sql.is_match(trimmed)
-            || concat_sql.is_match(trimmed);
+        let is_vuln = FSTRING_SQL.is_match(trimmed)
+            || PERCENT_SQL.is_match(trimmed)
+            || CONCAT_SQL.is_match(trimmed);
 
         if is_vuln {
             findings.push(Finding {
@@ -146,5 +147,34 @@ def search(query_str):
         if !findings.is_empty() {
             assert_eq!(findings[0].category, FindingCategory::Injection);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // BUG: SQL regexes recompiled on every call to scan_sql_injection
+    // -----------------------------------------------------------------------
+    // Regex::new() is called 3 times per invocation of scan_sql_injection.
+    // For large codebases scanned file-by-file, this is a performance bug.
+    // (Not a correctness bug, but worth fixing with LazyLock.)
+
+    // -----------------------------------------------------------------------
+    // BUG: percent_sql regex has quadratic backtracking on crafted input
+    // -----------------------------------------------------------------------
+    // Pattern: ["'](?i)(SELECT|...)\s.*%[sd].*["']\s*%
+    // The two `.*` separated by `%[sd]` cause O(n^2) backtracking on long
+    // lines that start with "SELECT but have no %s/%d near the end.
+    #[test]
+    fn percent_sql_regex_does_not_hang_on_long_input() {
+        // A line with "SELECT" followed by 5000 chars and no %s/%d —
+        // should return quickly, not hang.
+        let padding = "x".repeat(5000);
+        let line = format!("\"SELECT {padding}\"");
+        let start = std::time::Instant::now();
+        let _ = scan_sql_injection(&line, "app.py");
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_millis() < 1000,
+            "BUG: regex took {}ms on crafted input — possible quadratic backtracking",
+            elapsed.as_millis()
+        );
     }
 }

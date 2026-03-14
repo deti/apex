@@ -3046,13 +3046,7 @@ mod tests {
             [("x".into(), serde_json::json!(10))].into(),
         );
         let seeds = s.boundary_seeds(&entry, 1);
-        assert!(!seeds.is_empty());
-        let combined: String = seeds.join("\n");
-        // "from  import " — this is syntactically invalid Python
-        assert!(
-            combined.contains("from  import "),
-            "BUG: empty module/func generates invalid Python import: {}",
-            combined
-        );
+        // After fix: empty module/func should produce no seeds (not invalid Python)
+        assert!(seeds.is_empty(), "expected no seeds for empty module/func, got: {:?}", seeds);
     }
 }

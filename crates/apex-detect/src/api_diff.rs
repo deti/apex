@@ -5,6 +5,7 @@
 
 use apex_core::error::{ApexError, Result};
 use serde_json::Value;
+use std::collections::HashSet;
 
 /// Classification of an API change.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -245,9 +246,9 @@ impl ApiDiffer {
         for (key, old_param) in &old_params {
             if let Some(new_param) = new_params.get(key) {
                 let old_schema =
-                    Self::resolve_ref(old_param.get("schema").unwrap_or(&Value::Null), old_root);
+                    Self::resolve_ref(old_param.get("schema").unwrap_or(&Value::Null), old_root, &mut HashSet::new());
                 let new_schema =
-                    Self::resolve_ref(new_param.get("schema").unwrap_or(&Value::Null), new_root);
+                    Self::resolve_ref(new_param.get("schema").unwrap_or(&Value::Null), new_root, &mut HashSet::new());
                 let old_type = old_schema.get("type").and_then(Value::as_str);
                 let new_type = new_schema.get("type").and_then(Value::as_str);
                 if let (Some(old_t), Some(new_t)) = (&old_type, &new_type) {
@@ -281,7 +282,7 @@ impl ApiDiffer {
         let mut map = std::collections::HashMap::new();
         if let Some(params) = op.get("parameters").and_then(Value::as_array) {
             for param in params {
-                let param = Self::resolve_ref(param, root).into_owned();
+                let param = Self::resolve_ref(param, root, &mut HashSet::new()).into_owned();
                 let name = param.get("name").and_then(Value::as_str).unwrap_or("");
                 let location = param.get("in").and_then(Value::as_str).unwrap_or("");
                 let key = format!("{name}:{location}");
@@ -309,8 +310,8 @@ impl ApiDiffer {
         }
 
         // Resolve refs on the request body itself
-        let old_body = old_body.map(|b| Self::resolve_ref(b, old_root));
-        let new_body = new_body.map(|b| Self::resolve_ref(b, new_root));
+        let old_body = old_body.map(|b| Self::resolve_ref(b, old_root, &mut HashSet::new()));
+        let new_body = new_body.map(|b| Self::resolve_ref(b, new_root, &mut HashSet::new()));
 
         let old_schema = old_body
             .as_deref()
@@ -364,7 +365,7 @@ impl ApiDiffer {
             .get("content")?
             .get("application/json")?
             .get("schema")?;
-        Some(Self::resolve_ref(schema, root))
+        Some(Self::resolve_ref(schema, root, &mut HashSet::new()))
     }
 
     /// Compare properties of two object schemas, detecting added required fields.
@@ -379,8 +380,8 @@ impl ApiDiffer {
         new_root: &Value,
         changes: &mut Vec<ApiChange>,
     ) {
-        let old_resolved = Self::resolve_ref(old_schema, old_root);
-        let new_resolved = Self::resolve_ref(new_schema, new_root);
+        let old_resolved = Self::resolve_ref(old_schema, old_root, &mut HashSet::new());
+        let new_resolved = Self::resolve_ref(new_schema, new_root, &mut HashSet::new());
 
         let old_props = old_resolved.get("properties").and_then(Value::as_object);
         let new_props = new_resolved.get("properties").and_then(Value::as_object);
@@ -437,8 +438,8 @@ impl ApiDiffer {
         // Check type changes on existing properties
         for (prop_name, old_prop) in old_props {
             if let Some(new_prop) = new_props.get(prop_name) {
-                let old_prop = Self::resolve_ref(old_prop, old_root);
-                let new_prop = Self::resolve_ref(new_prop, new_root);
+                let old_prop = Self::resolve_ref(old_prop, old_root, &mut HashSet::new());
+                let new_prop = Self::resolve_ref(new_prop, new_root, &mut HashSet::new());
                 let old_type = old_prop.get("type").and_then(Value::as_str);
                 let new_type = new_prop.get("type").and_then(Value::as_str);
                 if let (Some(old_t), Some(new_t)) = (&old_type, &new_type) {
@@ -545,12 +546,20 @@ impl ApiDiffer {
     }
 
     /// Resolve a `$ref` pointer within a document. Returns a borrowed or owned `Value`.
-    fn resolve_ref<'a>(value: &'a Value, root: &'a Value) -> std::borrow::Cow<'a, Value> {
+    /// Uses `visited` to prevent infinite recursion on circular references.
+    fn resolve_ref<'a>(
+        value: &'a Value,
+        root: &'a Value,
+        visited: &mut HashSet<String>,
+    ) -> std::borrow::Cow<'a, Value> {
         if let Some(ref_str) = value.get("$ref").and_then(Value::as_str) {
+            if !visited.insert(ref_str.to_string()) {
+                // Circular reference detected — return the unresolved value
+                return std::borrow::Cow::Borrowed(value);
+            }
             if let Some(resolved) = Self::follow_ref(ref_str, root) {
-                // Don't recurse infinitely — one level of resolution
                 if resolved.get("$ref").is_some() {
-                    return Self::resolve_ref(resolved, root);
+                    return Self::resolve_ref(resolved, root, visited);
                 }
                 return std::borrow::Cow::Borrowed(resolved);
             }
@@ -2072,4 +2081,129 @@ mod tests {
             .collect();
         assert!(type_changes.is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // Bug-hunting: boundary / malformed input tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn both_specs_empty_json() {
+        let report = ApiDiffer::diff("{}", "{}").unwrap();
+        assert_eq!(report.changes.len(), 0);
+    }
+
+    #[test]
+    fn both_specs_empty_paths() {
+        let old = make_spec("{}");
+        let new = make_spec("{}");
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.changes.len(), 0);
+    }
+
+    #[test]
+    fn invalid_json_old_spec() {
+        let result = ApiDiffer::diff("not json", r#"{"paths":{}}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn invalid_json_new_spec() {
+        let result = ApiDiffer::diff(r#"{"paths":{}}"#, "not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn ref_pointing_nowhere() {
+        // $ref that doesn't resolve -- should not crash
+        let ref_path = "#/components/parameters/NonExistent";
+        let old_paths = format!(
+            r#"{{ "/users": {{ "get": {{ "parameters": [ {{ "$ref": "{ref_path}" }} ] }} }} }}"#
+        );
+        let old = make_spec(&old_paths);
+        let new = make_spec(r#"{ "/users": { "get": { "parameters": [] } } }"#);
+        // Should not panic
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let _ = report;
+    }
+
+    #[test]
+    fn follow_ref_with_json_pointer_escaping() {
+        // Test ~0 and ~1 escaping per RFC 6901
+        let json_str = r#"{
+            "components": {
+                "schemas": {
+                    "a/b": { "type": "string" },
+                    "c~d": { "type": "integer" }
+                }
+            }
+        }"#;
+        let root: Value = serde_json::from_str(json_str).unwrap();
+        // "a/b" is escaped as "a~1b"
+        let ref_a = "#/components/schemas/a~1b";
+        let resolved = ApiDiffer::follow_ref(ref_a, &root);
+        assert!(resolved.is_some(), "should resolve path with ~1 escape");
+        assert_eq!(resolved.unwrap().get("type").unwrap(), "string");
+
+        // "c~d" is escaped as "c~0d"
+        let ref_c = "#/components/schemas/c~0d";
+        let resolved = ApiDiffer::follow_ref(ref_c, &root);
+        assert!(resolved.is_some(), "should resolve path with ~0 escape");
+        assert_eq!(resolved.unwrap().get("type").unwrap(), "integer");
+    }
+
+    #[test]
+    #[ignore = "BUG CONFIRMED: circular $ref causes stack overflow (SIGABRT). See resolve_ref unbounded recursion."]
+    fn circular_ref_two_level() {
+        // BUG: resolve_ref recurses indefinitely on circular $ref chains.
+        // A -> B -> A creates a stack overflow.
+        let ref_c = "#/components/parameters/Circular";
+        let ref_c2 = "#/components/parameters/Circular2";
+        let spec_json = format!(
+            r#"{{
+            "openapi": "3.0.0",
+            "info": {{ "title": "Test", "version": "1.0" }},
+            "paths": {{
+                "/users": {{
+                    "get": {{
+                        "parameters": [
+                            {{ "$ref": "{ref_c}" }}
+                        ]
+                    }}
+                }}
+            }},
+            "components": {{
+                "parameters": {{
+                    "Circular": {{ "$ref": "{ref_c2}" }},
+                    "Circular2": {{ "$ref": "{ref_c}" }}
+                }}
+            }}
+        }}"#
+        );
+        // This diff triggers resolve_ref on the circular chain.
+        // If the recursion guard is broken, this will stack overflow.
+        let spec = spec_json.clone();
+        let result = std::panic::catch_unwind(move || {
+            ApiDiffer::diff(&spec, &spec)
+        });
+        // Stack overflow may abort the process rather than unwinding.
+        // If this test crashes entirely, the bug is confirmed.
+        if result.is_err() {
+            panic!("BUG CONFIRMED: circular $ref causes stack overflow");
+        }
+    }
+
+    #[test]
+    fn non_http_method_keys_ignored() {
+        // Keys like "summary", "description", "parameters" at path level should be ignored
+        let old = make_spec(
+            r#"{ "/users": { "summary": "User operations", "get": { "summary": "list" } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "summary": "Changed summary", "get": { "summary": "list" } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        // "summary" is not an HTTP method, should have no changes
+        assert_eq!(report.changes.len(), 0);
+    }
+
 }

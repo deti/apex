@@ -61,6 +61,14 @@ cargo fmt --check                         # format check
 - Plans: `docs/superpowers/plans/YYYY-MM-DD-<topic>.md`
 - Specs: `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
 - Internal planning: `/plans/` (gitignored)
+- **Plan registry:** `/plans/STATUS.md` — single source of truth for all plan statuses
+- **Status convention:** first line of each plan file: `<!-- status: DONE|ACTIVE|PARKED|DEPRECATED|FUTURE -->`
+  - `DONE` — all tasks implemented
+  - `ACTIVE` — currently being worked on
+  - `PARKED` — partially done, not actively worked on
+  - `DEPRECATED` — superseded or no longer relevant
+  - `FUTURE` — roadmap item, not started
+- Before creating a new plan, check STATUS.md. Update it when plan status changes.
 
 ## Distribution
 

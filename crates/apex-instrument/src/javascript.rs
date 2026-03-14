@@ -267,6 +267,10 @@ impl JavaScriptInstrumentor {
                         (branch.loc.start.line, branch.loc.start.column)
                     };
 
+                    if i >= 256 {
+                        warn!("branch has >255 arms, truncating Istanbul counters");
+                        break;
+                    }
                     let bid = BranchId::new(file_id, line, col, i as u8);
                     self.branch_ids.push(bid.clone());
                     total_branches += 1;
@@ -1986,5 +1990,255 @@ mod tests {
         assert!(inst.branch_ids.is_empty());
         assert!(inst.executed_branch_ids.is_empty());
         assert!(inst.file_paths.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug-hunting: Istanbul parser boundary tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_istanbul_missing_branch_map_key_in_b() {
+        // branchMap has key "0" but b has no key "0" — should default to not-executed
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json_path = root.join("coverage-final.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/app.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 5, "column": 4 }}, "end": {{ "line": 5, "column": 30 }} }},
+        "locations": [
+          {{ "start": {{ "line": 5, "column": 4 }}, "end": {{ "line": 5, "column": 15 }} }},
+          {{ "start": {{ "line": 5, "column": 18 }}, "end": {{ "line": 5, "column": 30 }} }}
+        ]
+      }}
+    }},
+    "b": {{}}
+  }}
+}}"#,
+            root = root.display()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, root).unwrap();
+        // 2 arms, neither executed (b has no key "0")
+        assert_eq!(inst.branch_ids.len(), 2);
+        assert_eq!(inst.executed_branch_ids.len(), 0);
+    }
+
+    #[test]
+    fn test_istanbul_b_count_shorter_than_locations() {
+        // locations has 3 arms but b["0"] has only 1 count — arms 1,2 are not hit
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json_path = root.join("coverage-final.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/app.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 5, "column": 0 }}, "end": {{ "line": 5, "column": 30 }} }},
+        "locations": [
+          {{ "start": {{ "line": 5, "column": 0 }}, "end": {{ "line": 5, "column": 10 }} }},
+          {{ "start": {{ "line": 5, "column": 11 }}, "end": {{ "line": 5, "column": 20 }} }},
+          {{ "start": {{ "line": 5, "column": 21 }}, "end": {{ "line": 5, "column": 30 }} }}
+        ]
+      }}
+    }},
+    "b": {{
+      "0": [5]
+    }}
+  }}
+}}"#,
+            root = root.display()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, root).unwrap();
+        assert_eq!(inst.branch_ids.len(), 3);
+        // Only first arm was hit (count=5), the other two have no count entry
+        assert_eq!(inst.executed_branch_ids.len(), 1);
+    }
+
+    #[test]
+    fn test_istanbul_empty_filename() {
+        // Empty string as filename — should parse but produce an odd file_id
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json_path = root.join("coverage-final.json");
+        let json = r#"{
+  "": {
+    "branchMap": {
+      "0": {
+        "loc": { "start": { "line": 1, "column": 0 }, "end": { "line": 1, "column": 10 } },
+        "locations": []
+      }
+    },
+    "b": {
+      "0": [1, 0]
+    }
+  }
+}"#;
+        std::fs::write(&json_path, json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, root).unwrap();
+        // Empty locations but b["0"] has 2 counts => arm_count = 2
+        assert_eq!(inst.branch_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_istanbul_arm_index_u8_overflow() {
+        // BUG: If a branch has > 255 arms, `i as u8` wraps silently.
+        // This creates duplicate BranchIds.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json_path = root.join("coverage-final.json");
+
+        // Build a branch with 257 arms via b counts
+        let counts: Vec<String> = (0..257).map(|i| if i == 0 { "1".into() } else { "0".into() }).collect();
+        let counts_str = counts.join(", ");
+
+        let json = format!(
+            r#"{{
+  "{root}/src/big.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 1, "column": 0 }}, "end": {{ "line": 1, "column": 10 }} }},
+        "locations": []
+      }}
+    }},
+    "b": {{
+      "0": [{counts_str}]
+    }}
+  }}
+}}"#,
+            root = root.display(),
+            counts_str = counts_str
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, root).unwrap();
+
+        // After fix: arms beyond 255 are truncated, so we get at most 256
+        assert_eq!(inst.branch_ids.len(), 256);
+    }
+
+    #[test]
+    fn test_istanbul_empty_branch_map() {
+        // File with empty branchMap — should produce 0 branches
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json_path = root.join("coverage-final.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/no_branch.js": {{
+    "branchMap": {{}},
+    "b": {{}}
+  }}
+}}"#,
+            root = root.display()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, root).unwrap();
+        assert_eq!(inst.branch_ids.len(), 0);
+        // File still gets registered
+        assert_eq!(inst.file_paths.len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug-hunting tests
+    // -----------------------------------------------------------------------
+
+    /// BUG: `i as u8` on line 270 silently truncates direction for branches
+    /// with more than 255 arms. A switch statement with 256+ cases would
+    /// produce branch IDs with direction wrapping around to 0, creating
+    /// collisions with earlier arms.
+    #[test]
+    fn bug_istanbul_direction_overflow_u8() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json_path = root.join("coverage-final.json");
+
+        // Build a branch with 260 arms (> 255, the max u8 value)
+        let mut locations = Vec::new();
+        let mut counts = Vec::new();
+        for i in 0..260u32 {
+            locations.push(format!(
+                r#"{{ "start": {{ "line": {}, "column": 0 }} }}"#,
+                100 + i
+            ));
+            counts.push("1");
+        }
+
+        let json = format!(
+            r#"{{
+  "{root}/src/big_switch.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 100, "column": 0 }}, "end": {{ "line": 360, "column": 1 }} }},
+        "locations": [{locations}]
+      }}
+    }},
+    "b": {{
+      "0": [{counts}]
+    }}
+  }}
+}}"#,
+            root = root.display(),
+            locations = locations.join(", "),
+            counts = counts.join(", ")
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, root).unwrap();
+
+        // After fix: arms beyond 255 are truncated, so we get at most 256
+        assert_eq!(inst.branch_ids.len(), 256);
+        // No collision possible since arm 256+ are never created
+        let arm_0 = &inst.branch_ids[0];
+        let arm_255 = &inst.branch_ids[255];
+        assert_ne!(arm_0.direction, arm_255.direction);
+    }
+
+    /// BUG: When branchMap has a key not present in the `b` map, the code
+    /// defaults to arm_count=2 (line 256), but then hit_counts is None,
+    /// so all arms are marked as not hit. This is correct behavior for missing
+    /// data, but worth documenting.
+    #[test]
+    fn istanbul_missing_b_key_defaults_to_two_arms() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let json_path = root.join("coverage-final.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/missing.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 5, "column": 0 }}, "end": {{ "line": 5, "column": 10 }} }},
+        "locations": []
+      }}
+    }},
+    "b": {{}}
+  }}
+}}"#,
+            root = root.display()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, root).unwrap();
+
+        // locations is empty, b has no key "0" -> arm_count = 2 (default)
+        assert_eq!(inst.branch_ids.len(), 2);
+        // None are hit because b["0"] doesn't exist
+        assert_eq!(inst.executed_branch_ids.len(), 0);
     }
 }

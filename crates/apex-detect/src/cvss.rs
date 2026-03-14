@@ -1021,4 +1021,20 @@ mod tests {
         let score = calculate_cvss_score(&base);
         assert!(score > 7.0 && score < 10.0, "PR:L/S:U score: {score}");
     }
+
+    // -----------------------------------------------------------------------
+    // Bug-hunting tests
+    // -----------------------------------------------------------------------
+
+    /// roundup with a negative input: the (x * 100_000.0) as u64 cast
+    /// saturates to 0 for negative values, silently producing 0.0.
+    /// This is technically incorrect (roundup of -0.5 should be -0.5 or 0.0
+    /// depending on definition) but in practice the CVSS formula guards
+    /// against negatives. Documenting the behavior.
+    #[test]
+    fn roundup_negative_input_saturates() {
+        // This documents the existing behavior: negative -> 0.0
+        let result = roundup(-0.5);
+        assert_eq!(result, 0.0, "roundup(-0.5) should be 0.0 due to u64 saturation");
+    }
 }

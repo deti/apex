@@ -137,7 +137,7 @@ const PATTERN_META: &[PatternMeta] = &[
     // Heroku
     PatternMeta {
         name: "Heroku API Key",
-        severity: Severity::Critical,
+        severity: Severity::High,
         description: "Heroku API key",
     },
     // npm
@@ -195,7 +195,7 @@ const PATTERN_REGEXES: &[&str] = &[
     r"(?i)AccountKey=[A-Za-z0-9+/=]{44,}",
     r"(?i)DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[A-Za-z0-9+/=]+",
     // Heroku
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+    r#"(?i)heroku[_-]?api[_-]?key\s*[:=]\s*['"]?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"#,
     // npm
     r"npm_[A-Za-z0-9]{36}",
     // PyPI
@@ -203,6 +203,9 @@ const PATTERN_REGEXES: &[&str] = &[
     // Generic bearer
     r"(?i)bearer\s+[A-Za-z0-9_\-.]{20,}",
 ];
+
+// Compile-time check: PATTERN_META and PATTERN_REGEXES must have the same length.
+const _: () = assert!(PATTERN_META.len() == PATTERN_REGEXES.len());
 
 static COMPILED_SET: LazyLock<RegexSet> =
     LazyLock::new(|| RegexSet::new(PATTERN_REGEXES).expect("invalid secret-scan regex set"));
@@ -375,34 +378,35 @@ impl Detector for SecretScanDetector {
                 if !matches.is_empty() {
                     // Use the first (most specific) match
                     let idx = matches[0];
-                    let meta = &PATTERN_META[idx];
-                    findings.push(Finding {
-                        id: Uuid::new_v4(),
-                        detector: self.name().into(),
-                        severity: meta.severity,
-                        category: FindingCategory::HardcodedSecret,
-                        file: path.clone(),
-                        line: Some(line_1based),
-                        title: format!(
-                            "{}: {} at line {}",
-                            meta.name, meta.description, line_1based
-                        ),
-                        description: format!(
-                            "{} pattern matched in {}:{}",
-                            meta.name,
-                            path.display(),
-                            line_1based
-                        ),
-                        evidence: vec![],
-                        covered: false,
-                        suggestion:
-                            "Remove hardcoded secret and use environment variables or a secrets manager"
-                                .into(),
-                        explanation: None,
-                        fix: None,
-                        cwe_ids: vec![798],
-                    });
-                    continue; // one finding per line
+                    if let Some(meta) = PATTERN_META.get(idx) {
+                        findings.push(Finding {
+                            id: Uuid::new_v4(),
+                            detector: self.name().into(),
+                            severity: meta.severity,
+                            category: FindingCategory::HardcodedSecret,
+                            file: path.clone(),
+                            line: Some(line_1based),
+                            title: format!(
+                                "{}: {} at line {}",
+                                meta.name, meta.description, line_1based
+                            ),
+                            description: format!(
+                                "{} pattern matched in {}:{}",
+                                meta.name,
+                                path.display(),
+                                line_1based
+                            ),
+                            evidence: vec![],
+                            covered: false,
+                            suggestion:
+                                "Remove hardcoded secret and use environment variables or a secrets manager"
+                                    .into(),
+                            explanation: None,
+                            fix: None,
+                            cwe_ids: vec![798],
+                        });
+                        continue; // one finding per line
+                    }
                 }
 
                 // Entropy-based detection on string literals
@@ -942,6 +946,30 @@ mod tests {
             PATTERN_META.len(),
             PATTERN_REGEXES.len(),
             "PATTERN_META and PATTERN_REGEXES must have same length"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // BUG: Heroku UUID regex matches ALL UUIDs — massive false positives
+    // -----------------------------------------------------------------------
+    // The "Heroku API Key" regex is just a generic UUID pattern:
+    //   r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-...-[0-9a-fA-F]{12}"
+    // This matches any UUID (v4, v1, etc.), not just Heroku API keys.
+    // Every UUID literal in source code will be flagged as a "Heroku API Key".
+
+    #[tokio::test]
+    async fn heroku_regex_false_positive_on_generic_uuid() {
+        // This is a random UUID with no connection to Heroku.
+        let ctx = single_file_ctx(
+            "src/models.py",
+            "DEFAULT_NAMESPACE = \"550e8400-e29b-41d4-a716-446655440000\"\n",
+            Language::Python,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        // After fix: generic UUID should NOT match the Heroku pattern
+        assert!(
+            !findings.iter().any(|f| f.title.contains("Heroku")),
+            "generic UUID should not be detected as Heroku API key"
         );
     }
 }

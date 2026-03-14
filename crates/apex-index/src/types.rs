@@ -30,7 +30,7 @@ pub struct BranchProfile {
     /// Number of distinct tests that reach this branch.
     pub test_count: usize,
     /// Names of tests that reach this branch.
-    pub test_names: Vec<String>,
+    pub test_names: HashSet<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -64,12 +64,16 @@ impl BranchIndex {
                     branch: branch.clone(),
                     hit_count: 0,
                     test_count: 0,
-                    test_names: Vec::new(),
+                    test_names: HashSet::new(),
                 });
                 profile.hit_count += 1;
-                profile.test_count += 1;
-                profile.test_names.push(trace.test_name.clone());
+                profile.test_names.insert(trace.test_name.clone());
             }
+        }
+
+        // Derive test_count from the deduplicated test_names set
+        for profile in map.values_mut() {
+            profile.test_count = profile.test_names.len();
         }
 
         map
@@ -136,7 +140,10 @@ pub fn branch_key(b: &BranchId) -> String {
         b.line,
         b.col,
         b.direction,
-        b.condition_index.unwrap_or(255)
+        match b.condition_index {
+            Some(n) => n.to_string(),
+            None => "none".to_string(),
+        }
     )
 }
 
@@ -253,7 +260,7 @@ mod tests {
         let profile = &profiles[&key_10];
         assert_eq!(profile.hit_count, 2);
         assert_eq!(profile.test_count, 2);
-        assert_eq!(profile.test_names, vec!["test_a", "test_b"]);
+        assert_eq!(profile.test_names, HashSet::from(["test_a".to_string(), "test_b".to_string()]));
 
         let key_20 = branch_key(&make_branch(1, 20, 0));
         assert_eq!(profiles[&key_20].test_count, 1);
@@ -356,7 +363,7 @@ mod tests {
                 branch: dead_branch,
                 hit_count: 0,
                 test_count: 0,
-                test_names: vec![],
+                test_names: HashSet::new(),
             },
         );
         // Insert a profile with hit_count > 0 (alive)
@@ -368,7 +375,7 @@ mod tests {
                 branch: live_branch,
                 hit_count: 3,
                 test_count: 2,
-                test_names: vec!["t1".into(), "t2".into()],
+                test_names: HashSet::from(["t1".into(), "t2".into()]),
             },
         );
 
@@ -465,10 +472,10 @@ mod tests {
             "expected condition_index in key, got: {key}"
         );
 
-        // Without condition_index, should end with :255
+        // Without condition_index, should end with :none
         let b2 = make_branch(1, 10, 0);
         let key2 = branch_key(&b2);
-        assert!(key2.ends_with(":255"), "expected 255 sentinel, got: {key2}");
+        assert!(key2.ends_with(":none"), "expected none sentinel, got: {key2}");
     }
 
     #[test]
@@ -796,7 +803,7 @@ mod tests {
         let p = &profiles[&key];
         assert_eq!(p.hit_count, 3);
         assert_eq!(p.test_count, 3);
-        assert_eq!(p.test_names, vec!["a", "b", "c"]);
+        assert_eq!(p.test_names, HashSet::from(["a".to_string(), "b".to_string(), "c".to_string()]));
     }
 
     #[test]
@@ -827,6 +834,60 @@ mod tests {
             source_hash: String::new(),
         };
         assert!(index.dead_branches().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug-hunting: boundary / semantic tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn build_profiles_conflates_hit_count_and_test_count() {
+        // BUG: If a branch appears TWICE in one test's branches list,
+        // both hit_count and test_count increment. But test_count should
+        // count distinct tests, not duplicate appearances within one test.
+        let b = make_branch(1, 10, 0);
+        let traces = vec![TestTrace {
+            test_name: "test_a".into(),
+            branches: vec![b.clone(), b.clone()], // same branch twice in one test
+            duration_ms: 10,
+            status: ExecutionStatus::Pass,
+        }];
+
+        let profiles = BranchIndex::build_profiles(&traces);
+        let key = branch_key(&b);
+        let p = &profiles[&key];
+
+        // hit_count = 2 is correct (branch was reached 2 times)
+        assert_eq!(p.hit_count, 2);
+        // After fix: test_count correctly counts distinct tests (1, not 2)
+        assert_eq!(
+            p.test_count, 1,
+            "test_count should count distinct tests, not occurrences"
+        );
+        // After fix: test_names is a HashSet, so duplicates are eliminated
+        assert_eq!(
+            p.test_names.len(), 1,
+            "test_names should deduplicate entries for same test"
+        );
+    }
+
+    #[test]
+    fn branch_key_condition_index_collision() {
+        // A branch with condition_index=None maps to 255 in the key.
+        // A branch with condition_index=Some(255) ALSO maps to 255.
+        // These are semantically different but produce the same key -> collision.
+        let mut b1 = make_branch(1, 10, 0);
+        b1.condition_index = None; // key ends with ":255"
+
+        let mut b2 = make_branch(1, 10, 0);
+        b2.condition_index = Some(255); // key also ends with ":255"
+
+        // After fix: None maps to "none", Some(255) maps to "255" — no collision
+        assert_ne!(
+            branch_key(&b1),
+            branch_key(&b2),
+            "condition_index=None and condition_index=Some(255) should produce different keys"
+        );
     }
 
     #[test]
