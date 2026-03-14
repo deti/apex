@@ -12,7 +12,9 @@ pub mod segment;
 
 pub use jest::JestSynthesizer;
 pub use junit::JUnitSynthesizer;
-pub use llm::{CoverageGap, LlmConfig, LlmMessage, LlmRole, LlmSynthesizer, SynthAttempt, TestResult};
+pub use llm::{
+    CoverageGap, LlmConfig, LlmMessage, LlmRole, LlmSynthesizer, SynthAttempt, TestResult,
+};
 pub use python::PytestSynthesizer;
 pub use rust::CargoTestSynthesizer;
 pub use segment::{clean_error_output, extract_segment, CodeSegment};

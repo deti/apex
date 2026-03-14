@@ -734,8 +734,7 @@ warning: 2 allowed advisories were not found in the advisory database:
         let findings = parse_npm_audit_output(moderate_raw).unwrap();
         assert_eq!(findings[0].severity, Severity::Medium);
 
-        let info_raw =
-            r#"{"vulnerabilities":{"c":{"severity":"info","via":[],"range":"<3.0"}}}"#;
+        let info_raw = r#"{"vulnerabilities":{"c":{"severity":"info","via":[],"range":"<3.0"}}}"#;
         let findings = parse_npm_audit_output(info_raw).unwrap();
         assert_eq!(findings[0].severity, Severity::Info);
     }

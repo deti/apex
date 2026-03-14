@@ -47,11 +47,7 @@ pub const PYTHON_SINKS: &[&str] = &[
 ];
 
 /// Sanitizers that break taint flow.
-pub const PYTHON_SANITIZERS: &[&str] = &[
-    "shlex.quote",
-    "os.path.normpath",
-    "html.escape",
-];
+pub const PYTHON_SANITIZERS: &[&str] = &["shlex.quote", "os.path.normpath", "html.escape"];
 
 /// Given a CPG with `ReachingDef` edges already materialized, find all taint
 /// flows from sources to sinks via backward reachability.
@@ -267,10 +263,7 @@ def safe():
         add_reaching_def_edges(&mut cpg);
         let flows = find_taint_flows(&cpg, 10);
         // "echo hello" is a Literal, not a Parameter/source — no taint path
-        assert!(
-            flows.is_empty(),
-            "should find no flows; got: {flows:?}"
-        );
+        assert!(flows.is_empty(), "should find no flows; got: {flows:?}");
     }
 
     #[test]

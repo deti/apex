@@ -118,7 +118,10 @@ impl Cpg {
 
     /// All edges whose source is `id`.
     pub fn edges_from(&self, id: NodeId) -> Vec<&(NodeId, NodeId, EdgeKind)> {
-        self.edges.iter().filter(|(from, _, _)| *from == id).collect()
+        self.edges
+            .iter()
+            .filter(|(from, _, _)| *from == id)
+            .collect()
     }
 
     /// All edges whose target is `id`.

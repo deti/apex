@@ -277,7 +277,10 @@ mod tests {
             uncovered_lines: vec![12],
         };
         let messages = synth.initial_prompt(&gap);
-        assert!(messages.len() >= 2, "expected at least system + user message");
+        assert!(
+            messages.len() >= 2,
+            "expected at least system + user message"
+        );
         assert_eq!(messages[0].role, LlmRole::System);
         assert!(messages[1].content.contains("app.py"));
     }

@@ -252,12 +252,11 @@ mod tests {
         // The parameter `cmd` should have a ReachingDef edge to the identifier `cmd`
         let rd_edges: Vec<_> = cpg
             .edges()
-            .filter(|(_, _, k)| matches!(k, EdgeKind::ReachingDef { variable } if variable == "cmd"))
+            .filter(
+                |(_, _, k)| matches!(k, EdgeKind::ReachingDef { variable } if variable == "cmd"),
+            )
             .collect();
-        assert!(
-            !rd_edges.is_empty(),
-            "expected ReachingDef edge for 'cmd'"
-        );
+        assert!(!rd_edges.is_empty(), "expected ReachingDef edge for 'cmd'");
     }
 
     #[test]

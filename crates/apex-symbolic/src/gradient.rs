@@ -197,7 +197,10 @@ impl Solver for GradientSolver {
             Some(value) => {
                 // Encode as JSON: {"var_name": value}
                 let json = format!("{{\"{var_name}\": {value}}}");
-                Ok(Some(InputSeed::new(json.into_bytes(), SeedOrigin::Symbolic)))
+                Ok(Some(InputSeed::new(
+                    json.into_bytes(),
+                    SeedOrigin::Symbolic,
+                )))
             }
             None => Ok(None),
         }

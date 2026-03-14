@@ -158,7 +158,11 @@ impl<'a> PythonCpgBuilder<'a> {
 
         // Fallback: treat as an identifier reference
         let name = stmt.split('(').next().unwrap_or(stmt).trim().to_string();
-        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') {
+        if !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+        {
             return Some(cpg.add_node(NodeKind::Identifier {
                 name,
                 line: line_no,
@@ -169,14 +173,7 @@ impl<'a> PythonCpgBuilder<'a> {
     }
 
     /// Attach expression nodes (calls, identifiers, literals) as children of `parent`.
-    fn attach_expr(
-        &self,
-        expr: &str,
-        line_no: u32,
-        parent: u32,
-        arg_index: u32,
-        cpg: &mut Cpg,
-    ) {
+    fn attach_expr(&self, expr: &str, line_no: u32, parent: u32, arg_index: u32, cpg: &mut Cpg) {
         let expr = expr.trim();
         if expr.is_empty() {
             return;
@@ -199,7 +196,12 @@ impl<'a> PythonCpgBuilder<'a> {
         }
 
         // Numeric literal
-        if expr.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        if expr
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
             let lit_id = cpg.add_node(NodeKind::Literal {
                 value: expr.to_string(),
                 line: line_no,
@@ -314,7 +316,10 @@ fn parse_ctrl(stmt: &str, line_no: u32) -> Option<NodeKind> {
     } else {
         return None;
     };
-    Some(NodeKind::ControlStructure { kind, line: line_no })
+    Some(NodeKind::ControlStructure {
+        kind,
+        line: line_no,
+    })
 }
 
 /// Detect `lhs = rhs` (but not `==`, `!=`, `<=`, `>=`).
@@ -439,8 +444,7 @@ mod tests {
 
     #[test]
     fn builder_detects_function_calls() {
-        let cpg =
-            build_python_cpg("def foo():\n    subprocess.run(cmd)\n", "test.py");
+        let cpg = build_python_cpg("def foo():\n    subprocess.run(cmd)\n", "test.py");
         assert!(call_names(&cpg).contains(&"subprocess.run".to_string()));
     }
 
@@ -473,18 +477,31 @@ mod tests {
             .nodes()
             .find_map(|(id, k)| matches!(k, NodeKind::Method { .. }).then_some(id))
             .expect("method node");
-        let ast_count = cpg.edges_from(method_id).iter().filter(|(_, _, k)| matches!(k, EdgeKind::Ast)).count();
+        let ast_count = cpg
+            .edges_from(method_id)
+            .iter()
+            .filter(|(_, _, k)| matches!(k, EdgeKind::Ast))
+            .count();
         // method → parameter(s) + each body statement
-        assert!(ast_count >= 1, "expected AST edges from method, got {ast_count}");
+        assert!(
+            ast_count >= 1,
+            "expected AST edges from method, got {ast_count}"
+        );
     }
 
     #[test]
     fn builder_detects_control_structures() {
         let source = "def foo(x):\n    if x > 0:\n        pass\n";
         let cpg = build_python_cpg(source, "test.py");
-        let has_if = cpg
-            .nodes()
-            .any(|(_, k)| matches!(k, NodeKind::ControlStructure { kind: CtrlKind::If, .. }));
+        let has_if = cpg.nodes().any(|(_, k)| {
+            matches!(
+                k,
+                NodeKind::ControlStructure {
+                    kind: CtrlKind::If,
+                    ..
+                }
+            )
+        });
         assert!(has_if);
     }
 
@@ -492,7 +509,9 @@ mod tests {
     fn builder_detects_return() {
         let source = "def foo():\n    return 42\n";
         let cpg = build_python_cpg(source, "test.py");
-        assert!(cpg.nodes().any(|(_, k)| matches!(k, NodeKind::Return { .. })));
+        assert!(cpg
+            .nodes()
+            .any(|(_, k)| matches!(k, NodeKind::Return { .. })));
     }
 
     #[test]

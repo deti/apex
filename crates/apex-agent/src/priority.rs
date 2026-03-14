@@ -25,23 +25,29 @@ pub fn target_priority(
 ) -> f64 {
     let rarity = 1.0 / (hit_count as f64 + 1.0);
     let depth_penalty = 1.0 / (depth_in_cfg as f64).ln_1p().max(1.0);
-    let staleness_bonus = if attempts_since_progress > 5 { 0.5 } else { 0.0 };
+    let staleness_bonus = if attempts_since_progress > 5 {
+        0.5
+    } else {
+        0.0
+    };
     let proximity = heuristic;
 
     rarity * depth_penalty * (1.0 + proximity) + staleness_bonus
 }
 
 /// Select the top-K branches by priority.
-pub fn select_top_targets(
-    branches: &[BranchCandidate],
-    k: usize,
-) -> Vec<BranchId> {
+pub fn select_top_targets(branches: &[BranchCandidate], k: usize) -> Vec<BranchId> {
     let mut scored: Vec<_> = branches
         .iter()
         .map(|b| {
             (
                 b.id.clone(),
-                target_priority(b.heuristic, b.attempts_since_progress, b.depth_in_cfg, b.hit_count),
+                target_priority(
+                    b.heuristic,
+                    b.attempts_since_progress,
+                    b.depth_in_cfg,
+                    b.hit_count,
+                ),
             )
         })
         .collect();
@@ -60,10 +66,7 @@ pub enum StrategyRecommendation {
     LlmSynth,
 }
 
-pub fn recommend_strategy(
-    heuristic: f64,
-    attempts_since_progress: u64,
-) -> StrategyRecommendation {
+pub fn recommend_strategy(heuristic: f64, attempts_since_progress: u64) -> StrategyRecommendation {
     if attempts_since_progress > 10 {
         StrategyRecommendation::LlmSynth // Stalled — rotate to LLM
     } else if heuristic > 0.8 {
@@ -243,14 +246,23 @@ mod tests {
         // Exactly 0.8 is not > 0.8, so falls to Fuzz
         assert_eq!(recommend_strategy(0.8, 0), StrategyRecommendation::Fuzz);
         // Just above 0.8 → Gradient
-        assert_eq!(recommend_strategy(0.81, 0), StrategyRecommendation::Gradient);
+        assert_eq!(
+            recommend_strategy(0.81, 0),
+            StrategyRecommendation::Gradient
+        );
     }
 
     #[test]
     fn recommend_strategy_stall_boundary() {
         // Exactly 10 attempts is not > 10, so heuristic still applies
-        assert_eq!(recommend_strategy(0.9, 10), StrategyRecommendation::Gradient);
+        assert_eq!(
+            recommend_strategy(0.9, 10),
+            StrategyRecommendation::Gradient
+        );
         // 11 attempts → stalled → LlmSynth regardless of heuristic
-        assert_eq!(recommend_strategy(0.9, 11), StrategyRecommendation::LlmSynth);
+        assert_eq!(
+            recommend_strategy(0.9, 11),
+            StrategyRecommendation::LlmSynth
+        );
     }
 }

@@ -3,5 +3,5 @@
 pub mod heuristic;
 pub mod oracle;
 
-pub use heuristic::{BranchHeuristic, CmpOp, branch_distance};
+pub use heuristic::{branch_distance, BranchHeuristic, CmpOp};
 pub use oracle::{CoverageOracle, DeltaCoverage};

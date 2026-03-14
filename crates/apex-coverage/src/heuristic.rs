@@ -158,7 +158,14 @@ mod tests {
 
     #[test]
     fn distance_always_in_range() {
-        for op in [CmpOp::Eq, CmpOp::Ne, CmpOp::Lt, CmpOp::Le, CmpOp::Gt, CmpOp::Ge] {
+        for op in [
+            CmpOp::Eq,
+            CmpOp::Ne,
+            CmpOp::Lt,
+            CmpOp::Le,
+            CmpOp::Gt,
+            CmpOp::Ge,
+        ] {
             for a in [-100, -1, 0, 1, 42, 1000] {
                 for b in [-100, -1, 0, 1, 42, 1000] {
                     let d = branch_distance(op, a, b);

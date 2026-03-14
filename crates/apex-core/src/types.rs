@@ -1044,7 +1044,10 @@ mod tests {
     #[test]
     fn python_has_instrumentation() {
         let features = Language::Python.supported_features();
-        let instr = features.iter().find(|f| f.name == "instrumentation").unwrap();
+        let instr = features
+            .iter()
+            .find(|f| f.name == "instrumentation")
+            .unwrap();
         assert_eq!(instr.status, FeatureStatus::Full);
         assert_eq!(instr.tool, "coverage.py");
     }
@@ -1052,15 +1055,27 @@ mod tests {
     #[test]
     fn ruby_instrumentation_missing() {
         let features = Language::Ruby.supported_features();
-        let instr = features.iter().find(|f| f.name == "instrumentation").unwrap();
+        let instr = features
+            .iter()
+            .find(|f| f.name == "instrumentation")
+            .unwrap();
         assert_eq!(instr.status, FeatureStatus::Missing);
     }
 
     #[test]
     fn all_languages_have_security_patterns() {
-        for lang in [Language::Python, Language::JavaScript, Language::Java, Language::Rust, Language::C] {
+        for lang in [
+            Language::Python,
+            Language::JavaScript,
+            Language::Java,
+            Language::Rust,
+            Language::C,
+        ] {
             let features = lang.supported_features();
-            let sec = features.iter().find(|f| f.name == "security-patterns").unwrap();
+            let sec = features
+                .iter()
+                .find(|f| f.name == "security-patterns")
+                .unwrap();
             assert_ne!(sec.status, FeatureStatus::Missing);
         }
     }
@@ -1068,8 +1083,19 @@ mod tests {
     #[test]
     fn feature_count_consistent() {
         let py_count = Language::Python.supported_features().len();
-        for lang in [Language::JavaScript, Language::Java, Language::Rust, Language::C, Language::Wasm, Language::Ruby] {
-            assert_eq!(lang.supported_features().len(), py_count, "all languages should have the same number of features");
+        for lang in [
+            Language::JavaScript,
+            Language::Java,
+            Language::Rust,
+            Language::C,
+            Language::Wasm,
+            Language::Ruby,
+        ] {
+            assert_eq!(
+                lang.supported_features().len(),
+                py_count,
+                "all languages should have the same number of features"
+            );
         }
     }
 }
