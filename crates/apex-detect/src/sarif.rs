@@ -128,6 +128,8 @@ fn category_to_cwes(category: &FindingCategory) -> Vec<String> {
         FindingCategory::InsecureConfig => vec!["CWE-16".into()],
         FindingCategory::HardcodedSecret => vec!["CWE-798".into()],
         FindingCategory::LicenseViolation => vec!["CWE-1357".into()],
+        FindingCategory::FeatureFlagHygiene => vec!["CWE-1127".into()],
+        FindingCategory::ApiBreakingChange => vec!["CWE-1105".into()],
     }
 }
 
