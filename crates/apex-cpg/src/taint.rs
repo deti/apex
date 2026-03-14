@@ -112,6 +112,17 @@ pub fn reachable_by(
     let mut flows = Vec::new();
 
     for &sink in sinks {
+        // Check if the sink itself is also a source (trivial flow).
+        if source_set.contains(&sink) {
+            flows.push(TaintFlow {
+                source: sink,
+                sink,
+                path: vec![sink],
+                variable_chain: vec![],
+            });
+            continue;
+        }
+
         // BFS backward from sink over ReachingDef edges.
         // State: (current_node, path_so_far, variables_seen)
         let mut queue: VecDeque<(NodeId, Vec<NodeId>, Vec<String>)> =
@@ -594,5 +605,18 @@ def run(user_input):
             !flows.is_empty(),
             "source reachable via Argument should produce a flow"
         );
+    }
+
+    #[test]
+    fn bug_sink_that_is_also_source_produces_trivial_flow() {
+        let mut cpg = Cpg::new();
+        let node = cpg.add_node(NodeKind::Call {
+            name: "eval".into(),
+            line: 1,
+        });
+        // Node is both source and sink
+        let flows = reachable_by(&cpg, &[node], &[node], 10);
+        assert!(!flows.is_empty(), "sink=source should produce a trivial flow");
+        assert_eq!(flows[0].path, vec![node]);
     }
 }

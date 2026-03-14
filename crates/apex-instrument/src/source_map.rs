@@ -184,4 +184,41 @@ mod tests {
         assert_eq!(decoded_clean, decoded_trailing);
         assert_eq!(decoded_clean, b"Hello");
     }
+
+    #[test]
+    fn base64_decode_empty_input() {
+        let decoded = base64_decode("").unwrap();
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn base64_decode_invalid_char_returns_err() {
+        assert!(base64_decode("SGV!bG8=").is_err());
+    }
+
+    #[test]
+    fn base64_decode_padding_variants() {
+        // No padding needed (3 bytes = 4 base64 chars)
+        assert_eq!(base64_decode("AQID").unwrap(), &[1, 2, 3]);
+        // Single padding (2 bytes = 3 base64 chars + 1 pad)
+        assert_eq!(base64_decode("AQI=").unwrap(), &[1, 2]);
+        // Double padding (1 byte = 2 base64 chars + 2 pad)
+        assert_eq!(base64_decode("AQ==").unwrap(), &[1]);
+    }
+
+    #[test]
+    fn base64_decode_with_carriage_return() {
+        // Windows-style line endings in base64
+        let decoded = base64_decode("SGVs\r\nbG8=").unwrap();
+        assert_eq!(decoded, b"Hello");
+    }
+
+    #[test]
+    fn remap_empty_branches() {
+        let file_paths = HashMap::new();
+        let branches = vec![];
+        let (remapped, new_files) = remap_source_maps(branches, &file_paths, Path::new("/tmp"));
+        assert!(remapped.is_empty());
+        assert!(new_files.is_empty());
+    }
 }

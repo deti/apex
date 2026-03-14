@@ -510,6 +510,10 @@ fn parse_coverage_stats(
 }
 
 fn make_relative(path: &str, target: &str) -> String {
+    if target.is_empty() {
+        return path.to_string();
+    }
+
     let prefix = if target.ends_with('/') {
         target.to_string()
     } else {
@@ -713,5 +717,98 @@ mod tests {
         assert!(!sanitized.contains('<'), "sanitized name should not contain <");
         assert!(!sanitized.contains('>'), "sanitized name should not contain >");
         assert!(!sanitized.contains('\\'), "sanitized name should not contain \\");
+    }
+
+    // -----------------------------------------------------------------------
+    // fnv1a — determinism and collision resistance
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fnv1a_deterministic() {
+        for input in &[b"hello" as &[u8], b"", b"src/main.rs", b"\xff\x00\x01"] {
+            assert_eq!(fnv1a(input), fnv1a(input));
+        }
+    }
+
+    #[test]
+    fn fnv1a_empty_input() {
+        assert_eq!(fnv1a(b""), 0xcbf29ce484222325);
+    }
+
+    #[test]
+    fn fnv1a_known_value() {
+        let expected = 0xcbf29ce484222325_u64 ^ 0x61;
+        let expected = expected.wrapping_mul(0x100000001b3);
+        assert_eq!(fnv1a(b"a"), expected);
+    }
+
+    #[test]
+    fn fnv1a_no_trivial_collisions() {
+        let paths = vec![
+            "src/main.rs", "src/lib.rs", "src/main.r", "src/main.rss",
+            "src/Main.rs", "SRC/main.rs", "src/main.rs/",
+        ];
+        let hashes: Vec<u64> = paths.iter().map(|p| fnv1a(p.as_bytes())).collect();
+        for i in 0..hashes.len() {
+            for j in (i + 1)..hashes.len() {
+                assert_ne!(hashes[i], hashes[j], "collision between '{}' and '{}'", paths[i], paths[j]);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // make_relative — additional edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn make_relative_empty_target() {
+        assert_eq!(make_relative("/some/path/file.rs", ""), "/some/path/file.rs");
+    }
+
+    #[test]
+    fn make_relative_unicode_path() {
+        assert_eq!(
+            make_relative("/home/用户/项目/src/main.rs", "/home/用户/项目"),
+            "src/main.rs"
+        );
+    }
+
+    #[test]
+    fn bug_make_relative_partial_overlap() {
+        // "/home/user/project" should NOT match "/home/user/project-extra/..."
+        let result = make_relative("/home/user/project-extra/src/main.rs", "/home/user/project");
+        assert_eq!(result, "/home/user/project-extra/src/main.rs");
+    }
+
+    #[test]
+    fn make_relative_windows_backslashes() {
+        let result = make_relative("C:\\Users\\dev\\project\\src\\main.rs", "C:\\Users\\dev\\project");
+        assert_eq!(result, "C:\\Users\\dev\\project\\src\\main.rs");
+    }
+
+    #[test]
+    fn bug_extract_branches_col_truncation() {
+        // Columns > u16::MAX silently truncate
+        let json = LlvmCovJson {
+            data: vec![LlvmCovData {
+                files: vec![LlvmCovFile {
+                    filename: "/project/src/lib.rs".to_string(),
+                    segments: vec![
+                        vec![
+                            serde_json::json!(10),
+                            serde_json::json!(70000),  // > u16::MAX
+                            serde_json::json!(1),
+                            serde_json::json!(true),
+                            serde_json::json!(true),
+                            serde_json::json!(false),
+                        ],
+                    ],
+                }],
+            }],
+        };
+        let branches = extract_covered_branches(&json, "/project");
+        assert_eq!(branches.len(), 1);
+        // Column saturates at u16::MAX
+        assert_eq!(branches[0].col, u16::MAX);
     }
 }

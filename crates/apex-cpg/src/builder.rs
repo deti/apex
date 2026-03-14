@@ -334,9 +334,18 @@ fn parse_assignment(stmt: &str) -> Option<(&str, &str)> {
             if prev == b'!' || prev == b'<' || prev == b'>' || prev == b'=' || next == b'=' {
                 continue;
             }
-            // augmented assignment: `+=`, `-=`, `*=`, `/=`
-            let lhs = if prev == b'+' || prev == b'-' || prev == b'*' || prev == b'/' {
-                stmt[..i - 1].trim()
+            // Augmented assignment operators: +=, -=, *=, /=, %=, &=, |=, ^=, **=, //=
+            let augmented_single =
+                prev == b'+' || prev == b'-' || prev == b'*' || prev == b'/'
+                || prev == b'%' || prev == b'&' || prev == b'|' || prev == b'^';
+            let lhs = if augmented_single {
+                // Check for double-char operators: **= and //=
+                let prev2 = if i >= 2 { bytes[i - 2] } else { 0 };
+                if (prev == b'*' && prev2 == b'*') || (prev == b'/' && prev2 == b'/') {
+                    stmt[..i - 2].trim()
+                } else {
+                    stmt[..i - 1].trim()
+                }
             } else {
                 stmt[..i].trim()
             };
@@ -882,5 +891,65 @@ mod tests {
             non_method_count, 0,
             "all-blank body should produce no statement nodes"
         );
+    }
+
+    #[test]
+    fn bug_parse_assignment_double_star_equals() {
+        let source = "def foo():\n    x **= 2\n";
+        let cpg = build_python_cpg(source, "test.py");
+        let has_correct = cpg.nodes().any(
+            |(_, k)| matches!(k, NodeKind::Assignment { lhs, .. } if lhs == "x"),
+        );
+        assert!(has_correct, "x **= 2 should produce Assignment with lhs='x'");
+    }
+
+    #[test]
+    fn bug_parse_assignment_double_slash_equals() {
+        let source = "def foo():\n    x //= 2\n";
+        let cpg = build_python_cpg(source, "test.py");
+        let has_correct = cpg.nodes().any(
+            |(_, k)| matches!(k, NodeKind::Assignment { lhs, .. } if lhs == "x"),
+        );
+        assert!(has_correct, "x //= 2 should produce Assignment with lhs='x'");
+    }
+
+    #[test]
+    fn bug_parse_assignment_percent_equals() {
+        let source = "def foo():\n    x %= 3\n";
+        let cpg = build_python_cpg(source, "test.py");
+        let has_correct = cpg.nodes().any(
+            |(_, k)| matches!(k, NodeKind::Assignment { lhs, .. } if lhs == "x"),
+        );
+        assert!(has_correct, "x %= 3 should produce Assignment with lhs='x'");
+    }
+
+    #[test]
+    fn bug_parse_assignment_bitwise_or_equals() {
+        let source = "def foo():\n    flags |= 0x01\n";
+        let cpg = build_python_cpg(source, "test.py");
+        let has_correct = cpg.nodes().any(
+            |(_, k)| matches!(k, NodeKind::Assignment { lhs, .. } if lhs == "flags"),
+        );
+        assert!(has_correct, "flags |= 0x01 should produce Assignment with lhs='flags'");
+    }
+
+    #[test]
+    fn bug_parse_assignment_bitwise_and_equals() {
+        let source = "def foo():\n    x &= 0xff\n";
+        let cpg = build_python_cpg(source, "test.py");
+        let has_correct = cpg.nodes().any(
+            |(_, k)| matches!(k, NodeKind::Assignment { lhs, .. } if lhs == "x"),
+        );
+        assert!(has_correct, "x &= 0xff should produce Assignment with lhs='x'");
+    }
+
+    #[test]
+    fn bug_parse_assignment_xor_equals() {
+        let source = "def foo():\n    x ^= mask\n";
+        let cpg = build_python_cpg(source, "test.py");
+        let has_correct = cpg.nodes().any(
+            |(_, k)| matches!(k, NodeKind::Assignment { lhs, .. } if lhs == "x"),
+        );
+        assert!(has_correct, "x ^= mask should produce Assignment with lhs='x'");
     }
 }
