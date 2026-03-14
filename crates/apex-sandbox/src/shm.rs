@@ -6,6 +6,7 @@
 /// (see `shim.rs`) or be compiled with a compatible SanitizerCoverage setup.
 use apex_core::error::{ApexError, Result};
 use std::ffi::CString;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 pub const MAP_SIZE: usize = 65_536;
@@ -25,6 +26,7 @@ unsafe impl Sync for ShmBitmap {}
 impl ShmBitmap {
     /// Create a new SHM region of `MAP_SIZE` bytes, zeroed.
     pub fn create() -> Result<Self> {
+        debug!(shm_size = MAP_SIZE, "Setting up shared memory bitmap");
         // macOS PSHMNAMLEN is 31 chars max; truncate UUID to fit.
         let uuid = Uuid::new_v4().simple().to_string();
         let name_str = format!("/apx_{}", &uuid[..16]);
@@ -35,20 +37,18 @@ impl ShmBitmap {
             // Open / create
             let fd = libc::shm_open(name.as_ptr(), libc::O_CREAT | libc::O_RDWR, 0o600);
             if fd < 0 {
-                return Err(ApexError::Sandbox(format!(
-                    "shm_open failed: {}",
-                    std::io::Error::last_os_error()
-                )));
+                let err = std::io::Error::last_os_error();
+                warn!(error = %err, "Failed to set up shared memory — shm_open failed");
+                return Err(ApexError::Sandbox(format!("shm_open failed: {err}")));
             }
 
             // Set size
             if libc::ftruncate(fd, MAP_SIZE as libc::off_t) < 0 {
+                let err = std::io::Error::last_os_error();
+                warn!(error = %err, "Failed to set up shared memory — ftruncate failed");
                 libc::close(fd);
                 libc::shm_unlink(name.as_ptr());
-                return Err(ApexError::Sandbox(format!(
-                    "ftruncate failed: {}",
-                    std::io::Error::last_os_error()
-                )));
+                return Err(ApexError::Sandbox(format!("ftruncate failed: {err}")));
             }
 
             // Map
@@ -63,11 +63,10 @@ impl ShmBitmap {
             libc::close(fd);
 
             if ptr == libc::MAP_FAILED {
+                let err = std::io::Error::last_os_error();
+                warn!(error = %err, "Failed to set up shared memory — mmap failed");
                 libc::shm_unlink(name.as_ptr());
-                return Err(ApexError::Sandbox(format!(
-                    "mmap failed: {}",
-                    std::io::Error::last_os_error()
-                )));
+                return Err(ApexError::Sandbox(format!("mmap failed: {err}")));
             }
 
             // Zero it out.

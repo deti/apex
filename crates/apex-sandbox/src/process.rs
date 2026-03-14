@@ -8,7 +8,7 @@ use apex_core::{
 use apex_coverage::CoverageOracle;
 use async_trait::async_trait;
 use std::{path::PathBuf, sync::Arc, time::Instant};
-use tracing::{debug, warn};
+use tracing::{debug, error, instrument, warn};
 
 // ---------------------------------------------------------------------------
 // ProcessSandbox
@@ -135,6 +135,7 @@ impl<R: CommandRunner> ProcessSandbox<R> {
 
 #[async_trait]
 impl<R: CommandRunner> Sandbox for ProcessSandbox<R> {
+    #[instrument(skip(self, input), fields(seed_id = ?input.id))]
     async fn run(&self, input: &InputSeed) -> Result<ExecutionResult> {
         let start = Instant::now();
 
@@ -154,6 +155,8 @@ impl<R: CommandRunner> Sandbox for ProcessSandbox<R> {
         let shm_name = shm.as_ref().map(|s| s.name_str());
         let spec = self.build_spec(input, shm_name)?;
 
+        let cmd_display = self.command.join(" ");
+        debug!(cmd = %cmd_display, "Spawning sandbox process");
         let result = self.runner.run_command(&spec).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -161,23 +164,42 @@ impl<R: CommandRunner> Sandbox for ProcessSandbox<R> {
         let bitmap = shm.as_ref().map(|s| s.read());
 
         match result {
-            Err(ApexError::Timeout(_)) => Ok(ExecutionResult {
-                seed_id: input.id,
-                status: ExecutionStatus::Timeout,
-                new_branches: Vec::new(),
-                trace: None,
-                duration_ms,
-                stdout: String::new(),
-                stderr: String::new(),
-                input: None,
-            }),
-            Err(e) => Err(ApexError::Sandbox(format!("run_command: {e}"))),
+            Err(ApexError::Timeout(_)) => {
+                warn!(timeout_ms = self.timeout_ms, "Process timed out");
+                Ok(ExecutionResult {
+                    seed_id: input.id,
+                    status: ExecutionStatus::Timeout,
+                    new_branches: Vec::new(),
+                    trace: None,
+                    duration_ms,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    input: None,
+                })
+            }
+            Err(e) => {
+                error!(cmd = %cmd_display, error = %e, "Failed to spawn sandbox process");
+                Err(ApexError::Sandbox(format!("run_command: {e}")))
+            }
             Ok(output) => {
                 let status = match output.exit_code {
                     0 => ExecutionStatus::Pass,
                     c if c < 0 => ExecutionStatus::Crash,
                     _ => ExecutionStatus::Fail,
                 };
+
+                match &status {
+                    ExecutionStatus::Pass => {
+                        debug!(exit_code = 0, "Process completed successfully")
+                    }
+                    ExecutionStatus::Fail => {
+                        debug!(exit_code = output.exit_code, "Process exited with failure")
+                    }
+                    ExecutionStatus::Crash => {
+                        warn!(exit_code = output.exit_code, "Process crashed")
+                    }
+                    _ => {} // Timeout handled above
+                }
 
                 let new_branches = bitmap
                     .as_deref()

@@ -3,6 +3,7 @@ use crate::proto::{
     Heartbeat, ResultBatch, SeedRequest, WorkerInfo,
 };
 use tonic::transport::Channel;
+use tracing::instrument;
 use uuid::Uuid;
 
 /// gRPC client that connects to a coordinator, registers, and runs a pull loop.
@@ -18,7 +19,17 @@ impl WorkerClient {
         endpoint: String,
         language: String,
     ) -> Result<Self, tonic::transport::Error> {
-        let client = ApexCoordinatorClient::connect(endpoint).await?;
+        tracing::info!(%endpoint, %language, "Connecting to coordinator");
+        let client = match ApexCoordinatorClient::connect(endpoint.clone()).await {
+            Ok(c) => {
+                tracing::info!(%endpoint, "Connected to coordinator");
+                c
+            }
+            Err(e) => {
+                tracing::error!(%endpoint, error = %e, "Failed to connect to coordinator");
+                return Err(e);
+            }
+        };
         Ok(WorkerClient {
             client,
             worker_id: Uuid::new_v4().to_string(),
@@ -41,6 +52,7 @@ impl WorkerClient {
 
     /// Register this worker with the coordinator.
     /// Returns the session_id on success.
+    #[instrument(skip(self), fields(worker_id = %self.worker_id))]
     pub async fn register(&mut self, capacity: u32) -> Result<String, tonic::Status> {
         let resp = self
             .client
@@ -59,6 +71,7 @@ impl WorkerClient {
     }
 
     /// Send a heartbeat to the coordinator.
+    #[instrument(skip(self), fields(worker_id = %self.worker_id))]
     pub async fn heartbeat(&mut self, active_seeds: u32) -> Result<bool, tonic::Status> {
         let resp = self
             .client
@@ -73,6 +86,7 @@ impl WorkerClient {
     }
 
     /// Request seeds from the coordinator.
+    #[instrument(skip(self), fields(worker_id = %self.worker_id))]
     pub async fn get_seeds(
         &mut self,
         max_seeds: u32,
@@ -91,6 +105,7 @@ impl WorkerClient {
 
     /// Submit execution results back to the coordinator.
     /// Returns (new_coverage_count, coverage_percent).
+    #[instrument(skip(self, results), fields(worker_id = %self.worker_id, result_count = results.len()))]
     pub async fn submit_results(
         &mut self,
         results: Vec<ProtoResult>,
@@ -108,6 +123,7 @@ impl WorkerClient {
     }
 
     /// Get the current coverage snapshot from the coordinator.
+    #[instrument(skip(self), fields(worker_id = %self.worker_id))]
     pub async fn get_coverage(&mut self) -> Result<crate::proto::CoverageSnapshot, tonic::Status> {
         let resp = self.client.get_coverage(Empty {}).await?.into_inner();
         Ok(resp)
@@ -118,6 +134,7 @@ impl WorkerClient {
     ///
     /// The `execute` callback receives a seed and returns an optional execution
     /// result (None means skip).
+    #[instrument(skip(self, execute), fields(worker_id = %self.worker_id))]
     pub async fn pull_once<F>(
         &mut self,
         max_seeds: u32,

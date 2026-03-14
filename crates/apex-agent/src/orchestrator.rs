@@ -99,6 +99,8 @@ impl AgentCluster {
                 break;
             }
 
+            let _round_span = tracing::info_span!("exploration_round", iteration).entered();
+
             let ctx = ExplorationContext {
                 target: self.target.clone(),
                 uncovered_branches: uncovered.clone(),
@@ -110,7 +112,13 @@ impl AgentCluster {
                 futures::future::join_all(self.strategies.iter().map(|s| s.suggest_inputs(&ctx)))
                     .await
                     .into_iter()
-                    .filter_map(|r| r.ok())
+                    .filter_map(|r| match r {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Strategy failed to produce suggestions");
+                            None
+                        }
+                    })
                     .flatten()
                     .collect();
 
@@ -122,7 +130,13 @@ impl AgentCluster {
                 )
                 .await
                 .into_iter()
-                .filter_map(|r| r.ok())
+                .filter_map(|r| match r {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Sandbox execution failed");
+                        None
+                    }
+                })
                 .collect();
 
                 let mut new_coverage = false;
