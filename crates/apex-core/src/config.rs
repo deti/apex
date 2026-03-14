@@ -20,6 +20,7 @@ pub struct ApexConfig {
     pub instrument: InstrumentConfig,
     pub logging: LoggingConfig,
     pub detect: DetectConfig,
+    pub threat_model: ThreatModelConfig,
 }
 
 impl ApexConfig {
@@ -298,6 +299,38 @@ fn default_detect_severity() -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Threat Model
+// ---------------------------------------------------------------------------
+
+/// What kind of software is being analyzed.
+/// Determines which input sources are considered trusted vs untrusted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThreatModelType {
+    /// CLI tool — argv, env vars, config files are trusted.
+    CliTool,
+    /// Web service — request data is untrusted, env/config are trusted.
+    WebService,
+    /// Library — all external input is untrusted.
+    Library,
+    /// CI pipeline — env vars and argv are trusted, network input is not.
+    CiPipeline,
+}
+
+/// Threat model configuration from `[threat_model]` in apex.toml.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ThreatModelConfig {
+    /// The type of software being analyzed.
+    #[serde(rename = "type")]
+    pub model_type: Option<ThreatModelType>,
+    /// Additional sources the user considers trusted (beyond the defaults for this type).
+    pub trusted_sources: Vec<String>,
+    /// Additional sources the user considers untrusted (overrides defaults).
+    pub untrusted_sources: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -521,5 +554,67 @@ per_detector_timeout_secs = 30
         let cfg = ApexConfig::discover(&child);
         assert!((cfg.coverage.target - 0.33).abs() < f64::EPSILON);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // -----------------------------------------------------------------------
+    // Threat model config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_threat_model_cli_tool() {
+        let toml = r#"
+[threat_model]
+type = "cli-tool"
+trusted_sources = ["config_file"]
+"#;
+        let cfg = ApexConfig::parse_toml(toml).unwrap();
+        assert_eq!(cfg.threat_model.model_type, Some(ThreatModelType::CliTool));
+        assert_eq!(cfg.threat_model.trusted_sources, vec!["config_file"]);
+    }
+
+    #[test]
+    fn parse_threat_model_web_service() {
+        let toml = r#"
+[threat_model]
+type = "web-service"
+"#;
+        let cfg = ApexConfig::parse_toml(toml).unwrap();
+        assert_eq!(
+            cfg.threat_model.model_type,
+            Some(ThreatModelType::WebService)
+        );
+    }
+
+    #[test]
+    fn parse_threat_model_library() {
+        let toml = r#"
+[threat_model]
+type = "library"
+untrusted_sources = ["user_callback"]
+"#;
+        let cfg = ApexConfig::parse_toml(toml).unwrap();
+        assert_eq!(cfg.threat_model.model_type, Some(ThreatModelType::Library));
+        assert_eq!(cfg.threat_model.untrusted_sources, vec!["user_callback"]);
+    }
+
+    #[test]
+    fn parse_threat_model_ci_pipeline() {
+        let toml = r#"
+[threat_model]
+type = "ci-pipeline"
+"#;
+        let cfg = ApexConfig::parse_toml(toml).unwrap();
+        assert_eq!(
+            cfg.threat_model.model_type,
+            Some(ThreatModelType::CiPipeline)
+        );
+    }
+
+    #[test]
+    fn missing_threat_model_is_none() {
+        let cfg = ApexConfig::parse_toml("").unwrap();
+        assert!(cfg.threat_model.model_type.is_none());
+        assert!(cfg.threat_model.trusted_sources.is_empty());
+        assert!(cfg.threat_model.untrusted_sources.is_empty());
     }
 }
