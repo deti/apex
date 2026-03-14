@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
+use tracing::instrument;
 use uuid::Uuid;
 
 /// Convert a proto BranchId to the core BranchId type.
@@ -51,6 +52,7 @@ impl CoordinatorService {
 
 #[tonic::async_trait]
 impl ApexCoordinator for CoordinatorService {
+    #[instrument(skip(self, request))]
     async fn register(
         &self,
         request: Request<WorkerInfo>,
@@ -68,6 +70,7 @@ impl ApexCoordinator for CoordinatorService {
         }))
     }
 
+    #[instrument(skip(self, request))]
     async fn send_heartbeat(
         &self,
         request: Request<Heartbeat>,
@@ -81,6 +84,7 @@ impl ApexCoordinator for CoordinatorService {
         Ok(Response::new(HeartbeatAck { ok: true }))
     }
 
+    #[instrument(skip(self, request))]
     async fn get_seeds(
         &self,
         request: Request<SeedRequest>,
@@ -92,6 +96,7 @@ impl ApexCoordinator for CoordinatorService {
         Ok(Response::new(SeedBatch { seeds }))
     }
 
+    #[instrument(skip(self, request))]
     async fn submit_results(
         &self,
         request: Request<ResultBatch>,
@@ -115,6 +120,7 @@ impl ApexCoordinator for CoordinatorService {
         }))
     }
 
+    #[instrument(skip(self, _request))]
     async fn get_coverage(
         &self,
         _request: Request<Empty>,
@@ -147,10 +153,17 @@ impl CoordinatorServer {
     ) -> Result<(), tonic::transport::Error> {
         let service = CoordinatorService::new(oracle);
         tracing::info!(%addr, "Starting coordinator gRPC server");
-        tonic::transport::Server::builder()
+        match tonic::transport::Server::builder()
             .add_service(ApexCoordinatorServer::new(service))
             .serve(addr)
             .await
+        {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                tracing::error!(%addr, error = %e, "Coordinator server failed — check if port is already in use");
+                Err(e)
+            }
+        }
     }
 
     /// Start the gRPC server and return the service handle and the bound address.
@@ -963,8 +976,18 @@ mod tests {
                         seed_id: "s1".into(),
                         status: "pass".into(),
                         new_branches: vec![
-                            ProtoBranchId { file_id: 1, line: 1, col: 0, direction: 0 },
-                            ProtoBranchId { file_id: 1, line: 2, col: 0, direction: 0 },
+                            ProtoBranchId {
+                                file_id: 1,
+                                line: 1,
+                                col: 0,
+                                direction: 0,
+                            },
+                            ProtoBranchId {
+                                file_id: 1,
+                                line: 2,
+                                col: 0,
+                                direction: 0,
+                            },
                         ],
                         duration_ms: 5,
                         stdout: "out1".into(),
@@ -974,8 +997,18 @@ mod tests {
                         seed_id: "s2".into(),
                         status: "fail".into(),
                         new_branches: vec![
-                            ProtoBranchId { file_id: 1, line: 3, col: 0, direction: 0 },
-                            ProtoBranchId { file_id: 1, line: 4, col: 0, direction: 0 },
+                            ProtoBranchId {
+                                file_id: 1,
+                                line: 3,
+                                col: 0,
+                                direction: 0,
+                            },
+                            ProtoBranchId {
+                                file_id: 1,
+                                line: 4,
+                                col: 0,
+                                direction: 0,
+                            },
                         ],
                         duration_ms: 15,
                         stdout: String::new(),
@@ -1370,8 +1403,18 @@ mod tests {
                     seed_id: "s2".into(),
                     status: "pass".into(),
                     new_branches: vec![
-                        ProtoBranchId { file_id: 1, line: 2, col: 0, direction: 0 },
-                        ProtoBranchId { file_id: 1, line: 3, col: 0, direction: 0 },
+                        ProtoBranchId {
+                            file_id: 1,
+                            line: 2,
+                            col: 0,
+                            direction: 0,
+                        },
+                        ProtoBranchId {
+                            file_id: 1,
+                            line: 3,
+                            col: 0,
+                            direction: 0,
+                        },
                     ],
                     duration_ms: 10,
                     stdout: String::new(),
@@ -1481,9 +1524,21 @@ mod tests {
 
         service
             .enqueue_seeds(vec![
-                InputSeed { id: "a".into(), data: vec![1], origin: "t".into() },
-                InputSeed { id: "b".into(), data: vec![2], origin: "t".into() },
-                InputSeed { id: "c".into(), data: vec![3], origin: "t".into() },
+                InputSeed {
+                    id: "a".into(),
+                    data: vec![1],
+                    origin: "t".into(),
+                },
+                InputSeed {
+                    id: "b".into(),
+                    data: vec![2],
+                    origin: "t".into(),
+                },
+                InputSeed {
+                    id: "c".into(),
+                    data: vec![3],
+                    origin: "t".into(),
+                },
             ])
             .await;
 
@@ -1525,8 +1580,18 @@ mod tests {
                     seed_id: "s1".into(),
                     status: "pass".into(),
                     new_branches: vec![
-                        ProtoBranchId { file_id: 1, line: 1, col: 0, direction: 0 },
-                        ProtoBranchId { file_id: 99, line: 1, col: 0, direction: 0 },
+                        ProtoBranchId {
+                            file_id: 1,
+                            line: 1,
+                            col: 0,
+                            direction: 0,
+                        },
+                        ProtoBranchId {
+                            file_id: 99,
+                            line: 1,
+                            col: 0,
+                            direction: 0,
+                        },
                     ],
                     duration_ms: 10,
                     stdout: String::new(),

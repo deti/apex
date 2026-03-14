@@ -8,6 +8,7 @@
 //! 5. Parse JSON → BranchId, aggregate into BranchIndex
 
 use crate::types::{BranchIndex, TestTrace};
+use apex_core::command::{CommandRunner, CommandSpec, RealCommandRunner};
 use apex_core::types::{BranchId, ExecutionStatus, Language};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -18,6 +19,37 @@ use tokio::sync::Semaphore;
 use tracing::{debug, info};
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
+
+// ---------------------------------------------------------------------------
+// Generic builder for testability
+// ---------------------------------------------------------------------------
+
+/// Builder that delegates subprocess calls through a generic [`CommandRunner`],
+/// allowing tests to inject mocks without spawning real processes.
+pub struct RustIndexBuilder<R: CommandRunner> {
+    runner: R,
+}
+
+impl<R: CommandRunner> RustIndexBuilder<R> {
+    pub fn new(runner: R) -> Self {
+        Self { runner }
+    }
+
+    /// Enumerate Rust tests by running `cargo test --list` through the runner.
+    pub async fn enumerate_tests(&self, target: &Path) -> Result<Vec<String>, BoxErr> {
+        let spec = CommandSpec::new("cargo", target)
+            .args(["test", "--workspace", "--", "--list", "--format", "terse"])
+            .timeout(120_000);
+        let output = self.runner.run_command(&spec).await?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let tests: Vec<String> = stdout
+            .lines()
+            .filter(|l| l.ends_with(": test"))
+            .map(|l| l.trim_end_matches(": test").to_string())
+            .collect();
+        Ok(tests)
+    }
+}
 
 /// FNV-1a hash — same implementation as apex-instrument for file_id compatibility.
 fn fnv1a(data: &[u8]) -> u64 {
@@ -212,23 +244,13 @@ pub async fn build_rust_index(target: &Path, parallel: usize) -> Result<BranchIn
 }
 
 /// Enumerate Rust tests without building index.
+///
+/// Convenience wrapper around [`RustIndexBuilder::enumerate_tests`] using
+/// the real subprocess runner.
 pub async fn enumerate_rust_tests(target: &Path) -> Result<Vec<String>, BoxErr> {
-    let output = tokio::process::Command::new("cargo")
-        .args(["test", "--workspace", "--", "--list", "--format", "terse"])
-        .current_dir(target)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .await?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let tests: Vec<String> = stdout
-        .lines()
-        .filter(|l| l.ends_with(": test"))
-        .map(|l| l.trim_end_matches(": test").to_string())
-        .collect();
-
-    Ok(tests)
+    RustIndexBuilder::new(RealCommandRunner)
+        .enumerate_tests(target)
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -500,6 +522,45 @@ fn make_relative(path: &str, target: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use apex_core::command::{CommandOutput, CommandRunner, CommandSpec};
+    use apex_core::error::Result as CoreResult;
+
+    /// Simple mock runner that returns a fixed output.
+    struct FakeRunner {
+        stdout: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl CommandRunner for FakeRunner {
+        async fn run_command(&self, _spec: &CommandSpec) -> CoreResult<CommandOutput> {
+            Ok(CommandOutput::success(self.stdout.clone()))
+        }
+    }
+
+    #[tokio::test]
+    async fn builder_enumerate_tests_with_mock() {
+        let runner = FakeRunner {
+            stdout: b"my_crate::tests::test_one: test\nmy_crate::tests::test_two: test\n".to_vec(),
+        };
+
+        let builder = RustIndexBuilder::new(runner);
+        let tests = builder.enumerate_tests(Path::new("/fake")).await.unwrap();
+        assert_eq!(
+            tests,
+            vec!["my_crate::tests::test_one", "my_crate::tests::test_two"]
+        );
+    }
+
+    #[tokio::test]
+    async fn builder_enumerate_tests_empty_output() {
+        let runner = FakeRunner {
+            stdout: b"".to_vec(),
+        };
+
+        let builder = RustIndexBuilder::new(runner);
+        let tests = builder.enumerate_tests(Path::new("/fake")).await.unwrap();
+        assert!(tests.is_empty());
+    }
 
     #[test]
     fn fnv1a_matches_instrument_crate() {

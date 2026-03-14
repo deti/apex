@@ -18,7 +18,7 @@ pub mod sca;
 pub mod threat_model;
 pub mod vuln_pipeline;
 
-pub use config::DetectConfig;
+pub use config::{DetectConfig, DetectMode};
 pub use context::AnalysisContext;
 pub use finding::{Evidence, Finding, FindingCategory, Fix, Severity};
 pub use pipeline::DetectorPipeline;

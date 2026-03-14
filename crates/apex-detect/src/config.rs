@@ -27,6 +27,16 @@ fn default_sanitizers() -> Vec<String> {
     vec!["address".into(), "undefined".into()]
 }
 
+/// Controls which detectors run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DetectMode {
+    /// Run all detectors including subprocess-based ones.
+    #[default]
+    Full,
+    /// Run only lightweight pattern-matching detectors (skip cargo subprocess).
+    Fast,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DetectConfig {
@@ -46,6 +56,8 @@ pub struct DetectConfig {
     pub diff: DiffConfig,
     #[serde(default)]
     pub properties: Vec<PropertyConfig>,
+    #[serde(default)]
+    pub detect_mode: DetectMode,
 }
 
 impl Default for DetectConfig {
@@ -59,6 +71,7 @@ impl Default for DetectConfig {
             llm: LlmConfig::default(),
             diff: DiffConfig::default(),
             properties: Vec::new(),
+            detect_mode: DetectMode::default(),
         }
     }
 }
@@ -248,6 +261,21 @@ base_ref = "main"
         assert_eq!(cfg.llm.batch_size, 20);
         assert_eq!(cfg.llm.model, "gpt-4");
         assert_eq!(cfg.diff.base_ref, "main");
+    }
+
+    #[test]
+    fn detect_mode_defaults_to_full() {
+        let cfg = DetectConfig::default();
+        assert_eq!(cfg.detect_mode, DetectMode::Full);
+    }
+
+    #[test]
+    fn detect_mode_fast_from_toml() {
+        let toml_str = r#"
+detect_mode = "Fast"
+"#;
+        let cfg: DetectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.detect_mode, DetectMode::Fast);
     }
 
     #[test]

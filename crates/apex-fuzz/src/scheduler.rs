@@ -65,6 +65,17 @@ impl MOptScheduler {
         self.mutators[idx].mutate(input, rng)
     }
 
+    pub fn mutate_with_index(
+        &mut self,
+        input: &[u8],
+        mutator_idx: usize,
+        rng: &mut dyn RngCore,
+    ) -> Vec<u8> {
+        let idx = mutator_idx % self.mutators.len().max(1);
+        self.stats[idx].applications += 1;
+        self.mutators[idx].mutate(input, rng)
+    }
+
     pub fn report_hit(&mut self, mutator_idx: usize) {
         if mutator_idx >= self.stats.len() {
             return;
@@ -541,6 +552,27 @@ mod tests {
         // After a hit, ema should change; after a miss, it should change again
         assert_ne!(before, after_hit);
         assert_ne!(after_hit, after_miss);
+    }
+
+    #[test]
+    fn mutate_with_index_uses_specified_mutator() {
+        let mut scheduler = make_scheduler(3);
+        let mut rng = StdRng::seed_from_u64(0);
+        let input = b"test";
+        let _ = scheduler.mutate_with_index(input, 1, &mut rng);
+        // Only mutator 1 should have an application
+        assert_eq!(scheduler.stats[0].applications, 0);
+        assert_eq!(scheduler.stats[1].applications, 1);
+        assert_eq!(scheduler.stats[2].applications, 0);
+    }
+
+    #[test]
+    fn mutate_with_index_wraps_around() {
+        let mut scheduler = make_scheduler(3);
+        let mut rng = StdRng::seed_from_u64(0);
+        let input = b"test";
+        let _ = scheduler.mutate_with_index(input, 5, &mut rng); // 5 % 3 = 2
+        assert_eq!(scheduler.stats[2].applications, 1);
     }
 
     #[test]

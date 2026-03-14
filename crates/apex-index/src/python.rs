@@ -1,9 +1,53 @@
 use crate::types::{hash_source_files, BranchIndex, TestTrace};
+use apex_core::command::{CommandRunner, CommandSpec, RealCommandRunner};
 use apex_core::types::{BranchId, ExecutionStatus, Language};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
+
+// ---------------------------------------------------------------------------
+// Generic builder for testability
+// ---------------------------------------------------------------------------
+
+/// Builder that delegates subprocess calls through a generic [`CommandRunner`],
+/// allowing tests to inject mocks without spawning real processes.
+pub struct PythonIndexBuilder<R: CommandRunner> {
+    runner: R,
+}
+
+impl<R: CommandRunner> PythonIndexBuilder<R> {
+    pub fn new(runner: R) -> Self {
+        Self { runner }
+    }
+
+    /// Enumerate Python tests by running `pytest --collect-only` through the runner.
+    pub async fn enumerate_tests(
+        &self,
+        target_root: &Path,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+        let spec = CommandSpec::new("python3", target_root)
+            .args(["-m", "pytest", "--collect-only", "-q", "--no-header"])
+            .timeout(120_000);
+        let output = self.runner.run_command(&spec).await?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut tests = Vec::new();
+
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.contains("::") && !line.starts_with('=') && !line.starts_with('-') {
+                tests.push(line.to_string());
+            }
+        }
+
+        if output.exit_code != 0 && tests.is_empty() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(stderr = %stderr, "pytest --collect-only failed");
+        }
+
+        Ok(tests)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // coverage.py JSON schema (reused from apex-instrument)
@@ -94,32 +138,15 @@ pub async fn build_python_index(
 // ---------------------------------------------------------------------------
 
 /// Enumerate all Python tests via `pytest --collect-only`.
+///
+/// Convenience wrapper around [`PythonIndexBuilder::enumerate_tests`] using
+/// the real subprocess runner.
 pub async fn enumerate_python_tests(
     target_root: &Path,
 ) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
-    let output = tokio::process::Command::new("python3")
-        .args(["-m", "pytest", "--collect-only", "-q", "--no-header"])
-        .current_dir(target_root)
-        .output()
-        .await?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut tests = Vec::new();
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        // pytest --collect-only -q outputs lines like "tests/test_foo.py::test_bar"
-        if line.contains("::") && !line.starts_with("=") && !line.starts_with("-") {
-            tests.push(line.to_string());
-        }
-    }
-
-    if !output.status.success() && tests.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!(stderr = %stderr, "pytest --collect-only failed");
-    }
-
-    Ok(tests)
+    PythonIndexBuilder::new(RealCommandRunner)
+        .enumerate_tests(target_root)
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +499,59 @@ fn empty_index(target_root: &Path) -> BranchIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use apex_core::command::{CommandOutput, CommandRunner, CommandSpec};
+    use apex_core::error::Result as CoreResult;
+
+    /// Simple mock runner that returns a fixed output.
+    struct FakeRunner {
+        stdout: Vec<u8>,
+    }
+
+    #[async_trait::async_trait]
+    impl CommandRunner for FakeRunner {
+        async fn run_command(&self, _spec: &CommandSpec) -> CoreResult<CommandOutput> {
+            Ok(CommandOutput::success(self.stdout.clone()))
+        }
+    }
+
+    #[tokio::test]
+    async fn builder_enumerate_tests_with_mock() {
+        let runner = FakeRunner {
+            stdout:
+                b"tests/test_foo.py::test_bar\ntests/test_foo.py::test_baz\n\n2 tests collected\n"
+                    .to_vec(),
+        };
+
+        let builder = PythonIndexBuilder::new(runner);
+        let tests = builder.enumerate_tests(Path::new("/fake")).await.unwrap();
+        assert_eq!(
+            tests,
+            vec!["tests/test_foo.py::test_bar", "tests/test_foo.py::test_baz"]
+        );
+    }
+
+    #[tokio::test]
+    async fn builder_enumerate_tests_empty_output() {
+        let runner = FakeRunner {
+            stdout: b"".to_vec(),
+        };
+
+        let builder = PythonIndexBuilder::new(runner);
+        let tests = builder.enumerate_tests(Path::new("/fake")).await.unwrap();
+        assert!(tests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn builder_enumerate_tests_filters_separator_lines() {
+        let runner = FakeRunner {
+            stdout: b"tests/test_a.py::test_one\n======= 1 test =======\n------- short -------\n"
+                .to_vec(),
+        };
+
+        let builder = PythonIndexBuilder::new(runner);
+        let tests = builder.enumerate_tests(Path::new("/fake")).await.unwrap();
+        assert_eq!(tests, vec!["tests/test_a.py::test_one"]);
+    }
 
     #[test]
     fn fnv1a_matches_instrument_crate() {

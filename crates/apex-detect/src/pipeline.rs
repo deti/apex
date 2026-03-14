@@ -5,7 +5,7 @@ use apex_core::error::ApexError;
 use apex_core::types::Language;
 use tracing::warn;
 
-use crate::config::DetectConfig;
+use crate::config::{DetectConfig, DetectMode};
 use crate::context::AnalysisContext;
 use crate::detectors::*;
 use crate::finding::{Finding, FindingCategory};
@@ -44,6 +44,10 @@ impl DetectorPipeline {
         }
         if cfg.enabled.contains(&"path-normalize".to_string()) {
             detectors.push(Box::new(PathNormalizationDetector));
+        }
+
+        if cfg.detect_mode == DetectMode::Fast {
+            detectors.retain(|d| !d.uses_cargo_subprocess());
         }
 
         Self { detectors }
@@ -144,7 +148,7 @@ pub fn deduplicate(findings: &mut Vec<Finding>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DetectConfig;
+    use crate::config::{DetectConfig, DetectMode};
     use crate::finding::{Finding, FindingCategory, Severity};
     use apex_core::types::Language;
     use async_trait::async_trait;
@@ -684,7 +688,10 @@ mod tests {
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Python);
         assert_eq!(pipeline.detectors.len(), 6);
-        assert!(pipeline.detectors.iter().all(|d| d.name() != "unsafe-reachability"));
+        assert!(pipeline
+            .detectors
+            .iter()
+            .all(|d| d.name() != "unsafe-reachability"));
     }
 
     #[test]
@@ -771,7 +778,13 @@ mod tests {
             sanitizer: "s2".into(),
             stderr: "e2".into(),
         }];
-        let mut f3 = make_finding("c", "x.rs", 1, Severity::Critical, FindingCategory::PanicPath);
+        let mut f3 = make_finding(
+            "c",
+            "x.rs",
+            1,
+            Severity::Critical,
+            FindingCategory::PanicPath,
+        );
         f3.evidence = vec![Evidence::SanitizerReport {
             sanitizer: "s3".into(),
             stderr: "e3".into(),
@@ -787,9 +800,21 @@ mod tests {
     #[test]
     fn deduplicate_none_line_findings() {
         // Findings with line=None should be grouped by (file, None, category)
-        let mut f1 = make_finding("a", "lib.rs", 0, Severity::Medium, FindingCategory::DependencyVuln);
+        let mut f1 = make_finding(
+            "a",
+            "lib.rs",
+            0,
+            Severity::Medium,
+            FindingCategory::DependencyVuln,
+        );
         f1.line = None;
-        let mut f2 = make_finding("b", "lib.rs", 0, Severity::High, FindingCategory::DependencyVuln);
+        let mut f2 = make_finding(
+            "b",
+            "lib.rs",
+            0,
+            Severity::High,
+            FindingCategory::DependencyVuln,
+        );
         f2.line = None;
 
         let mut findings = vec![f1, f2];
@@ -824,7 +849,9 @@ mod tests {
             "failing-sub"
         }
         async fn analyze(&self, _: &AnalysisContext) -> apex_core::error::Result<Vec<Finding>> {
-            Err(apex_core::error::ApexError::Detect("subprocess boom".into()))
+            Err(apex_core::error::ApexError::Detect(
+                "subprocess boom".into(),
+            ))
         }
         fn uses_cargo_subprocess(&self) -> bool {
             true
@@ -839,7 +866,10 @@ mod tests {
 
         assert!(report.findings.is_empty());
         assert_eq!(report.detector_status.len(), 1);
-        assert_eq!(report.detector_status[0], ("failing-sub".to_string(), false));
+        assert_eq!(
+            report.detector_status[0],
+            ("failing-sub".to_string(), false)
+        );
     }
 
     #[tokio::test]
@@ -875,13 +905,37 @@ mod tests {
     #[tokio::test]
     async fn run_all_multiple_pure_detectors() {
         let f1 = make_finding("d1", "a.rs", 1, Severity::Low, FindingCategory::PanicPath);
-        let f2 = make_finding("d2", "b.rs", 2, Severity::Medium, FindingCategory::UnsafeCode);
-        let f3 = make_finding("d3", "c.rs", 3, Severity::High, FindingCategory::SecuritySmell);
+        let f2 = make_finding(
+            "d2",
+            "b.rs",
+            2,
+            Severity::Medium,
+            FindingCategory::UnsafeCode,
+        );
+        let f3 = make_finding(
+            "d3",
+            "c.rs",
+            3,
+            Severity::High,
+            FindingCategory::SecuritySmell,
+        );
 
         let pipeline = DetectorPipeline::new(vec![
-            Box::new(MockDetector { name: "p1", subprocess: false, findings: vec![f1] }),
-            Box::new(MockDetector { name: "p2", subprocess: false, findings: vec![f2] }),
-            Box::new(MockDetector { name: "p3", subprocess: false, findings: vec![f3] }),
+            Box::new(MockDetector {
+                name: "p1",
+                subprocess: false,
+                findings: vec![f1],
+            }),
+            Box::new(MockDetector {
+                name: "p2",
+                subprocess: false,
+                findings: vec![f2],
+            }),
+            Box::new(MockDetector {
+                name: "p3",
+                subprocess: false,
+                findings: vec![f3],
+            }),
         ]);
         let ctx = test_context();
         let report = pipeline.run_all(&ctx).await;
@@ -898,14 +952,24 @@ mod tests {
 
     #[tokio::test]
     async fn run_all_sorts_by_covered_within_same_severity() {
-        let mut f_uncovered = make_finding("d1", "a.rs", 1, Severity::High, FindingCategory::PanicPath);
+        let mut f_uncovered =
+            make_finding("d1", "a.rs", 1, Severity::High, FindingCategory::PanicPath);
         f_uncovered.covered = false;
-        let mut f_covered = make_finding("d2", "b.rs", 2, Severity::High, FindingCategory::UnsafeCode);
+        let mut f_covered =
+            make_finding("d2", "b.rs", 2, Severity::High, FindingCategory::UnsafeCode);
         f_covered.covered = true;
 
         let pipeline = DetectorPipeline::new(vec![
-            Box::new(MockDetector { name: "p1", subprocess: false, findings: vec![f_covered] }),
-            Box::new(MockDetector { name: "p2", subprocess: false, findings: vec![f_uncovered] }),
+            Box::new(MockDetector {
+                name: "p1",
+                subprocess: false,
+                findings: vec![f_covered],
+            }),
+            Box::new(MockDetector {
+                name: "p2",
+                subprocess: false,
+                findings: vec![f_uncovered],
+            }),
         ]);
         let ctx = test_context();
         let report = pipeline.run_all(&ctx).await;
@@ -920,9 +984,11 @@ mod tests {
     async fn run_all_no_timeout_uses_default_300s() {
         // Config with no per_detector_timeout_secs → 300s default
         let finding = make_finding("m", "x.rs", 1, Severity::Info, FindingCategory::LogicBug);
-        let pipeline = DetectorPipeline::new(vec![
-            Box::new(MockDetector { name: "det", subprocess: false, findings: vec![finding] }),
-        ]);
+        let pipeline = DetectorPipeline::new(vec![Box::new(MockDetector {
+            name: "det",
+            subprocess: false,
+            findings: vec![finding],
+        })]);
         let mut ctx = test_context();
         ctx.config.per_detector_timeout_secs = None;
         let report = pipeline.run_all(&ctx).await;
@@ -931,9 +997,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_all_detector_returning_empty_findings() {
-        let pipeline = DetectorPipeline::new(vec![
-            Box::new(MockDetector { name: "empty-det", subprocess: false, findings: vec![] }),
-        ]);
+        let pipeline = DetectorPipeline::new(vec![Box::new(MockDetector {
+            name: "empty-det",
+            subprocess: false,
+            findings: vec![],
+        })]);
         let ctx = test_context();
         let report = pipeline.run_all(&ctx).await;
 
@@ -944,9 +1012,19 @@ mod tests {
 
     #[tokio::test]
     async fn run_all_subprocess_failure_with_successful_pure() {
-        let finding = make_finding("pure", "x.rs", 1, Severity::High, FindingCategory::PanicPath);
+        let finding = make_finding(
+            "pure",
+            "x.rs",
+            1,
+            Severity::High,
+            FindingCategory::PanicPath,
+        );
         let pipeline = DetectorPipeline::new(vec![
-            Box::new(MockDetector { name: "pure-ok", subprocess: false, findings: vec![finding] }),
+            Box::new(MockDetector {
+                name: "pure-ok",
+                subprocess: false,
+                findings: vec![finding],
+            }),
             Box::new(FailingSubprocessDetector),
         ]);
         let ctx = test_context();
@@ -956,7 +1034,10 @@ mod tests {
         assert_eq!(report.detector_status.len(), 2);
 
         let pure_ok = report.detector_status.iter().find(|(n, _)| n == "pure-ok");
-        let sub_fail = report.detector_status.iter().find(|(n, _)| n == "failing-sub");
+        let sub_fail = report
+            .detector_status
+            .iter()
+            .find(|(n, _)| n == "failing-sub");
         assert_eq!(pure_ok.unwrap().1, true);
         assert_eq!(sub_fail.unwrap().1, false);
     }
@@ -1008,5 +1089,30 @@ mod tests {
 
         // After sort: Critical (rank 0) comes before High/Medium (rank 1/2)
         assert_eq!(report.findings[0].severity, Severity::Critical);
+    }
+
+    #[test]
+    fn fast_mode_excludes_subprocess_detectors() {
+        let mut cfg = DetectConfig::default();
+        cfg.detect_mode = DetectMode::Fast;
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        for d in &pipeline.detectors {
+            assert!(
+                !d.uses_cargo_subprocess(),
+                "fast mode should exclude {}",
+                d.name()
+            );
+        }
+    }
+
+    #[test]
+    fn full_mode_includes_subprocess_detectors() {
+        let cfg = DetectConfig::default();
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        let has_subprocess = pipeline.detectors.iter().any(|d| d.uses_cargo_subprocess());
+        assert!(
+            has_subprocess,
+            "full mode should include subprocess detectors"
+        );
     }
 }

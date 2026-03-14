@@ -203,7 +203,28 @@ fn extract_functions(
         let trimmed = line.trim();
         let line_num = (i + 1) as u32;
 
-        let is_func_start = func_pattern.iter().any(|p| trimmed.contains(p))
+        let is_func_start = func_pattern.iter().any(|p| {
+            match language {
+                // Python: require "def " at start of line to avoid matching
+                // lines that merely contain "def " as a substring
+                apex_core::types::Language::Python | apex_core::types::Language::Ruby => {
+                    trimmed.starts_with(p)
+                }
+                // Java: require "(" after the keyword to ensure it's a method signature
+                apex_core::types::Language::Java => {
+                    trimmed.contains(p) && trimmed.contains('(')
+                }
+                // JS: for "=> {", require ")" before "=>" to confirm arrow function
+                apex_core::types::Language::JavaScript => {
+                    if *p == "=> {" {
+                        trimmed.contains(')') && trimmed.contains("=> {")
+                    } else {
+                        trimmed.contains(p)
+                    }
+                }
+                _ => trimmed.contains(p),
+            }
+        })
             && !trimmed.starts_with('#')
             && !trimmed.starts_with("//")
             && !trimmed.starts_with("///");
@@ -1197,7 +1218,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: vec![],
+                    test_names: HashSet::new(),
                 },
             );
         }
@@ -1538,7 +1559,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: vec![],
+                    test_names: HashSet::new(),
                 },
             );
         }
@@ -1947,7 +1968,7 @@ mod tests {
                 branch: b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: vec![],
+                test_names: HashSet::new(),
             },
         );
         let index = BranchIndex {
@@ -1991,7 +2012,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: vec![],
+                    test_names: HashSet::new(),
                 },
             );
         }
@@ -2089,7 +2110,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: vec![],
+                    test_names: HashSet::new(),
                 },
             );
         }
@@ -2456,7 +2477,7 @@ mod tests {
                 branch: b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: vec![],
+                test_names: HashSet::new(),
             },
         );
         let index = BranchIndex {
@@ -2497,7 +2518,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: vec![],
+                    test_names: HashSet::new(),
                 },
             );
         }
@@ -2631,7 +2652,7 @@ mod tests {
                 branch: never_branch.clone(),
                 hit_count: 0,
                 test_count: 0,
-                test_names: vec![],
+                test_names: HashSet::new(),
             },
         );
         let index = BranchIndex {
@@ -3023,7 +3044,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: vec![],
+                    test_names: HashSet::new(),
                 },
             );
         }
@@ -3060,7 +3081,7 @@ mod tests {
                 branch: b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: vec![],
+                test_names: HashSet::new(),
             },
         );
         let index = BranchIndex {
@@ -3101,7 +3122,7 @@ mod tests {
                 branch: b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: vec![],
+                test_names: HashSet::new(),
             },
         );
         let index = BranchIndex {
@@ -3143,7 +3164,7 @@ mod tests {
                 branch: b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: vec![],
+                test_names: HashSet::new(),
             },
         );
         let index = BranchIndex {
@@ -3229,7 +3250,7 @@ mod tests {
                 branch: auth_b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: vec![],
+                test_names: HashSet::new(),
             },
         );
         let index = BranchIndex {
@@ -3306,7 +3327,7 @@ mod tests {
                 branch: auth_b,
                 hit_count: 1,
                 test_count: 1,
-                test_names: vec!["test_api_auth".into()],
+                test_names: HashSet::from(["test_api_auth".into()]),
             });
         let index = BranchIndex {
             profiles,
@@ -3517,10 +3538,7 @@ mod tests {
         let index = BranchIndex {
             profiles: BranchIndex::build_profiles(&traces),
             traces,
-            file_paths: HashMap::from([
-                (1, PathBuf::from("bbb.py")),
-                (2, PathBuf::from("aaa.py")),
-            ]),
+            file_paths: HashMap::from([(1, PathBuf::from("bbb.py")), (2, PathBuf::from("aaa.py"))]),
             total_branches: 2,
             covered_branches: 2,
             created_at: String::new(),
@@ -3613,7 +3631,7 @@ mod tests {
                 branch: dead,
                 hit_count: 0,
                 test_count: 0,
-                test_names: vec![],
+                test_names: HashSet::new(),
             },
         );
         let index = BranchIndex {
@@ -4168,7 +4186,7 @@ mod tests {
                 branch: uncov,
                 hit_count: 0,
                 test_count: 0,
-                test_names: vec![],
+                test_names: HashSet::new(),
             },
         );
         let index = BranchIndex {
@@ -4269,5 +4287,87 @@ mod tests {
         assert!(hot[0].hit_count >= hot[1].hit_count);
         assert_eq!(hot[0].hit_count, 3);
         assert_eq!(hot[1].hit_count, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug-hunting tests
+    // -----------------------------------------------------------------------
+
+    /// BUG: Java extract_functions matches ANY line containing "public ", "private ",
+    /// or "protected ", not just method declarations. Field declarations like
+    /// "public int x = 5;" and class declarations like "public class Foo {" are
+    /// incorrectly identified as function starts.
+    #[test]
+    fn bug_java_extract_functions_false_positives() {
+        let lines: Vec<&str> = vec![
+            "public class MyService {",          // line 1 - NOT a function
+            "    public int counter = 0;",        // line 2 - NOT a function
+            "    private String name;",           // line 3 - NOT a function
+            "    public void doWork() {",         // line 4 - IS a function
+            "        counter++;",                 // line 5
+            "    }",                              // line 6
+            "    private void helper() {",        // line 7 - IS a function
+            "        name = \"test\";",           // line 8
+            "    }",                              // line 9
+            "}",                                  // line 10
+        ];
+
+        let functions = extract_functions(&lines, apex_core::types::Language::Java);
+
+        // We'd expect only 2 functions: doWork and helper.
+        // But the pattern matches ANY line with "public ", "private ", "protected ".
+        // So it'll also match the class declaration and field declarations.
+        let names: Vec<&str> = functions.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert_eq!(
+            names.len(), 2,
+            "BUG: Java extract_functions found {} functions ({:?}), expected 2 (doWork, helper). \
+             Field declarations and class declarations are incorrectly matched.",
+            names.len(), names
+        );
+    }
+
+    /// BUG: JavaScript extract_functions matches "=> {" inside strings or comments.
+    /// A line like `const msg = "arrow => {test}";` would be incorrectly
+    /// identified as a function.
+    #[test]
+    fn bug_js_extract_functions_arrow_in_string() {
+        let lines: Vec<&str> = vec![
+            "const msg = 'arrow => {test}';",     // line 1 - NOT a function
+            "const fn1 = (x) => {",               // line 2 - IS a function
+            "    return x + 1;",                   // line 3
+            "};",                                  // line 4
+        ];
+
+        let functions = extract_functions(&lines, apex_core::types::Language::JavaScript);
+
+        let names: Vec<&str> = functions.iter().map(|(n, _, _)| n.as_str()).collect();
+        // "=> {" inside a string on line 1 should NOT be detected.
+        // We expect only 1 function (the actual arrow function on line 2).
+        assert_eq!(
+            names.len(), 1,
+            "BUG: JS extract_functions found {} functions ({:?}), expected 1. \
+             '=> {{' inside a string was incorrectly matched as a function.",
+            names.len(), names
+        );
+    }
+
+    /// Python extract_func_name: "def " not at start of line (e.g., inside a string).
+    /// The starts_with('#') guard doesn't help with string content.
+    #[test]
+    fn bug_python_func_in_string() {
+        let lines: Vec<&str> = vec![
+            "description = \"use def process(x) to start\"",  // NOT a function
+            "def actual_function(x):",                         // IS a function
+            "    pass",
+        ];
+
+        let functions = extract_functions(&lines, apex_core::types::Language::Python);
+        let names: Vec<&str> = functions.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert_eq!(
+            names.len(), 1,
+            "BUG: Python extract_functions found {} functions ({:?}), expected 1. \
+             'def ' inside a string was incorrectly matched.",
+            names.len(), names
+        );
     }
 }

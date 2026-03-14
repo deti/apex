@@ -69,6 +69,8 @@ pub enum Commands {
     TestOptimize(TestOptimizeArgs),
     /// Order tests by relevance to changed files.
     TestPrioritize(TestPrioritizeArgs),
+    /// Identify tests affected by changed source lines (test impact analysis).
+    TestImpact(TestImpactArgs),
     /// Detect semantically dead code via branch analysis.
     DeadCode(DeadCodeArgs),
     /// Runtime-prioritized lint findings.
@@ -181,6 +183,10 @@ pub struct AuditArgs {
     /// Write output to a file instead of stdout.
     #[arg(long, short)]
     pub output: Option<PathBuf>,
+
+    /// Detection mode: full (all detectors) or fast (skip subprocess detectors).
+    #[arg(long, default_value = "full")]
+    pub detect_mode: String,
 }
 
 #[derive(Parser)]
@@ -216,6 +222,17 @@ pub struct TestPrioritizeArgs {
     pub target: PathBuf,
 
     /// Comma-separated list of changed files (relative to target root).
+    #[arg(long, value_delimiter = ',')]
+    pub changed_files: Vec<String>,
+}
+
+#[derive(Parser)]
+pub struct TestImpactArgs {
+    /// Path to the target repository (must have .apex/index.json).
+    #[arg(long, short)]
+    pub target: PathBuf,
+
+    /// Changed file paths (relative to target root), comma-separated.
     #[arg(long, value_delimiter = ',')]
     pub changed_files: Vec<String>,
 }
@@ -498,6 +515,7 @@ pub async fn run_cli(cli: Cli, cfg: &ApexConfig) -> Result<()> {
         Commands::Index(args) => run_index(args).await,
         Commands::TestOptimize(args) => run_test_optimize(args).await,
         Commands::TestPrioritize(args) => run_test_prioritize(args).await,
+        Commands::TestImpact(args) => run_test_impact(args).await,
         Commands::DeadCode(args) => run_dead_code(args).await,
         Commands::Lint(args) => run_lint(args, cfg).await,
         Commands::Diff(args) => run_diff(args).await,
@@ -538,12 +556,16 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
 
     // 1. Install deps
     if !args.no_install {
+        let _span = tracing::info_span!("install_deps", lang = %lang).entered();
         install_deps(lang, &target_path).await?;
     }
 
     // 2. Instrument -> populate oracle
     let oracle = Arc::new(CoverageOracle::new());
-    let instrumented = instrument(lang, &target_path, &oracle).await?;
+    let instrumented = {
+        let _span = tracing::info_span!("instrument", lang = %lang, target = %target_path.display()).entered();
+        instrument(lang, &target_path, &oracle).await?
+    };
 
     // 2b. For fuzz/driller/all/agent strategies on Rust targets, compile binary
     //     with SanitizerCoverage so the SHM feedback loop works.
@@ -556,6 +578,8 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
     }
 
     // 3. Strategy dispatch
+    {
+    let _span = tracing::info_span!("explore", strategy = %args.strategy).entered();
     match args.strategy.as_str() {
         "fuzz" => {
             let cmd = fuzz_command(&args, &target_path);
@@ -612,6 +636,7 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
             .await?;
         }
     }
+    } // explore span
 
     // 4. Run detection pipeline for agent/all strategies (all output formats)
     let uses_agent = matches!(args.strategy.as_str(), "agent" | "all")
@@ -652,6 +677,7 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         };
 
         let pipeline = apex_detect::DetectorPipeline::from_config(&detect_cfg, lang);
+        let _span = tracing::info_span!("detect").entered();
         Some(pipeline.run_all(&detect_ctx).await)
     } else {
         None
@@ -1274,6 +1300,9 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
     if let Some(detectors) = args.detectors {
         detect_cfg.enabled = detectors;
     }
+    if args.detect_mode.eq_ignore_ascii_case("fast") {
+        detect_cfg.detect_mode = apex_detect::DetectMode::Fast;
+    }
 
     // Build source cache
     let source_cache = build_source_cache(&target_path, lang);
@@ -1667,6 +1696,69 @@ async fn run_test_prioritize(args: TestPrioritizeArgs) -> Result<()> {
 
     for (name, _score) in &scored {
         println!("{name}");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `apex test-impact`
+// ---------------------------------------------------------------------------
+
+async fn run_test_impact(args: TestImpactArgs) -> Result<()> {
+    use apex_index::change_impact::change_impact;
+
+    let target_path = args.target.canonicalize()?;
+    let index = load_index(&target_path)?;
+
+    if args.changed_files.is_empty() {
+        return Err(color_eyre::eyre::eyre!(
+            "--changed-files is required (comma-separated list of relative paths)"
+        ));
+    }
+
+    // Map changed file paths to file_ids from the index.
+    // For each matched file_id, collect all lines from traces.
+    let changed_lines: Vec<(u64, u32)> = index
+        .file_paths
+        .iter()
+        .filter(|(_, path)| {
+            let path_str = path.to_string_lossy();
+            args.changed_files
+                .iter()
+                .any(|cf| path_str.contains(cf.as_str()))
+        })
+        .flat_map(|(file_id, _)| {
+            let mut lines: HashSet<u32> = HashSet::new();
+            for trace in &index.traces {
+                for branch in &trace.branches {
+                    if branch.file_id == *file_id {
+                        lines.insert(branch.line);
+                    }
+                }
+            }
+            lines
+                .into_iter()
+                .map(|line| (*file_id, line))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    if changed_lines.is_empty() {
+        eprintln!("Warning: none of the changed files match indexed files.");
+        println!("No tests affected by the changed files.");
+        return Ok(());
+    }
+
+    let affected = change_impact(&changed_lines, &index);
+
+    if affected.is_empty() {
+        println!("No tests affected by the changed files.");
+    } else {
+        println!("Affected tests ({}):", affected.len());
+        for test in &affected {
+            println!("  {test}");
+        }
     }
 
     Ok(())

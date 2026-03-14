@@ -390,10 +390,7 @@ mod tests {
     #[test]
     fn propagate_self_referencing_assignment() {
         // x = f(x) — lhs already tainted from params, should not change set
-        let tainted = propagate_taint(
-            &["x".into()],
-            &[("x".into(), vec!["x".into()])],
-        );
+        let tainted = propagate_taint(&["x".into()], &[("x".into(), vec!["x".into()])]);
         assert_eq!(tainted.len(), 1);
         assert!(tainted.contains("x"));
     }
@@ -461,11 +458,7 @@ mod tests {
     fn filter_branch_with_empty_cond_vars() {
         // Branch with no condition variables — always filtered out
         let tainted: HashSet<String> = ["x".into()].into();
-        let branches = vec![(
-            BranchId::new(1, 10, 0, 0),
-            "true".into(),
-            vec![],
-        )];
+        let branches = vec![(BranchId::new(1, 10, 0, 0), "true".into(), vec![])];
         let filtered = filter_tainted_branches(&branches, &tainted);
         assert!(filtered.is_empty());
     }
@@ -477,8 +470,16 @@ mod tests {
             (BranchId::new(1, 1, 0, 0), "x > 0".into(), vec!["x".into()]),
             (BranchId::new(1, 2, 0, 0), "a > 0".into(), vec!["a".into()]),
             (BranchId::new(1, 3, 0, 0), "y < 5".into(), vec!["y".into()]),
-            (BranchId::new(1, 4, 0, 0), "b != c".into(), vec!["b".into(), "c".into()]),
-            (BranchId::new(1, 5, 0, 0), "x + y".into(), vec!["x".into(), "y".into()]),
+            (
+                BranchId::new(1, 4, 0, 0),
+                "b != c".into(),
+                vec!["b".into(), "c".into()],
+            ),
+            (
+                BranchId::new(1, 5, 0, 0),
+                "x + y".into(),
+                vec!["x".into(), "y".into()],
+            ),
         ];
         let filtered = filter_tainted_branches(&branches, &tainted);
         assert_eq!(filtered.len(), 3);
@@ -562,11 +563,7 @@ mod tests {
     #[test]
     fn filter_single_branch_not_tainted() {
         let tainted: HashSet<String> = ["x".into()].into();
-        let branches = vec![(
-            BranchId::new(1, 10, 0, 0),
-            "a > 0".into(),
-            vec!["a".into()],
-        )];
+        let branches = vec![(BranchId::new(1, 10, 0, 0), "a > 0".into(), vec!["a".into()])];
         let filtered = filter_tainted_branches(&branches, &tainted);
         assert!(filtered.is_empty());
     }

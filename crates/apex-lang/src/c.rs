@@ -1643,9 +1643,7 @@ mod tests {
         mock.expect_run_command()
             .withf(|spec| {
                 spec.program == "cmake"
-                    && spec
-                        .args
-                        .contains(&"-DCMAKE_BUILD_TYPE=Debug".to_string())
+                    && spec.args.contains(&"-DCMAKE_BUILD_TYPE=Debug".to_string())
             })
             .times(1)
             .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
@@ -1762,7 +1760,11 @@ mod tests {
     #[test]
     fn detect_cmake_without_c_files() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("CMakeLists.txt"), "cmake_minimum_required(VERSION 3.0)").unwrap();
+        std::fs::write(
+            dir.path().join("CMakeLists.txt"),
+            "cmake_minimum_required(VERSION 3.0)",
+        )
+        .unwrap();
         // No .c files at all - should still detect because CMakeLists.txt present
         assert!(CRunner::new().detect(dir.path()));
     }

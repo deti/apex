@@ -39,7 +39,7 @@ use std::{
     time::Instant,
 };
 #[cfg(feature = "firecracker")]
-use tracing::warn;
+use tracing::{error, warn};
 use tracing::{debug, info};
 
 // ---------------------------------------------------------------------------
@@ -52,6 +52,7 @@ pub fn encode_vsock_frame(seed_data: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(4 + seed_data.len());
     frame.extend_from_slice(&len.to_be_bytes());
     frame.extend_from_slice(seed_data);
+    debug!(frame_len = frame.len(), "Encoding vsock frame");
     frame
 }
 
@@ -70,6 +71,7 @@ pub struct VsockResponse {
 ///
 /// Returns `Err` if the buffer is too short or the lengths are inconsistent.
 pub fn decode_vsock_response(data: &[u8]) -> Result<VsockResponse> {
+    debug!(data_len = data.len(), "Decoding vsock response");
     let mut pos = 0usize;
 
     let read_u32 = |data: &[u8], pos: &mut usize| -> Result<u32> {
@@ -249,9 +251,12 @@ impl FcClient {
         use hyper_util::rt::TokioIo;
         use tokio::net::UnixStream;
 
+        debug!(socket = %self.socket_path.display(), "Connecting to Firecracker API socket");
         let stream = UnixStream::connect(&self.socket_path).await.map_err(|e| {
+            error!(socket = %self.socket_path.display(), error = %e, "Failed to connect to Firecracker API socket");
             ApexError::Sandbox(format!("FC connect {}: {e}", self.socket_path.display()))
         })?;
+        debug!(socket = %self.socket_path.display(), "Connected to Firecracker API");
 
         let io = TokioIo::new(stream);
         let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
@@ -276,6 +281,7 @@ impl FcClient {
             .body(Full::new(Bytes::from(json)))
             .map_err(|e| ApexError::Sandbox(format!("FC request build: {e}")))?;
 
+        debug!(method = "PUT", path = %path, "Firecracker API request");
         let resp = sender
             .send_request(req)
             .await
@@ -283,6 +289,7 @@ impl FcClient {
 
         let status = resp.status();
         if !status.is_success() && status.as_u16() != 204 {
+            warn!(method = "PUT", path = %path, status = %status, "Firecracker API returned error status");
             return Err(ApexError::Sandbox(format!(
                 "FC API {path} returned {status}"
             )));
@@ -412,7 +419,7 @@ impl FirecrackerSandbox {
         let mem_file = self.work_dir.join("snapshot.mem");
         client.create_snapshot(&snap_file, &mem_file).await?;
 
-        *self.snapshot.lock().unwrap() = Some(Snapshot {
+        *self.snapshot.lock().unwrap_or_else(|e| e.into_inner()) = Some(Snapshot {
             id: SnapshotId::new(),
             snap_file,
             mem_file,
@@ -1659,29 +1666,65 @@ mod tests {
 
     #[test]
     fn vsock_response_ne_exit_code() {
-        let a = VsockResponse { bitmap: vec![1], exit_code: 0, stdout: vec![], stderr: vec![] };
-        let b = VsockResponse { bitmap: vec![1], exit_code: 1, stdout: vec![], stderr: vec![] };
+        let a = VsockResponse {
+            bitmap: vec![1],
+            exit_code: 0,
+            stdout: vec![],
+            stderr: vec![],
+        };
+        let b = VsockResponse {
+            bitmap: vec![1],
+            exit_code: 1,
+            stdout: vec![],
+            stderr: vec![],
+        };
         assert_ne!(a, b);
     }
 
     #[test]
     fn vsock_response_ne_stdout() {
-        let a = VsockResponse { bitmap: vec![], exit_code: 0, stdout: vec![1], stderr: vec![] };
-        let b = VsockResponse { bitmap: vec![], exit_code: 0, stdout: vec![2], stderr: vec![] };
+        let a = VsockResponse {
+            bitmap: vec![],
+            exit_code: 0,
+            stdout: vec![1],
+            stderr: vec![],
+        };
+        let b = VsockResponse {
+            bitmap: vec![],
+            exit_code: 0,
+            stdout: vec![2],
+            stderr: vec![],
+        };
         assert_ne!(a, b);
     }
 
     #[test]
     fn vsock_response_ne_stderr() {
-        let a = VsockResponse { bitmap: vec![], exit_code: 0, stdout: vec![], stderr: vec![1] };
-        let b = VsockResponse { bitmap: vec![], exit_code: 0, stdout: vec![], stderr: vec![2] };
+        let a = VsockResponse {
+            bitmap: vec![],
+            exit_code: 0,
+            stdout: vec![],
+            stderr: vec![1],
+        };
+        let b = VsockResponse {
+            bitmap: vec![],
+            exit_code: 0,
+            stdout: vec![],
+            stderr: vec![2],
+        };
         assert_ne!(a, b);
     }
 
     #[tokio::test]
     async fn snapshot_trait_works_all_languages() {
         use apex_core::traits::Sandbox;
-        for lang in [Language::Python, Language::JavaScript, Language::Rust, Language::C, Language::Java] {
+        for lang in [
+            Language::Python,
+            Language::JavaScript,
+            Language::Rust,
+            Language::C,
+            Language::Java,
+        ] {
             let sb = FirecrackerSandbox::new(lang, PathBuf::from("/tmp/fc-snap-all2"));
             let result = sb.snapshot().await;
             assert!(result.is_ok(), "snapshot failed for {lang}");
