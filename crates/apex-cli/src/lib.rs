@@ -113,6 +113,14 @@ pub enum Commands {
     BlastRadius(BlastRadiusArgs),
     /// Export compliance evidence packages (ASVS, SSDF, STRIDE).
     ComplianceExport(ComplianceExportArgs),
+    /// Compare OpenAPI spec against code to find undocumented or unimplemented endpoints.
+    ApiCoverage(ApiCoverageArgs),
+    /// Discover runtime service dependencies (HTTP, gRPC, MQ, DB) from code.
+    ServiceMap(ServiceMapArgs),
+    /// Analyze SQL migration scripts for unsafe operations.
+    SchemaCheck(SchemaCheckArgs),
+    /// Generate realistic test data from SQL schema files.
+    TestData(TestDataArgs),
 }
 
 #[derive(Parser, Clone)]
@@ -577,6 +585,46 @@ pub struct ComplianceExportArgs {
     pub output: Option<PathBuf>,
 }
 
+#[derive(Parser)]
+pub struct ApiCoverageArgs {
+    #[arg(long)]
+    pub spec: PathBuf,
+    #[arg(long, short)]
+    pub target: PathBuf,
+    #[arg(long, short, value_enum)]
+    pub lang: LangArg,
+    #[arg(long, default_value = "text")]
+    pub output_format: OutputFormat,
+}
+
+#[derive(Parser)]
+pub struct ServiceMapArgs {
+    #[arg(long, short)]
+    pub target: PathBuf,
+    #[arg(long, short, value_enum)]
+    pub lang: LangArg,
+    #[arg(long, default_value = "text")]
+    pub output_format: OutputFormat,
+}
+
+#[derive(Parser)]
+pub struct SchemaCheckArgs {
+    #[arg(long, short)]
+    pub migration: PathBuf,
+    #[arg(long, default_value = "text")]
+    pub output_format: OutputFormat,
+}
+
+#[derive(Parser)]
+pub struct TestDataArgs {
+    #[arg(long, short)]
+    pub schema: PathBuf,
+    #[arg(long, default_value = "100")]
+    pub rows: usize,
+    #[arg(long, default_value = "text")]
+    pub output_format: OutputFormat,
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 pub enum OutputFormat {
     Text,
@@ -643,6 +691,10 @@ pub async fn run_cli(cli: Cli, cfg: &ApexConfig) -> Result<()> {
         Commands::DataFlow(args) => run_data_flow(args).await,
         Commands::BlastRadius(args) => run_blast_radius(args).await,
         Commands::ComplianceExport(args) => run_compliance_export(args, cfg).await,
+        Commands::ApiCoverage(args) => run_api_coverage(args).await,
+        Commands::ServiceMap(args) => run_service_map(args).await,
+        Commands::SchemaCheck(args) => run_schema_check(args).await,
+        Commands::TestData(args) => run_test_data(args).await,
     }
 }
 
@@ -3465,6 +3517,166 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
         println!("Compliance report written to {}", out_path.display());
     } else {
         print!("{output}");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `apex api-coverage`
+// ---------------------------------------------------------------------------
+
+async fn run_api_coverage(args: ApiCoverageArgs) -> Result<()> {
+    let lang: Language = args.lang.into();
+    let target_path = args.target.canonicalize()?;
+    let spec_json = std::fs::read_to_string(&args.spec)?;
+    let source_cache = build_source_cache(&target_path, lang);
+
+    let report = apex_detect::api_coverage::analyze_coverage(&spec_json, &source_cache, lang)?;
+
+    match args.output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        OutputFormat::Text => {
+            println!("API Spec Coverage\n");
+            println!("Spec endpoints:        {}", report.spec_count);
+            println!("Implemented:           {}", report.implemented_count);
+            println!("Spec-only (missing):   {}", report.spec_only_count);
+            println!("Code-only (undoc):     {}", report.code_only_count);
+            if report.spec_only_count > 0 {
+                println!("\n--- Spec-only (not implemented) ---");
+                for ep in &report.endpoints {
+                    if matches!(ep.status, apex_detect::api_coverage::EndpointStatus::SpecOnly) {
+                        println!("  {} {}", ep.method, ep.path);
+                    }
+                }
+            }
+            if report.code_only_count > 0 {
+                println!("\n--- Code-only (not in spec) ---");
+                for ep in &report.endpoints {
+                    if matches!(ep.status, apex_detect::api_coverage::EndpointStatus::CodeOnly) {
+                        println!("  {} {}", ep.method, ep.path);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `apex service-map`
+// ---------------------------------------------------------------------------
+
+async fn run_service_map(args: ServiceMapArgs) -> Result<()> {
+    let lang: Language = args.lang.into();
+    let target_path = args.target.canonicalize()?;
+    let source_cache = build_source_cache(&target_path, lang);
+
+    let map = apex_detect::service_map::analyze_service_map(&source_cache);
+
+    match args.output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&map)?);
+        }
+        OutputFormat::Text => {
+            println!("Service Dependency Map\n");
+            println!("HTTP calls:      {}", map.http_count);
+            println!("gRPC calls:      {}", map.grpc_count);
+            println!("Message queues:  {}", map.mq_count);
+            println!("Databases:       {}", map.db_count);
+            println!("Total:           {}", map.dependencies.len());
+            if !map.dependencies.is_empty() {
+                println!();
+                for dep in &map.dependencies {
+                    println!(
+                        "  [{:?}] {}:{} — {}",
+                        dep.kind,
+                        dep.file.display(),
+                        dep.line,
+                        dep.evidence
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `apex schema-check`
+// ---------------------------------------------------------------------------
+
+async fn run_schema_check(args: SchemaCheckArgs) -> Result<()> {
+    use apex_detect::schema_check::MigrationRisk;
+
+    let sql = std::fs::read_to_string(&args.migration)?;
+    let report = apex_detect::schema_check::analyze_migration(&sql);
+
+    match args.output_format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        OutputFormat::Text => {
+            println!("Schema Migration Safety: {}\n", args.migration.display());
+            println!("Dangerous: {}", report.dangerous_count);
+            println!("Caution:   {}", report.caution_count);
+            println!("Safe:      {}", report.safe_count);
+            if !report.issues.is_empty() {
+                println!();
+                for issue in &report.issues {
+                    let icon = match issue.risk {
+                        MigrationRisk::Dangerous => "\u{2717}",
+                        MigrationRisk::Caution => "\u{26a0}",
+                        MigrationRisk::Safe => "\u{2713}",
+                    };
+                    println!("  {} L{}: {}", icon, issue.line, issue.description);
+                    println!("    Statement:  {}", issue.statement);
+                    println!("    Suggestion: {}", issue.suggestion);
+                }
+            }
+        }
+    }
+
+    if report.dangerous_count > 0 {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `apex test-data`
+// ---------------------------------------------------------------------------
+
+async fn run_test_data(args: TestDataArgs) -> Result<()> {
+    let sql = std::fs::read_to_string(&args.schema)?;
+    let tables = apex_detect::test_data::parse_schema(&sql);
+
+    match args.output_format {
+        OutputFormat::Json => {
+            let output = serde_json::json!({
+                "tables": tables,
+                "rows_per_table": args.rows,
+                "sql": apex_detect::test_data::generate_inserts(&tables, args.rows),
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+        OutputFormat::Text => {
+            if tables.is_empty() {
+                println!("No CREATE TABLE statements found.");
+            } else {
+                println!(
+                    "-- Generated {} rows per table for {} table(s)\n",
+                    args.rows,
+                    tables.len()
+                );
+                print!("{}", apex_detect::test_data::generate_inserts(&tables, args.rows));
+            }
+        }
     }
 
     Ok(())

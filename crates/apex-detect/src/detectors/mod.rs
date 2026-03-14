@@ -1,6 +1,7 @@
 pub mod bandit;
 pub mod broken_access;
 pub mod cegar;
+pub mod data_transform_spec;
 pub mod command_injection;
 pub mod crypto_failure;
 pub mod dep_audit;
@@ -44,6 +45,7 @@ pub mod js_ssrf;
 pub mod js_timeout;
 
 pub use bandit::BanditRuleDetector;
+pub use data_transform_spec::DataTransformSpecMiner;
 pub use dep_audit::DependencyAuditDetector;
 pub use flag_hygiene::FlagHygieneDetector;
 pub use hardcoded_secret::HardcodedSecretDetector;

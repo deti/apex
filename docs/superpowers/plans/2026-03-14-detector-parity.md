@@ -1,4 +1,4 @@
-<!-- status: FUTURE -->
+<!-- status: DONE -->
 # Detector Language Parity Plan
 
 > **For agentic workers:** REQUIRED: Use fleet crew agents (security-detect crew) for implementation. Steps use checkbox (`- [ ]`) syntax for tracking.

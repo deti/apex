@@ -110,6 +110,11 @@ impl DetectorPipeline {
             detectors.push(Box::new(JsPathTraversalDetector));
         }
 
+        // Spec mining detectors (opt-in)
+        if cfg.enabled.contains(&"data-transform".into()) {
+            detectors.push(Box::new(DataTransformSpecMiner));
+        }
+
         if cfg.detect_mode == DetectMode::Fast {
             detectors.retain(|d| !d.uses_cargo_subprocess());
         }

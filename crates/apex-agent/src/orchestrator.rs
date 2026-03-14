@@ -155,7 +155,9 @@ impl AgentCluster {
                         );
                     }
                     for strategy in &self.strategies {
-                        let _ = strategy.observe(result).await;
+                        if let Err(e) = strategy.observe(result).await {
+                            warn!("strategy observe failed: {e}");
+                        }
                     }
                 }
                 stall_count = if new_coverage { 0 } else { stall_count + 1 };
