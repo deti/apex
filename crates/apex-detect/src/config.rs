@@ -12,6 +12,8 @@ fn default_enabled() -> Vec<String> {
         "timeout".into(),
         "session-security".into(),
         "secret-scan".into(),
+        "license-scan".into(),
+        "flag-hygiene".into(),
         "discarded-async-result".into(),
         "mixed-bool-ops".into(),
         "partial-cmp-unwrap".into(),
@@ -163,6 +165,14 @@ mod tests {
     }
 
     #[test]
+    fn default_config_has_expansion_tier1_detectors() {
+        let cfg = DetectConfig::default();
+        assert!(cfg.enabled.contains(&"secret-scan".to_string()));
+        assert!(cfg.enabled.contains(&"license-scan".to_string()));
+        assert!(cfg.enabled.contains(&"flag-hygiene".to_string()));
+    }
+
+    #[test]
     fn default_timeout_is_none() {
         let cfg = DetectConfig::default();
         assert!(cfg.per_detector_timeout_secs.is_none());
@@ -196,7 +206,7 @@ clippy_extra_args = ["-W", "clippy::pedantic"]
     #[test]
     fn empty_toml_gives_defaults() {
         let cfg: DetectConfig = toml::from_str("").unwrap();
-        assert_eq!(cfg.enabled.len(), 25);
+        assert_eq!(cfg.enabled.len(), 27);
         assert_eq!(cfg.severity_threshold, "low");
     }
 
@@ -298,7 +308,7 @@ detect_mode = "Fast"
         let cfg = DetectConfig::default();
         let json = serde_json::to_string(&cfg).unwrap();
         let cfg2: DetectConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(cfg2.enabled.len(), 25);
+        assert_eq!(cfg2.enabled.len(), 27);
         assert_eq!(cfg2.severity_threshold, "low");
     }
 }
