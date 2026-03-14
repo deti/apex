@@ -1,0 +1,29 @@
+schema_version: 1
+name: intelligence
+domain: "AI-driven test generation and agent orchestration — LLM-guided synthesis, few-shot prompting, mutation hints, agent budget/priority management"
+
+paths:
+  - crates/apex-agent/**
+  - crates/apex-synth/**
+  - crates/apex-rpc/**
+
+tech_stack:
+  - Rust
+  - tokio
+  - LLM integration
+  - prompt engineering
+  - coordinator/worker RPC
+
+sdlc_concerns:
+  - architecture
+  - qa
+
+partners:
+  - foundation
+  - exploration
+  - runtime
+
+notes: >
+  All three crates share AI-augmented concerns and LLM integration patterns.
+  apex-agent orchestrates strategies, apex-synth generates tests, apex-rpc
+  provides distributed coordination.

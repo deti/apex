@@ -1,0 +1,31 @@
+schema_version: 1
+name: runtime
+domain: "Target execution environment — language parsers, code instrumentation, sandboxed execution, indexing/prioritization"
+
+paths:
+  - crates/apex-lang/**
+  - crates/apex-instrument/**
+  - crates/apex-sandbox/**
+  - crates/apex-index/**
+
+tech_stack:
+  - Rust
+  - process sandboxing
+  - SanCov runtime
+  - shared memory bitmaps
+  - optional pyo3
+
+sdlc_concerns:
+  - security
+  - performance
+  - sre
+
+partners:
+  - foundation
+  - exploration
+  - intelligence
+
+notes: >
+  Spans the most languages — each of apex-lang, apex-instrument, and apex-sandbox
+  has per-language modules (python.rs, javascript.rs, etc.). Adding a new target
+  language requires coordinated changes across all three crates.

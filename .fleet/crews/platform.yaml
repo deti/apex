@@ -1,0 +1,32 @@
+schema_version: 1
+name: platform
+domain: "CLI interface, agent definitions, integration tests, deployment tooling — the user-facing integration surface"
+
+paths:
+  - crates/apex-cli/**
+  - agents/**
+  - tests/**
+
+tech_stack:
+  - Rust
+  - clap CLI
+  - Markdown agent definitions
+  - shell scripts
+  - fixture projects
+
+sdlc_concerns:
+  - qa
+  - sre
+  - architecture
+
+partners:
+  - foundation
+  - security-detect
+  - exploration
+  - runtime
+  - intelligence
+
+notes: >
+  apex-cli depends on nearly every other crate — it is the top-level integration
+  point. The agents/ directory defines AI agent personas and the tests/ directory
+  contains cross-language fixture projects for end-to-end testing.

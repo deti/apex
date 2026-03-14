@@ -1,0 +1,28 @@
+schema_version: 1
+name: performance
+title: Performance Officer
+domain: Performance Engineering
+
+expertise:
+  - benchmark regression detection
+  - solver timeout tuning
+  - mutation throughput optimization
+  - memory efficiency
+  - shared memory bitmap design
+  - coverage feedback loop latency
+
+triggers:
+  - performance
+  - latency
+  - throughput
+  - optimization
+  - benchmark
+  - timeout
+
+review_checklist:
+  - No unnecessary allocations in hot paths
+  - Solver timeouts bounded and configurable
+  - Mutation strategies have throughput baselines
+  - Coverage bitmap operations efficient
+  - No O(n^2) or worse in exploration loops
+  - Feature-gated heavy deps do not affect default build time

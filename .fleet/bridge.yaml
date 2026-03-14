@@ -1,0 +1,14 @@
+schema_version: 1
+fleet_name: "apex"
+auto_analyze: false
+
+changelog_retention_days: 30
+
+scan_paths:
+  - crates/
+  - tests/
+  - agents/
+
+ignore_paths:
+  - target/
+  - "*.generated.*"

@@ -1,0 +1,29 @@
+schema_version: 1
+name: foundation
+domain: "Core types, coverage model, intermediate representation — the shared substrate all other crates build on"
+
+paths:
+  - crates/apex-core/**
+  - crates/apex-coverage/**
+  - crates/apex-mir/**
+
+tech_stack:
+  - Rust
+  - tokio
+  - serde
+  - thiserror
+
+sdlc_concerns:
+  - architecture
+  - qa
+
+partners:
+  - security-detect
+  - exploration
+  - runtime
+  - intelligence
+  - platform
+
+notes: >
+  Changes here ripple everywhere. Struct/trait modifications should trigger
+  cross-crew awareness notifications to all partners.

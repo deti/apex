@@ -9,28 +9,35 @@ Heavy deps (z3, libafl, pyo3) are behind optional feature flags — not compiled
 
 ## Session Naming
 
-When starting work on a plan or feature, update `.claude/session-name` with a short identifier:
-```
-echo "apex:research-phase1/4" > .claude/session-name
-```
-This sets the terminal tab title and status bar label so parallel sessions are distinguishable.
+Each Claude Code session gets its own name file at `.claude/sessions/<session_id>.name`. Multiple sessions in the same project don't collide.
 
-**Format:** `[!]apex:<plan-slug>` with optional phase count
-- `apex:research-phase1/4` — working on research phase 1 of 4
-- `apex:js-ts-support` — JS/TS language support work
-- `apex:gap-closure` — competitive gap closure
+**Set the session task** (project name is derived from repo dir automatically):
+```bash
+# Shows as "bcov:research-phase1/4" in tab — "bcov:" prefix is automatic
+echo "research-phase1/4" > .claude/sessions/${PPID}.name
+# No name file → tab just shows "bcov"
+```
 
-**Prefix `!` when the session needs user input:**
+**Attention marker** — touch `.attn` file when blocked on user input:
+```bash
+touch .claude/sessions/${PPID}.attn    # ● yellow dot appears
+rm -f .claude/sessions/${PPID}.attn    # back to green
 ```
-echo "!apex:research-phase1/4" > .claude/session-name
-```
-- `!` prefix → yellow status bar + `(!)` in terminal tab title
-- No prefix → green status bar, running autonomously
+
+**Format:** just the task slug (project prefix is automatic from repo dir):
+- `research-phase1/4` → shows as `bcov:research-phase1/4`
+- `js-ts-support` → shows as `bcov:js-ts-support`
+- (no file) → shows as `bcov`
+
+**Attention marker** (● yellow dot):
+- Separate `.attn` file (not baked into the name)
+- Tab title: `● apex:research-phase1/4`
+- Status bar: yellow `● apex:research-phase1/4`
 
 **Color coding:**
 - Green: session running normally
-- Yellow + `!`: session blocked, needs user input
-- Dim: token/context counters (secondary info)
+- Yellow + ●: session needs user input
+- Dim: token/context counters
 
 ## Build & Test
 

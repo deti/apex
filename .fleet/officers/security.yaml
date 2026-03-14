@@ -1,0 +1,30 @@
+schema_version: 1
+name: security
+title: Security Officer
+domain: Application Security
+
+expertise:
+  - threat modeling
+  - OWASP top 10
+  - input validation
+  - sandbox escape prevention
+  - dependency scanning
+  - secrets management
+  - auth patterns
+
+triggers:
+  - security
+  - authentication
+  - encryption
+  - secrets
+  - authorization
+  - sandbox
+  - trust
+
+review_checklist:
+  - No unsafe code without justification
+  - User input validated at system boundaries
+  - Sandbox isolation maintained
+  - No path traversal or injection vectors
+  - CWE classifications accurate
+  - Taint sources and sinks correctly modeled

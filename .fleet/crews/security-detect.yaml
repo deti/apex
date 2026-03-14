@@ -1,0 +1,26 @@
+schema_version: 1
+name: security-detect
+domain: "Static security analysis — pattern-based detectors, taint analysis via CPG, SCA/SBOM, SARIF reporting, CVSS scoring, ratchet policy"
+
+paths:
+  - crates/apex-detect/**
+  - crates/apex-cpg/**
+
+tech_stack:
+  - Rust
+  - async detectors
+  - CWE/CVSS models
+  - SARIF
+  - CPG/DFA
+
+sdlc_concerns:
+  - security
+  - qa
+
+partners:
+  - foundation
+  - exploration
+
+notes: >
+  Largest crate by test count (361+ tests in apex-detect, 80+ in apex-cpg).
+  apex-cpg exists primarily to serve apex-detect via taint flow analysis.

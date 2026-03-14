@@ -1,0 +1,27 @@
+schema_version: 1
+name: qa
+title: QA Officer
+domain: Quality Assurance
+
+expertise:
+  - test strategy
+  - coverage analysis
+  - test design
+  - integration testing
+  - regression testing
+  - fixture management
+
+triggers:
+  - qa
+  - testing
+  - quality
+  - coverage
+  - regression
+
+review_checklist:
+  - New code has corresponding tests
+  - Tests cover both happy path and error cases
+  - Async tests use tokio::test
+  - Tests in cfg(test) mod tests inside each file
+  - No flaky or timing-dependent tests
+  - Fixture projects updated when adding language support

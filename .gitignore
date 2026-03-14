@@ -32,7 +32,7 @@ snapshot.mem
 
 # Claude local settings
 .claude/settings.local.json
-.claude/session-name
+.claude/sessions/
 
 # Mutation testing output
 mutants.out/

@@ -1,0 +1,28 @@
+schema_version: 1
+name: exploration
+domain: "Dynamic path exploration — fuzzing engine, symbolic/concolic execution, constraint solving, coverage-guided search"
+
+paths:
+  - crates/apex-fuzz/**
+  - crates/apex-symbolic/**
+  - crates/apex-concolic/**
+
+tech_stack:
+  - Rust
+  - optional libafl
+  - optional z3
+  - SMT-LIB
+  - grammar-based mutation
+
+sdlc_concerns:
+  - performance
+  - qa
+
+partners:
+  - foundation
+  - runtime
+  - intelligence
+
+notes: >
+  Performance-critical crew. Contains optional heavy dependencies (z3, libafl)
+  behind feature flags. Benchmark regression checks recommended.
