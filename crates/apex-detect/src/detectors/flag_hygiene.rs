@@ -168,7 +168,7 @@ impl Detector for FlagHygieneDetector {
                 id: Uuid::new_v4(),
                 detector: "flag-hygiene".into(),
                 severity: Severity::Info,
-                category: FindingCategory::SecuritySmell,
+                category: FindingCategory::FeatureFlagHygiene,
                 file: first_ref.file.clone(),
                 line: Some(first_ref.line),
                 title: format!("Feature flag: {flag_name}"),
