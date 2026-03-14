@@ -20,6 +20,7 @@ thiserror = "1"
 tracing = "0.1"
 async-trait = "0.1"
 rand = "0.8"
+rand_distr = "0.4"
 regex = "1"
 
 # Feature-gated: only with --features libafl-backend

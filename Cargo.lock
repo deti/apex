@@ -140,6 +140,8 @@ dependencies = [
  "async-trait",
  "futures",
  "mockall",
+ "rand 0.8.5",
+ "rand_distr",
  "tempfile",
  "tokio",
  "tracing",

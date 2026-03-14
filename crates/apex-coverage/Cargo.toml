@@ -10,6 +10,7 @@ description = "Coverage oracle and bitmap-based edge tracking for APEX"
 [dependencies]
 apex-core = { path = "../apex-core" }
 dashmap = "5"
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
 

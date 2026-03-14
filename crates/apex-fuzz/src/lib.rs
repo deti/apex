@@ -3,13 +3,20 @@
 
 pub mod cmplog;
 pub mod corpus;
+pub mod de_scheduler;
 pub mod directed;
 pub mod grammar;
 pub mod libafl_backend;
 pub mod mutators;
 pub mod plugin;
 pub mod scheduler;
+pub mod semantic_feedback;
+pub mod thompson;
 pub mod traits;
+
+pub use de_scheduler::DeScheduler;
+pub use semantic_feedback::{SemanticFeedback, SemFeedbackScore};
+pub use thompson::ThompsonScheduler;
 
 use crate::corpus::Corpus;
 use crate::scheduler::MOptScheduler;
