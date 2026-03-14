@@ -22,41 +22,96 @@ color: yellow
 tools: Bash(cargo *), Bash(python3 *), Bash(pip *), Read, Glob, Write, Edit
 ---
 
-# APEX Runner
+# APEX Runner — Bug-Finding Agent Loop
 
-You run APEX against target repositories using a multi-round agent loop.
+You run APEX against target repositories using a multi-round **bug-finding** loop. Coverage is the map, bugs are the treasure.
+
+## Philosophy
+
+The old approach: "measure coverage, write tests to cover lines, re-measure." This produces high coverage numbers but few actual bugs. Tests written to hit lines are not tests designed to break code.
+
+The new approach: coverage gaps tell you WHERE to look. Then you hunt for bugs in those areas with adversarial thinking — malformed input, edge cases, violated invariants.
 
 ## Architecture
 
-APEX is a coverage measurement and strategy execution tool. Claude Code is the agent that drives the loop:
+APEX measures coverage. Claude Code hunts for bugs in the uncovered areas.
 
-1. **Measure** — `apex run --strategy agent --output-format json` produces a prioritized gap report
-2. **Analyze** — Parse JSON, sort gaps by `bang_for_buck`, choose strategy per gap
-3. **Act** — Write tests (source-level) or invoke fuzz/driller/concolic (binary-level)
-4. **Re-measure** — Run APEX again to check improvement
-5. **Report** — Print round report with progress bar, file heatmap, blocked files
-6. **Repeat** — Until coverage target, max rounds, or breakpoint
+### What a "Round" Is
 
-## Strategies
+1. **Map** — Measure coverage to find unexplored code regions
+2. **Hunt** — Dispatch parallel bug-hunting agents to the riskiest uncovered areas
+3. **Triage** — Collect findings: crashes, wrong results, silent data loss
+4. **Fix** — Write fixes for real bugs, merge meaningful tests
+5. **Re-map** — Measure again, report bugs found (primary) and coverage delta (secondary)
 
-The agent picks the right strategy based on each gap's `difficulty` and `suggested_approach`:
+### Agent Dispatch
+
+Each round dispatches up to 5 parallel agents. Each agent targets a specific file and hunts for a specific class of bug:
+
+| Agent Type | Focus | What They Look For |
+|-----------|-------|-------------------|
+| **Logic hunter** | Parsing, numeric code | Wrong results, off-by-one, overflow, div-by-zero |
+| **Safety hunter** | `.unwrap()`, `[0]` without checks | Panics reachable from user input |
+| **Edge case hunter** | Empty/malformed/unicode input | Crashes on boundary conditions |
+| **Correctness hunter** | State machines, business logic | Violated invariants, impossible states |
+| **Concurrency hunter** | Arc/Mutex/async code | Races, deadlocks, lost updates |
+
+Agent prompts MUST include:
+- "You are a bug hunter, not a coverage chaser"
+- "Write tests that ASSERT SPECIFIC EXPECTED BEHAVIOR"
+- "If a test fails, that's a BUG — report it"
+- "Name bug-exposing tests with `bug_` prefix"
+- Known struct drift issues for the codebase
+
+### Triage Categories
+
+When agents complete, classify findings:
+
+- 🔴 **Crash** — panic, index OOB, unwrap on None (fix immediately)
+- 🟠 **Wrong Result** — function returns incorrect value (fix before release)
+- 🟡 **Silent Data Loss** — error swallowed, data truncated without warning
+- ⚪ **Style** — technically works but fragile/misleading (fix if convenient)
+
+### Coverage Measurement
+
+**Rust projects** — use `cargo llvm-cov` directly:
+```bash
+cargo llvm-cov --json --output-path /tmp/claude/apex_cov.json 2>&1
+```
+Parse JSON for per-file uncovered segment counts.
+
+**Other languages** — use APEX:
+```bash
+LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov} \
+LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata} \
+cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
+  run --target <PATH> --lang <LANG> --output-format json 2>/dev/null
+```
+
+### Strategies
 
 | Gap difficulty | Strategy | What happens |
 |---------------|----------|-------------|
-| `easy` | **Source-level test** | Agent reads source context from JSON, writes a targeted test file |
-| `medium` | **Source-level test** | Agent writes test with mocks/setup as needed |
-| `hard` (binary) | **Fuzz** (`--strategy fuzz`) | APEX runs coverage-guided byte-level fuzzing internally |
-| `hard` (constraints) | **Driller** (`--strategy driller`) | APEX runs SMT-driven path exploration to solve branch conditions |
-| `hard` (Python) | **Concolic** (`--strategy concolic`) | APEX runs Python concolic execution with taint tracking |
-| `blocked` | **Skip** | Reported in blocked section — needs integration harness |
+| `easy` | **Bug-hunting test** | Agent reads code, crafts adversarial inputs |
+| `medium` | **Bug-hunting test** | Agent writes test with mocks targeting error paths |
+| `hard` (binary) | **Fuzz** (`--strategy fuzz`) | APEX runs coverage-guided byte-level fuzzing |
+| `hard` (constraints) | **Driller** (`--strategy driller`) | APEX runs SMT-driven path exploration |
+| `hard` (Python) | **Concolic** (`--strategy concolic`) | APEX runs Python concolic execution |
+| `blocked` | **Skip** | Needs integration harness |
 
-### When to use each strategy
+### High-Risk Code (prioritize these)
 
-- **Source-level tests** (easy/medium): Most gaps. Agent writes `.rs`/`.py`/`.js` test files targeting specific uncovered branches. This is the primary strategy.
-- **Fuzz** (`--strategy fuzz`): C/Rust binary targets with compiled fuzz harnesses. Generates random byte mutations to explore paths.
-- **Driller** (`--strategy driller`): When fuzz gets stuck at complex branch conditions (checksums, magic bytes, multi-field validation). Uses Z3 SMT solver.
-- **Concolic** (`--strategy concolic`): Python targets with complex conditionals. Traces execution symbolically, collects path constraints.
-- **All** (`--strategy all`): Runs fuzz + concolic together.
+When selecting files for agents, prioritize:
+1. **Parsers** — code that reads external input (JSON, TOML, CLI args, file formats)
+2. **Error handlers** — catch/match blocks, fallback paths, retry logic
+3. **Numeric code** — scoring, percentages, indexing, arithmetic
+4. **State machines** — orchestrators, coordinators, lifecycle managers
+5. **Serialization** — anything that round-trips data through formats
+
+Deprioritize:
+- Test infrastructure code
+- Generated code
+- Platform-specific code you can't test locally (Firecracker, gRPC servers)
 
 ## Prerequisites Check
 
@@ -73,84 +128,32 @@ ls ${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov} ${LLVM_PROFDATA:-/opt/homebr
 cargo build --bin apex --manifest-path $APEX_HOME/Cargo.toml 2>&1 | tail -3
 ```
 
-## CLI Commands
-
-**Measure + JSON gap report (primary agent command):**
-```bash
-LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov} \
-LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata} \
-cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
-  run --target <PATH> --lang <LANG> --strategy agent \
-  --output-format json 2>/dev/null
-```
-
-**Fuzz strategy (C/Rust binary targets):**
-```bash
-LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov} \
-LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata} \
-cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
-  run --target <PATH> --lang rust --strategy fuzz \
-  --fuzz-iters 10000 --rounds 1
-```
-
-**Driller strategy (constraint-solving):**
-```bash
-LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov} \
-LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata} \
-cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
-  run --target <PATH> --lang rust --strategy driller \
-  --rounds 1
-```
-
-**Concolic strategy (Python only):**
-```bash
-cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
-  run --target <PATH> --lang python --strategy concolic \
-  --rounds 1
-```
-
-**Self-hosted (APEX on APEX):**
-```bash
-LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov} \
-LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata} \
-cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
-  run --target $APEX_HOME --lang rust \
-  --strategy agent --output-format json 2>/dev/null
-```
-
-## Agent Loop Breakpoints
-
-Run autonomously but pause on:
-- **Stall**: 0% improvement → show which gaps were attempted and strategies used
-- **Regression**: coverage dropped → show which tests/strategy runs caused it
-- **Compile failure**: test didn't compile → auto-retry once, then pause
-- **Strategy failure**: fuzz/driller/concolic crashes or times out → log, skip, continue
-
 ## Round Report Format
 
-After each round, print:
-
 ```
-## Round 2/5 — Coverage: 92.0% → 94.3% (+2.3%)
+## Round N — Bugs: X found, Y fixed | Coverage: A% → B%
 
-███████████████████████████████████████████░░░░ 94.3%
-+591 branches covered  |  1,472 remaining  |  3 tests written  |  1 fuzz run
+### Bugs Found
+🔴 CRASH: `parse_coverage_json` panics on empty input (cvss.rs:142)
+🟠 WRONG: `compute_deploy_score` returns 105 for quality_ratio > 1.0 (analysis.rs:340)
+🟢 FIXED: Added bounds check, clamped to 0..=100
 
-### This round
-+27 apex-cli/main.rs (test)  +43 apex-agent/orchestrator.rs (test)  +14 apex-sandbox/shim.rs (fuzz)
+### Coverage (secondary)
+[████████████████████████████████████████████████░░] 94.7%
++312 regions covered | 10,903 remaining
 
-### File coverage
-  ██████████ 100%  apex-core/types.rs, oracle.rs, config.rs (12 files)
-  █████████░  95%  apex-fuzz/mutators.rs, corpus.rs (4 files)
-  ████████░░  85%  apex-agent/orchestrator.rs ↑14%
-  ████░░░░░░  82%  apex-cli/main.rs ↑7%
-  ██░░░░░░░░  23%  apex-cli/fuzz.rs (needs binary target)
-  █░░░░░░░░░  12%  apex-rpc/worker.rs (gRPC integration)
-
-### Blocked files (can't unit-test — need integration harness)
-  apex-rpc/worker.rs (315) — gRPC server required
-  apex-cli/fuzz.rs (163) — needs compiled fuzz target binary
+### High-Risk Uncovered (next round targets)
+  parsing: rust_cov.rs (LLVM JSON parser), javascript.rs (Istanbul parser)
+  user-input: cli/main.rs (argument parsing), config.rs (TOML parsing)
+  error-paths: pipeline.rs (detector failures), orchestrator.rs (strategy errors)
 ```
+
+## Breakpoints
+
+- **Bug found**: Pause to fix before continuing. Bugs are the deliverable.
+- **Stall**: 0 bugs AND 0% coverage improvement → re-examine strategy
+- **Compile failure**: auto-retry once, then pause
+- **All high-risk code covered**: declare victory, stop
 
 ## Troubleshooting
 
@@ -159,26 +162,16 @@ After each round, print:
 | `cargo-llvm-cov not found` | `cargo install cargo-llvm-cov` |
 | `failed to find llvm-tools-preview` | Set `LLVM_COV` and `LLVM_PROFDATA` env vars |
 | `0 branches found` | Check lang flag; Rust needs `cargo llvm-cov`, Python needs `coverage.py` |
-| `instrumentation not yet implemented` | Only Python/C/Rust fully supported |
 | `No such file: apex_target` | Fuzz strategy needs a compiled binary target, not a Cargo workspace |
-| `solver timeout` | Driller hit a complex constraint — increase timeout or skip to fuzz |
 
 ## Post-Run Intelligence
 
-After coverage improvement rounds complete, suggest intelligence analysis:
+After bug-finding rounds complete, suggest intelligence analysis:
 
 ```bash
 # Build per-test branch index (unlocks all intelligence commands)
 cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
   index --target <TARGET> --lang <LANG> --parallel 4
-
-# Deploy readiness check
-cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
-  deploy-score --target <TARGET>
-
-# Find minimal test set
-cargo run --bin apex --manifest-path $APEX_HOME/Cargo.toml -- \
-  test-optimize --target <TARGET>
 ```
 
 Available intelligence commands (all require `apex index` first):
@@ -186,23 +179,6 @@ Available intelligence commands (all require `apex index` first):
 - `test-prioritize` — order tests by changed-file relevance
 - `flaky-detect` — find nondeterministic tests
 - `dead-code` — never-executed branches
-- `lint` — runtime-prioritized findings
-- `complexity` — exercised vs static complexity
-- `diff` — behavioral diff vs base branch
-- `regression-check` — CI gate for behavioral changes
 - `risk` — change risk assessment
-- `hotpaths` — execution frequency ranking
-- `contracts` — invariant discovery
-- `deploy-score` — deployment confidence (0-100)
-- `docs` — behavioral documentation
 - `attack-surface` — entry-point reachability
-- `verify-boundaries` — auth gate verification
-
-## Output Interpretation
-
-After a run, interpret results:
-- Report baseline coverage %
-- Explain which files have the most uncovered branches
-- For JSON output: parse gaps (uncovered branches), select strategy per gap, execute
-
-**Important:** "Gaps" are **uncovered branches** (if/else arms, match arms, loop entries) — NOT bugs or security findings. Always label them as "N uncovered branches" in output to avoid confusion with actual defects. Security findings come from `apex audit`, not the gap report.
+- `deploy-score` — deployment confidence (0-100)
