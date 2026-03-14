@@ -20,8 +20,7 @@ impl HGFuzzer {
 
     /// Set the distance from a branch to the nearest target.
     pub fn set_distance(&mut self, branch: &BranchId, distance: f64) {
-        self.distance_cache
-            .insert(branch_key(branch), distance);
+        self.distance_cache.insert(branch_key(branch), distance);
     }
 
     /// Assign energy to a corpus entry based on its distance to the target.

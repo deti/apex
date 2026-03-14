@@ -183,9 +183,21 @@ mod tests {
     fn filter_predictions_passing() {
         let d = HagnnDetector::new(HagnnConfig::default());
         let preds = vec![
-            VulnPrediction { cwe_id: 79, confidence: 0.9, label: "XSS".into() },
-            VulnPrediction { cwe_id: 89, confidence: 0.5, label: "SQLi".into() },
-            VulnPrediction { cwe_id: 22, confidence: 0.8, label: "Path Traversal".into() },
+            VulnPrediction {
+                cwe_id: 79,
+                confidence: 0.9,
+                label: "XSS".into(),
+            },
+            VulnPrediction {
+                cwe_id: 89,
+                confidence: 0.5,
+                label: "SQLi".into(),
+            },
+            VulnPrediction {
+                cwe_id: 22,
+                confidence: 0.8,
+                label: "Path Traversal".into(),
+            },
         ];
         let filtered = d.filter_predictions(preds);
         assert_eq!(filtered.len(), 2);
@@ -204,8 +216,16 @@ mod tests {
     fn filter_predictions_none_pass() {
         let d = HagnnDetector::new(HagnnConfig::default());
         let preds = vec![
-            VulnPrediction { cwe_id: 79, confidence: 0.3, label: "XSS".into() },
-            VulnPrediction { cwe_id: 89, confidence: 0.1, label: "SQLi".into() },
+            VulnPrediction {
+                cwe_id: 79,
+                confidence: 0.3,
+                label: "XSS".into(),
+            },
+            VulnPrediction {
+                cwe_id: 89,
+                confidence: 0.1,
+                label: "SQLi".into(),
+            },
         ];
         let filtered = d.filter_predictions(preds);
         assert!(filtered.is_empty());

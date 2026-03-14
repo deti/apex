@@ -336,4 +336,35 @@ mod tests {
         assert!(parsed.get("$schema").is_some());
         assert!(parsed.get("version").is_some());
     }
+
+    #[test]
+    fn sarif_all_category_cwes_covered() {
+        let categories = vec![
+            FindingCategory::MemorySafety,
+            FindingCategory::UndefinedBehavior,
+            FindingCategory::UnsafeCode,
+            FindingCategory::DependencyVuln,
+            FindingCategory::InsecureConfig,
+            FindingCategory::HardcodedSecret,
+            FindingCategory::LicenseViolation,
+        ];
+        for cat in categories {
+            let findings = vec![make_finding(Severity::Medium, cat)];
+            let report = findings_to_sarif(&findings, "0.1.0");
+            let rules = &report.runs[0].tool.driver.rules;
+            assert_eq!(rules.len(), 1);
+            assert!(rules[0].properties.as_ref().unwrap().tags[0].starts_with("CWE-"));
+        }
+    }
+
+    #[test]
+    fn sarif_deduplicates_rules() {
+        let findings = vec![
+            make_finding(Severity::High, FindingCategory::Injection),
+            make_finding(Severity::Medium, FindingCategory::Injection),
+        ];
+        let report = findings_to_sarif(&findings, "0.1.0");
+        assert_eq!(report.runs[0].tool.driver.rules.len(), 1);
+        assert_eq!(report.runs[0].results.len(), 2);
+    }
 }

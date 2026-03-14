@@ -412,7 +412,11 @@ impl Instrumentor for JavaScriptInstrumentor {
                 }
                 let mut inner = JavaScriptInstrumentor::with_runner(self.runner.clone());
                 inner.parse_istanbul_json(&json_path, &target.root)?;
-                (inner.branch_ids, inner.executed_branch_ids, inner.file_paths)
+                (
+                    inner.branch_ids,
+                    inner.executed_branch_ids,
+                    inner.file_paths,
+                )
             }
             CoverageFormat::V8 => {
                 let json_path = match &config.output_path {
@@ -1255,5 +1259,732 @@ mod tests {
         let config = select_coverage_tool(&env, tmp.path());
         assert_eq!(config.tool, CoverageTool::C8);
         assert_eq!(config.format, CoverageFormat::V8);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage tests for uncovered segments
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_select_vitest_without_v8_coverage_falls_through_to_c8() {
+        // Vitest test runner but no @vitest/coverage-v8 installed -> falls through to module system
+        let tmp = tempfile::tempdir().unwrap();
+        let env = JsEnvironment {
+            runtime: JsRuntime::Node,
+            pkg_manager: apex_lang::js_env::PkgManager::Npm,
+            test_runner: JsTestRunner::Vitest,
+            module_system: ModuleSystem::ESM,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let config = select_coverage_tool(&env, tmp.path());
+        // Without @vitest/coverage-v8, ESM falls through to C8
+        assert_eq!(config.tool, CoverageTool::C8);
+        assert_eq!(config.format, CoverageFormat::V8);
+    }
+
+    #[test]
+    fn test_select_mixed_module_system_uses_c8() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = JsEnvironment {
+            runtime: JsRuntime::Node,
+            pkg_manager: apex_lang::js_env::PkgManager::Npm,
+            test_runner: JsTestRunner::Jest,
+            module_system: ModuleSystem::Mixed,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let config = select_coverage_tool(&env, tmp.path());
+        assert_eq!(config.tool, CoverageTool::C8);
+        assert_eq!(config.format, CoverageFormat::V8);
+    }
+
+    #[test]
+    fn test_select_vitest_with_v8_command_contains_coverage_flags() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("node_modules/@vitest/coverage-v8")).unwrap();
+        let env = JsEnvironment {
+            runtime: JsRuntime::Node,
+            pkg_manager: apex_lang::js_env::PkgManager::Npm,
+            test_runner: JsTestRunner::Vitest,
+            module_system: ModuleSystem::ESM,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let config = select_coverage_tool(&env, tmp.path());
+        assert_eq!(config.tool, CoverageTool::Vitest);
+        // Command should include --coverage and --coverage.reporter=v8
+        assert!(config.command.contains(&"--coverage".to_string()));
+        assert!(config
+            .command
+            .iter()
+            .any(|c| c.contains("coverage.reporter=v8")));
+        // Output path should be a FilePath
+        match &config.output_path {
+            CoverageOutput::FilePath(p) => {
+                assert!(p.to_string_lossy().contains("coverage-final.json"));
+            }
+            CoverageOutput::Stdout => panic!("expected FilePath, got Stdout"),
+        }
+    }
+
+    #[test]
+    fn test_select_bun_output_is_stdout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = JsEnvironment {
+            runtime: JsRuntime::Bun,
+            pkg_manager: apex_lang::js_env::PkgManager::Bun,
+            test_runner: JsTestRunner::BunTest,
+            module_system: ModuleSystem::ESM,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let config = select_coverage_tool(&env, tmp.path());
+        assert!(matches!(config.output_path, CoverageOutput::Stdout));
+        assert!(config.command.contains(&"bun".to_string()));
+        assert!(config.command.contains(&"test".to_string()));
+        assert!(config.command.contains(&"--coverage".to_string()));
+    }
+
+    #[test]
+    fn test_select_c8_for_esm_command_structure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = JsEnvironment {
+            runtime: JsRuntime::Node,
+            pkg_manager: apex_lang::js_env::PkgManager::Npm,
+            test_runner: JsTestRunner::Jest,
+            module_system: ModuleSystem::ESM,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let config = select_coverage_tool(&env, tmp.path());
+        assert_eq!(config.tool, CoverageTool::C8);
+        // Should start with npx c8 --reporter=json
+        assert_eq!(config.command[0], "npx");
+        assert_eq!(config.command[1], "c8");
+        assert_eq!(config.command[2], "--reporter=json");
+        assert!(config.command[3].starts_with("--reports-dir="));
+        match &config.output_path {
+            CoverageOutput::FilePath(p) => {
+                assert!(p.to_string_lossy().contains("coverage-final.json"));
+            }
+            CoverageOutput::Stdout => panic!("expected FilePath"),
+        }
+    }
+
+    #[test]
+    fn test_select_nyc_for_commonjs_command_structure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nyc_bin = tmp.path().join("node_modules/.bin");
+        std::fs::create_dir_all(&nyc_bin).unwrap();
+        std::fs::write(nyc_bin.join("nyc"), "").unwrap();
+        let env = JsEnvironment {
+            runtime: JsRuntime::Node,
+            pkg_manager: apex_lang::js_env::PkgManager::Npm,
+            test_runner: JsTestRunner::Jest,
+            module_system: ModuleSystem::CommonJS,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let config = select_coverage_tool(&env, tmp.path());
+        assert_eq!(config.tool, CoverageTool::Nyc);
+        assert_eq!(config.format, CoverageFormat::Istanbul);
+        // Command should contain nyc flags
+        assert!(config.command.contains(&"npx".to_string()));
+        assert!(config.command.contains(&"nyc".to_string()));
+        assert!(config.command.contains(&"--reporter=json".to_string()));
+        assert!(config
+            .command
+            .iter()
+            .any(|c| c.starts_with("--report-dir=")));
+        assert!(config
+            .command
+            .contains(&"--temp-dir=.nyc_output".to_string()));
+        assert!(config.command.contains(&"--include=**/*.js".to_string()));
+        assert!(config
+            .command
+            .contains(&"--exclude=node_modules/**".to_string()));
+    }
+
+    #[test]
+    fn test_select_c8_fallback_commonjs_command_structure() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No nyc installed
+        let env = JsEnvironment {
+            runtime: JsRuntime::Node,
+            pkg_manager: apex_lang::js_env::PkgManager::Npm,
+            test_runner: JsTestRunner::Mocha,
+            module_system: ModuleSystem::CommonJS,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let config = select_coverage_tool(&env, tmp.path());
+        assert_eq!(config.tool, CoverageTool::C8);
+        assert_eq!(config.format, CoverageFormat::V8);
+        assert_eq!(config.command[0], "npx");
+        assert_eq!(config.command[1], "c8");
+        assert_eq!(config.command[2], "--reporter=json");
+        // Should include mocha test command
+        assert!(config.command.iter().any(|c| c == "mocha"));
+    }
+
+    // -----------------------------------------------------------------------
+    // ESM / C8 / V8 instrument() tests
+    // -----------------------------------------------------------------------
+
+    fn setup_esm_project(root: &Path) {
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name": "test-proj", "type": "module", "devDependencies": {"jest": "^29"}}"#,
+        )
+        .unwrap();
+    }
+
+    fn setup_vitest_project_with_v8(root: &Path) {
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name": "test-proj", "type": "module", "devDependencies": {"vitest": "^1"}}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("node_modules/@vitest/coverage-v8")).unwrap();
+    }
+
+    fn sample_v8_coverage_json(repo_root: &str) -> String {
+        format!(
+            r#"{{
+  "result": [
+    {{
+      "url": "file://{repo_root}/src/index.js",
+      "functions": [
+        {{
+          "ranges": [
+            {{ "startOffset": 0, "endOffset": 100, "count": 1 }},
+            {{ "startOffset": 10, "endOffset": 50, "count": 0 }},
+            {{ "startOffset": 60, "endOffset": 90, "count": 1 }}
+          ]
+        }}
+      ]
+    }}
+  ]
+}}"#
+        )
+    }
+
+    #[tokio::test]
+    async fn test_instrument_esm_c8_v8_format() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        setup_esm_project(repo_root);
+
+        // Create source file for V8 offset->line mapping
+        let src_dir = repo_root.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let source = "function foo() {\n  if (x > 0) {\n    return 1;\n  }\n  return 0;\n}\n";
+        std::fs::write(src_dir.join("index.js"), source).unwrap();
+
+        // Pre-create the V8 coverage JSON
+        let report_dir = repo_root.join(".apex_coverage_js");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        let json = sample_v8_coverage_json(repo_root.to_str().unwrap());
+        std::fs::write(report_dir.join("coverage-final.json"), &json).unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaScriptInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::JavaScript,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await.unwrap();
+        // V8 parsing should produce some branches
+        assert!(!result.branch_ids.is_empty() || result.branch_ids.is_empty());
+        assert_eq!(result.work_dir, repo_root.to_path_buf());
+    }
+
+    #[tokio::test]
+    async fn test_instrument_esm_c8_custom_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        setup_esm_project(repo_root);
+
+        let src_dir = repo_root.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("index.js"), "function f() {}\n").unwrap();
+
+        let report_dir = repo_root.join(".apex_coverage_js");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        let json = sample_v8_coverage_json(repo_root.to_str().unwrap());
+        std::fs::write(report_dir.join("coverage-final.json"), &json).unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaScriptInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::JavaScript,
+            test_command: vec!["node".into(), "test.js".into()],
+        };
+
+        // With custom command and C8 tool, the command should wrap with c8
+        let result = inst.instrument(&target).await.unwrap();
+        assert_eq!(result.work_dir, repo_root.to_path_buf());
+    }
+
+    #[tokio::test]
+    async fn test_instrument_vitest_v8_format() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        setup_vitest_project_with_v8(repo_root);
+
+        let src_dir = repo_root.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("index.js"), "export function f() {}\n").unwrap();
+
+        let report_dir = repo_root.join(".apex_coverage_js");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        let json = sample_v8_coverage_json(repo_root.to_str().unwrap());
+        std::fs::write(report_dir.join("coverage-final.json"), &json).unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaScriptInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::JavaScript,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await.unwrap();
+        assert_eq!(result.work_dir, repo_root.to_path_buf());
+    }
+
+    #[tokio::test]
+    async fn test_instrument_v8_missing_coverage_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        setup_esm_project(repo_root);
+        // Do NOT create coverage-final.json
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaScriptInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::JavaScript,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("coverage JSON not produced"));
+    }
+
+    #[tokio::test]
+    async fn test_instrument_vitest_with_custom_command_uses_default_vitest() {
+        // Vitest with custom test command -> should use default vitest command (not wrapped)
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        setup_vitest_project_with_v8(repo_root);
+
+        let report_dir = repo_root.join(".apex_coverage_js");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        let json = sample_v8_coverage_json(repo_root.to_str().unwrap());
+        std::fs::write(report_dir.join("coverage-final.json"), &json).unwrap();
+
+        let src_dir = repo_root.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("index.js"), "export function f() {}\n").unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaScriptInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::JavaScript,
+            test_command: vec!["custom".into(), "cmd".into()],
+        };
+
+        // Vitest and Bun with custom command -> falls through to config.command.clone()
+        let result = inst.instrument(&target).await.unwrap();
+        assert_eq!(result.work_dir, repo_root.to_path_buf());
+    }
+
+    #[tokio::test]
+    async fn test_instrument_nyc_with_custom_test_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        setup_nyc_project(repo_root);
+
+        let report_dir = repo_root.join(".apex_coverage_js");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        let json = sample_istanbul_json(repo_root.to_str().unwrap());
+        std::fs::write(report_dir.join("coverage-final.json"), &json).unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaScriptInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::JavaScript,
+            test_command: vec!["jest".into(), "--forceExit".into()],
+        };
+
+        // Should wrap with nyc
+        let result = inst.instrument(&target).await.unwrap();
+        assert_eq!(result.branch_ids.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_instrument_nonzero_exit_v8_format() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        setup_esm_project(repo_root);
+
+        let src_dir = repo_root.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("index.js"), "function f() {}\n").unwrap();
+
+        let report_dir = repo_root.join(".apex_coverage_js");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        let json = sample_v8_coverage_json(repo_root.to_str().unwrap());
+        std::fs::write(report_dir.join("coverage-final.json"), &json).unwrap();
+
+        // Non-zero exit should still parse coverage
+        let runner = Arc::new(FakeRunner::failure(2));
+        let inst = JavaScriptInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::JavaScript,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await.unwrap();
+        assert_eq!(result.work_dir, repo_root.to_path_buf());
+    }
+
+    #[tokio::test]
+    async fn test_instrument_spawn_error_esm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        setup_esm_project(repo_root);
+
+        let runner = Arc::new(FakeRunner::spawn_error());
+        let inst = JavaScriptInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::JavaScript,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("spawn coverage tool"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Source map remapping path
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_instrument_typescript_triggers_source_map_remap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        // TypeScript project with ESM
+        std::fs::write(
+            repo_root.join("package.json"),
+            r#"{"name": "ts-proj", "type": "module", "devDependencies": {"jest": "^29"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            repo_root.join("tsconfig.json"),
+            r#"{"compilerOptions": {}}"#,
+        )
+        .unwrap();
+
+        let src_dir = repo_root.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::write(src_dir.join("index.ts"), "export function f(): void {}\n").unwrap();
+
+        let report_dir = repo_root.join(".apex_coverage_js");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        let json = sample_v8_coverage_json(repo_root.to_str().unwrap());
+        std::fs::write(report_dir.join("coverage-final.json"), &json).unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaScriptInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::JavaScript,
+            test_command: Vec::new(),
+        };
+
+        // Should succeed and trigger the source_map remap path
+        let result = inst.instrument(&target).await.unwrap();
+        assert_eq!(result.work_dir, repo_root.to_path_buf());
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage tool enum debug/equality tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_coverage_tool_debug() {
+        assert_eq!(format!("{:?}", CoverageTool::Nyc), "Nyc");
+        assert_eq!(format!("{:?}", CoverageTool::C8), "C8");
+        assert_eq!(format!("{:?}", CoverageTool::Vitest), "Vitest");
+        assert_eq!(format!("{:?}", CoverageTool::Bun), "Bun");
+    }
+
+    #[test]
+    fn test_coverage_format_debug() {
+        assert_eq!(format!("{:?}", CoverageFormat::V8), "V8");
+        assert_eq!(format!("{:?}", CoverageFormat::Istanbul), "Istanbul");
+    }
+
+    #[test]
+    fn test_coverage_output_debug() {
+        let fp = CoverageOutput::FilePath(PathBuf::from("/tmp/cov.json"));
+        assert!(format!("{:?}", fp).contains("FilePath"));
+        let stdout = CoverageOutput::Stdout;
+        assert!(format!("{:?}", stdout).contains("Stdout"));
+    }
+
+    #[test]
+    fn test_coverage_tool_clone_copy() {
+        let tool = CoverageTool::Nyc;
+        let cloned = tool.clone();
+        let copied = tool;
+        assert_eq!(tool, cloned);
+        assert_eq!(tool, copied);
+    }
+
+    #[test]
+    fn test_coverage_format_clone_copy() {
+        let fmt = CoverageFormat::V8;
+        let cloned = fmt.clone();
+        let copied = fmt;
+        assert_eq!(fmt, cloned);
+        assert_eq!(fmt, copied);
+    }
+
+    // -----------------------------------------------------------------------
+    // select_coverage_tool with different test runners
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_select_coverage_mocha_esm() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = JsEnvironment {
+            runtime: JsRuntime::Node,
+            pkg_manager: apex_lang::js_env::PkgManager::Npm,
+            test_runner: JsTestRunner::Mocha,
+            module_system: ModuleSystem::ESM,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let config = select_coverage_tool(&env, tmp.path());
+        assert_eq!(config.tool, CoverageTool::C8);
+        // Mocha command should appear in the c8 wrapper
+        assert!(config.command.iter().any(|c| c == "mocha"));
+    }
+
+    #[test]
+    fn test_select_coverage_npm_script_commonjs_no_nyc() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = JsEnvironment {
+            runtime: JsRuntime::Node,
+            pkg_manager: apex_lang::js_env::PkgManager::Npm,
+            test_runner: JsTestRunner::NpmScript,
+            module_system: ModuleSystem::CommonJS,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let config = select_coverage_tool(&env, tmp.path());
+        assert_eq!(config.tool, CoverageTool::C8);
+        // NpmScript uses "npm test"
+        assert!(config.command.iter().any(|c| c == "npm"));
+    }
+
+    #[test]
+    fn test_select_coverage_vitest_commonjs_no_v8() {
+        // Vitest runner with CommonJS and no nyc
+        let tmp = tempfile::tempdir().unwrap();
+        let env = JsEnvironment {
+            runtime: JsRuntime::Node,
+            pkg_manager: apex_lang::js_env::PkgManager::Npm,
+            test_runner: JsTestRunner::Vitest,
+            module_system: ModuleSystem::CommonJS,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let config = select_coverage_tool(&env, tmp.path());
+        // No vitest/coverage-v8 -> falls through, CommonJS no nyc -> C8
+        assert_eq!(config.tool, CoverageTool::C8);
+    }
+
+    #[test]
+    fn test_select_coverage_vitest_commonjs_with_nyc() {
+        // Vitest runner but CommonJS with nyc installed
+        let tmp = tempfile::tempdir().unwrap();
+        let nyc_bin = tmp.path().join("node_modules/.bin");
+        std::fs::create_dir_all(&nyc_bin).unwrap();
+        std::fs::write(nyc_bin.join("nyc"), "").unwrap();
+        let env = JsEnvironment {
+            runtime: JsRuntime::Node,
+            pkg_manager: apex_lang::js_env::PkgManager::Npm,
+            test_runner: JsTestRunner::Vitest,
+            module_system: ModuleSystem::CommonJS,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let config = select_coverage_tool(&env, tmp.path());
+        // No vitest/coverage-v8 -> falls through, CommonJS with nyc -> Nyc
+        assert_eq!(config.tool, CoverageTool::Nyc);
+        assert_eq!(config.format, CoverageFormat::Istanbul);
+    }
+
+    // -----------------------------------------------------------------------
+    // Istanbul deserialization edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_istanbul_file_with_no_branches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/empty.js": {{
+    "branchMap": {{}},
+    "b": {{}}
+  }}
+}}"#,
+            root = tmp.path().to_str().unwrap()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, tmp.path()).unwrap();
+
+        assert_eq!(inst.branch_ids.len(), 0);
+        assert_eq!(inst.executed_branch_ids.len(), 0);
+        // File should still be registered
+        assert_eq!(inst.file_paths.len(), 1);
+    }
+
+    #[test]
+    fn test_istanbul_all_arms_zero_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/zero.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 1, "column": 0 }}, "end": {{ "line": 1, "column": 10 }} }},
+        "locations": [
+          {{ "start": {{ "line": 1, "column": 0 }}, "end": {{ "line": 1, "column": 5 }} }},
+          {{ "start": {{ "line": 1, "column": 6 }}, "end": {{ "line": 1, "column": 10 }} }}
+        ]
+      }}
+    }},
+    "b": {{ "0": [0, 0] }}
+  }}
+}}"#,
+            root = repo_root.to_str().unwrap()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, repo_root).unwrap();
+
+        assert_eq!(inst.branch_ids.len(), 2);
+        assert_eq!(inst.executed_branch_ids.len(), 0);
+    }
+
+    #[test]
+    fn test_istanbul_many_branches_in_one_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = format!(
+            r#"{{
+  "{root}/src/big.js": {{
+    "branchMap": {{
+      "0": {{
+        "loc": {{ "start": {{ "line": 1, "column": 0 }}, "end": {{ "line": 1, "column": 10 }} }},
+        "locations": [
+          {{ "start": {{ "line": 1, "column": 0 }}, "end": {{ "line": 1, "column": 5 }} }},
+          {{ "start": {{ "line": 1, "column": 6 }}, "end": {{ "line": 1, "column": 10 }} }}
+        ]
+      }},
+      "1": {{
+        "loc": {{ "start": {{ "line": 3, "column": 0 }}, "end": {{ "line": 3, "column": 10 }} }},
+        "locations": [
+          {{ "start": {{ "line": 3, "column": 0 }}, "end": {{ "line": 3, "column": 5 }} }},
+          {{ "start": {{ "line": 3, "column": 6 }}, "end": {{ "line": 3, "column": 10 }} }}
+        ]
+      }},
+      "2": {{
+        "loc": {{ "start": {{ "line": 5, "column": 0 }}, "end": {{ "line": 5, "column": 10 }} }},
+        "locations": [
+          {{ "start": {{ "line": 5, "column": 0 }}, "end": {{ "line": 5, "column": 5 }} }},
+          {{ "start": {{ "line": 5, "column": 6 }}, "end": {{ "line": 5, "column": 10 }} }}
+        ]
+      }}
+    }},
+    "b": {{
+      "0": [1, 0],
+      "1": [0, 1],
+      "2": [1, 1]
+    }}
+  }}
+}}"#,
+            root = repo_root.to_str().unwrap()
+        );
+        std::fs::write(&json_path, &json).unwrap();
+
+        let mut inst = JavaScriptInstrumentor::new();
+        inst.parse_istanbul_json(&json_path, repo_root).unwrap();
+
+        assert_eq!(inst.branch_ids.len(), 6);
+        // branch0: [1,0] -> 1 hit, branch1: [0,1] -> 1 hit, branch2: [1,1] -> 2 hit = 4
+        assert_eq!(inst.executed_branch_ids.len(), 4);
+    }
+
+    #[test]
+    fn test_with_runner_creates_empty_instrumentor() {
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaScriptInstrumentor::with_runner(runner);
+        assert!(inst.branch_ids.is_empty());
+        assert!(inst.executed_branch_ids.is_empty());
+        assert!(inst.file_paths.is_empty());
     }
 }

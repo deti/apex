@@ -663,4 +663,475 @@ mod tests {
             status.message()
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage: rejecting coordinator — heartbeat, get_coverage,
+    // get_seeds, submit_results, pull_once paths
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_rejecting_heartbeat_returns_false() {
+        let Some(mut worker) = setup_rejecting_worker().await else {
+            return;
+        };
+        let ok = worker.heartbeat(5).await.unwrap();
+        assert!(!ok, "rejecting coordinator should return ok=false");
+    }
+
+    #[tokio::test]
+    async fn test_rejecting_get_seeds_returns_empty() {
+        let Some(mut worker) = setup_rejecting_worker().await else {
+            return;
+        };
+        let seeds = worker.get_seeds(10).await.unwrap();
+        assert!(seeds.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_rejecting_submit_results_returns_zeros() {
+        let Some(mut worker) = setup_rejecting_worker().await else {
+            return;
+        };
+        let results = vec![make_result("s1", vec![make_branch(1)])];
+        let (count, pct) = worker.submit_results(results).await.unwrap();
+        assert_eq!(count, 0);
+        assert!((pct - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn test_rejecting_get_coverage_returns_empty_snapshot() {
+        let Some(mut worker) = setup_rejecting_worker().await else {
+            return;
+        };
+        let snap = worker.get_coverage().await.unwrap();
+        assert_eq!(snap.total_branches, 0);
+        assert_eq!(snap.covered_branches, 0);
+        assert!((snap.coverage_percent - 0.0).abs() < f64::EPSILON);
+        assert!(snap.uncovered.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_rejecting_pull_once_empty_seeds() {
+        let Some(mut worker) = setup_rejecting_worker().await else {
+            return;
+        };
+        // Rejecting coordinator returns empty seeds, so pull_once should
+        // short-circuit with (0, 0.0) without calling the callback.
+        let (count, pct) = worker
+            .pull_once(10, |_seed| {
+                panic!("callback should not be called when seeds are empty");
+            })
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        assert!((pct - 0.0).abs() < f64::EPSILON);
+    }
+
+    // -----------------------------------------------------------------------
+    // Error coordinator: returns tonic::Status errors for each RPC
+    // -----------------------------------------------------------------------
+
+    struct ErrorCoordinator;
+
+    #[tonic::async_trait]
+    impl crate::proto::apex_coordinator_server::ApexCoordinator for ErrorCoordinator {
+        async fn register(
+            &self,
+            _req: tonic::Request<crate::proto::WorkerInfo>,
+        ) -> Result<tonic::Response<crate::proto::RegisterResponse>, tonic::Status> {
+            Err(tonic::Status::internal("register error"))
+        }
+
+        async fn send_heartbeat(
+            &self,
+            _req: tonic::Request<crate::proto::Heartbeat>,
+        ) -> Result<tonic::Response<crate::proto::HeartbeatAck>, tonic::Status> {
+            Err(tonic::Status::unavailable("heartbeat error"))
+        }
+
+        async fn get_seeds(
+            &self,
+            _req: tonic::Request<crate::proto::SeedRequest>,
+        ) -> Result<tonic::Response<crate::proto::SeedBatch>, tonic::Status> {
+            Err(tonic::Status::resource_exhausted("no seeds available"))
+        }
+
+        async fn submit_results(
+            &self,
+            _req: tonic::Request<crate::proto::ResultBatch>,
+        ) -> Result<tonic::Response<crate::proto::ResultAck>, tonic::Status> {
+            Err(tonic::Status::deadline_exceeded("submit timeout"))
+        }
+
+        async fn get_coverage(
+            &self,
+            _req: tonic::Request<crate::proto::Empty>,
+        ) -> Result<tonic::Response<crate::proto::CoverageSnapshot>, tonic::Status> {
+            Err(tonic::Status::not_found("no coverage data"))
+        }
+    }
+
+    async fn setup_error_worker() -> Option<WorkerClient> {
+        use crate::proto::apex_coordinator_server::ApexCoordinatorServer;
+
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+            Ok(l) => l,
+            Err(_) => return None,
+        };
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        drop(listener);
+
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(ApexCoordinatorServer::new(ErrorCoordinator))
+                .serve(addr)
+                .await
+                .ok();
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let worker = WorkerClient::connect(format!("http://{addr}"), "rust".into())
+            .await
+            .unwrap();
+        Some(worker)
+    }
+
+    #[tokio::test]
+    async fn test_error_register_propagates_status() {
+        let Some(mut worker) = setup_error_worker().await else {
+            return;
+        };
+        let err = worker.register(4).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Internal);
+        assert!(err.message().contains("register error"));
+    }
+
+    #[tokio::test]
+    async fn test_error_heartbeat_propagates_status() {
+        let Some(mut worker) = setup_error_worker().await else {
+            return;
+        };
+        let err = worker.heartbeat(0).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unavailable);
+        assert!(err.message().contains("heartbeat error"));
+    }
+
+    #[tokio::test]
+    async fn test_error_get_seeds_propagates_status() {
+        let Some(mut worker) = setup_error_worker().await else {
+            return;
+        };
+        let err = worker.get_seeds(5).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::ResourceExhausted);
+    }
+
+    #[tokio::test]
+    async fn test_error_submit_results_propagates_status() {
+        let Some(mut worker) = setup_error_worker().await else {
+            return;
+        };
+        let results = vec![make_result("s1", vec![make_branch(1)])];
+        let err = worker.submit_results(results).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::DeadlineExceeded);
+    }
+
+    #[tokio::test]
+    async fn test_error_get_coverage_propagates_status() {
+        let Some(mut worker) = setup_error_worker().await else {
+            return;
+        };
+        let err = worker.get_coverage().await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_error_pull_once_propagates_get_seeds_error() {
+        let Some(mut worker) = setup_error_worker().await else {
+            return;
+        };
+        // pull_once should propagate the get_seeds error
+        let err = worker
+            .pull_once(10, |_| panic!("should not be called"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::ResourceExhausted);
+    }
+
+    // -----------------------------------------------------------------------
+    // Submit-error coordinator: get_seeds succeeds but submit_results fails
+    // -----------------------------------------------------------------------
+
+    struct SubmitErrorCoordinator;
+
+    #[tonic::async_trait]
+    impl crate::proto::apex_coordinator_server::ApexCoordinator for SubmitErrorCoordinator {
+        async fn register(
+            &self,
+            _req: tonic::Request<crate::proto::WorkerInfo>,
+        ) -> Result<tonic::Response<crate::proto::RegisterResponse>, tonic::Status> {
+            Ok(tonic::Response::new(crate::proto::RegisterResponse {
+                accepted: true,
+                session_id: "test-session".into(),
+            }))
+        }
+
+        async fn send_heartbeat(
+            &self,
+            _req: tonic::Request<crate::proto::Heartbeat>,
+        ) -> Result<tonic::Response<crate::proto::HeartbeatAck>, tonic::Status> {
+            Ok(tonic::Response::new(crate::proto::HeartbeatAck {
+                ok: true,
+            }))
+        }
+
+        async fn get_seeds(
+            &self,
+            _req: tonic::Request<crate::proto::SeedRequest>,
+        ) -> Result<tonic::Response<crate::proto::SeedBatch>, tonic::Status> {
+            Ok(tonic::Response::new(crate::proto::SeedBatch {
+                seeds: vec![crate::proto::InputSeed {
+                    id: "seed-1".into(),
+                    data: vec![42],
+                    origin: "test".into(),
+                }],
+            }))
+        }
+
+        async fn submit_results(
+            &self,
+            _req: tonic::Request<crate::proto::ResultBatch>,
+        ) -> Result<tonic::Response<crate::proto::ResultAck>, tonic::Status> {
+            Err(tonic::Status::aborted("submit failed"))
+        }
+
+        async fn get_coverage(
+            &self,
+            _req: tonic::Request<crate::proto::Empty>,
+        ) -> Result<tonic::Response<crate::proto::CoverageSnapshot>, tonic::Status> {
+            Ok(tonic::Response::new(crate::proto::CoverageSnapshot {
+                total_branches: 0,
+                covered_branches: 0,
+                coverage_percent: 0.0,
+                uncovered: vec![],
+            }))
+        }
+    }
+
+    async fn setup_submit_error_worker() -> Option<WorkerClient> {
+        use crate::proto::apex_coordinator_server::ApexCoordinatorServer;
+
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+            Ok(l) => l,
+            Err(_) => return None,
+        };
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        drop(listener);
+
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(ApexCoordinatorServer::new(SubmitErrorCoordinator))
+                .serve(addr)
+                .await
+                .ok();
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let worker = WorkerClient::connect(format!("http://{addr}"), "python".into())
+            .await
+            .unwrap();
+        Some(worker)
+    }
+
+    #[tokio::test]
+    async fn test_pull_once_submit_error_propagated() {
+        let Some(mut worker) = setup_submit_error_worker().await else {
+            return;
+        };
+        // pull_once gets seeds successfully but submit_results fails
+        let err = worker
+            .pull_once(10, |seed| Some(make_result(&seed.id, vec![make_branch(1)])))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Aborted);
+        assert!(err.message().contains("submit failed"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Sequential operations on a single worker
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_sequential_submit_accumulates_coverage() {
+        let Some((mut worker, _service, oracle)) = setup_worker().await else {
+            return;
+        };
+
+        // First submit: cover branch 1
+        let (count1, pct1) = worker
+            .submit_results(vec![make_result("s1", vec![make_branch(1)])])
+            .await
+            .unwrap();
+        assert_eq!(count1, 1);
+        assert!((pct1 - 25.0).abs() < 0.01);
+
+        // Second submit: cover branches 2 and 3
+        let (count2, pct2) = worker
+            .submit_results(vec![make_result(
+                "s2",
+                vec![make_branch(2), make_branch(3)],
+            )])
+            .await
+            .unwrap();
+        assert_eq!(count2, 2);
+        assert!((pct2 - 75.0).abs() < 0.01);
+
+        // Third submit: cover branch 4 (completes 100%)
+        let (count3, pct3) = worker
+            .submit_results(vec![make_result("s3", vec![make_branch(4)])])
+            .await
+            .unwrap();
+        assert_eq!(count3, 1);
+        assert!((pct3 - 100.0).abs() < 0.01);
+        assert_eq!(oracle.covered_count(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_heartbeats_succeed() {
+        let Some((mut worker, _service, _oracle)) = setup_worker().await else {
+            return;
+        };
+        // Multiple heartbeats with different active_seeds counts
+        for active in [0, 1, 5, 100] {
+            let ok = worker.heartbeat(active).await.unwrap();
+            assert!(ok);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_seeds_zero_max() {
+        let Some((mut worker, service, _oracle)) = setup_worker().await else {
+            return;
+        };
+
+        service
+            .enqueue_seeds(vec![InputSeed {
+                id: "s1".into(),
+                data: vec![1],
+                origin: "test".into(),
+            }])
+            .await;
+
+        // Requesting 0 seeds should return empty
+        let seeds = worker.get_seeds(0).await.unwrap();
+        assert!(seeds.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_submit_results_with_stdout_stderr() {
+        let Some((mut worker, _service, _oracle)) = setup_worker().await else {
+            return;
+        };
+
+        // Submit a result with non-empty stdout/stderr
+        let result = ProtoResult {
+            seed_id: "s1".into(),
+            status: "fail".into(),
+            new_branches: vec![make_branch(1)],
+            duration_ms: 500,
+            stdout: "some output\n".into(),
+            stderr: "an error occurred\n".into(),
+        };
+        let (count, _pct) = worker.submit_results(vec![result]).await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_submit_results_multiple_results_multiple_branches() {
+        let Some((mut worker, _service, oracle)) = setup_worker().await else {
+            return;
+        };
+
+        let results = vec![
+            make_result("s1", vec![make_branch(1), make_branch(2)]),
+            make_result("s2", vec![make_branch(3), make_branch(4)]),
+        ];
+        let (count, pct) = worker.submit_results(results).await.unwrap();
+        assert_eq!(count, 4);
+        assert!((pct - 100.0).abs() < 0.01);
+        assert_eq!(oracle.covered_count(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_register_then_heartbeat_then_coverage() {
+        let Some((mut worker, _service, _oracle)) = setup_worker().await else {
+            return;
+        };
+
+        // Full workflow: register, heartbeat, check coverage
+        let session_id = worker.register(8).await.unwrap();
+        assert!(!session_id.is_empty());
+
+        let ok = worker.heartbeat(0).await.unwrap();
+        assert!(ok);
+
+        let snap = worker.get_coverage().await.unwrap();
+        assert_eq!(snap.total_branches, 4);
+        assert_eq!(snap.covered_branches, 0);
+    }
+
+    #[tokio::test]
+    async fn test_connect_to_invalid_endpoint_fails() {
+        // Connecting to an endpoint where nothing is listening should fail
+        // when we actually try to make an RPC call.
+        // Note: connect itself may succeed (lazy connection), so we test
+        // by making an RPC call.
+        let channel = tonic::transport::Channel::from_static("http://127.0.0.1:1").connect_lazy();
+        let mut worker = WorkerClient::from_channel(channel, "python".into());
+
+        // The RPC call should fail since there's no server at port 1
+        let result = worker.heartbeat(0).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_from_channel_language_preserved() {
+        // Verify from_channel stores the language (exercised indirectly
+        // through the register RPC which sends it).
+        let channel = tonic::transport::Channel::from_static("http://127.0.0.1:1").connect_lazy();
+        let worker = WorkerClient::from_channel(channel, "javascript".into());
+        // We can at least verify the worker_id is set
+        assert!(!worker.worker_id().is_empty());
+        assert!(uuid::Uuid::parse_str(worker.worker_id()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_pull_once_single_seed_single_branch() {
+        let Some((mut worker, service, oracle)) = setup_worker().await else {
+            return;
+        };
+
+        service
+            .enqueue_seeds(vec![InputSeed {
+                id: "only".into(),
+                data: vec![4],
+                origin: "manual".into(),
+            }])
+            .await;
+
+        let (count, pct) = worker
+            .pull_once(1, |seed| {
+                assert_eq!(seed.id, "only");
+                assert_eq!(seed.data, vec![4]);
+                assert_eq!(seed.origin, "manual");
+                Some(make_result(&seed.id, vec![make_branch(4)]))
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(count, 1);
+        assert!((pct - 25.0).abs() < 0.01);
+        assert_eq!(oracle.covered_count(), 1);
+    }
 }

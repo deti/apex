@@ -2,8 +2,8 @@
 //! when traditional SMT solvers fail or time out.
 //! Based on the Cottontail paper.
 
-use apex_core::types::SeedOrigin;
 use apex_core::types::InputSeed;
+use apex_core::types::SeedOrigin;
 
 /// Convert SMTLIB2 constraints to a natural language prompt for an LLM.
 pub fn constraints_to_prompt(constraints: &[String], negate_last: bool) -> String {

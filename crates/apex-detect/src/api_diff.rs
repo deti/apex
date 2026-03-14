@@ -1063,12 +1063,10 @@ mod tests {
     #[test]
     fn already_deprecated_no_change() {
         // old_deprecated=true, new_deprecated=true — should NOT add deprecation change
-        let old = make_spec(
-            r#"{ "/users": { "get": { "summary": "list", "deprecated": true } } }"#,
-        );
-        let new = make_spec(
-            r#"{ "/users": { "get": { "summary": "list", "deprecated": true } } }"#,
-        );
+        let old =
+            make_spec(r#"{ "/users": { "get": { "summary": "list", "deprecated": true } } }"#);
+        let new =
+            make_spec(r#"{ "/users": { "get": { "summary": "list", "deprecated": true } } }"#);
         let report = ApiDiffer::diff(&old, &new).unwrap();
         assert_eq!(report.deprecation_count, 0);
     }
@@ -1076,9 +1074,8 @@ mod tests {
     #[test]
     fn undeprecated_no_deprecation_change() {
         // old_deprecated=true, new_deprecated=false — not treated as a change by current logic
-        let old = make_spec(
-            r#"{ "/users": { "get": { "summary": "list", "deprecated": true } } }"#,
-        );
+        let old =
+            make_spec(r#"{ "/users": { "get": { "summary": "list", "deprecated": true } } }"#);
         let new = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
         let report = ApiDiffer::diff(&old, &new).unwrap();
         assert_eq!(report.deprecation_count, 0);
@@ -1125,7 +1122,9 @@ mod tests {
         );
         let report = ApiDiffer::diff(&old, &new).unwrap();
         assert_eq!(report.breaking_count, 1);
-        assert!(report.changes[0].description.contains("new required parameter"));
+        assert!(report.changes[0]
+            .description
+            .contains("new required parameter"));
     }
 
     #[test]

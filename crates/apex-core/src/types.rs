@@ -624,7 +624,10 @@ mod tests {
         assert_eq!("rb".parse::<Language>().unwrap(), Language::Ruby);
         assert_eq!("ruby".parse::<Language>().unwrap(), Language::Ruby);
         assert_eq!("ts".parse::<Language>().unwrap(), Language::JavaScript);
-        assert_eq!("typescript".parse::<Language>().unwrap(), Language::JavaScript);
+        assert_eq!(
+            "typescript".parse::<Language>().unwrap(),
+            Language::JavaScript
+        );
         assert!("unknown".parse::<Language>().is_err());
     }
 
@@ -1095,8 +1098,15 @@ mod tests {
     #[test]
     fn javascript_instrumentation_tools_updated() {
         let features = Language::JavaScript.supported_features();
-        let instr = features.iter().find(|f| f.name == "instrumentation").unwrap();
-        assert!(instr.tool.contains("v8"), "tool should mention v8: {}", instr.tool);
+        let instr = features
+            .iter()
+            .find(|f| f.name == "instrumentation")
+            .unwrap();
+        assert!(
+            instr.tool.contains("v8"),
+            "tool should mention v8: {}",
+            instr.tool
+        );
     }
 
     #[test]

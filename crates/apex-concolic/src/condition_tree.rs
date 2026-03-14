@@ -3,14 +3,31 @@ use serde::{Deserialize, Serialize};
 /// Language-agnostic representation of a branch condition.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ConditionTree {
-    Compare { left: Box<Expr>, op: CompareOp, right: Box<Expr> },
+    Compare {
+        left: Box<Expr>,
+        op: CompareOp,
+        right: Box<Expr>,
+    },
     And(Box<ConditionTree>, Box<ConditionTree>),
     Or(Box<ConditionTree>, Box<ConditionTree>),
     Not(Box<ConditionTree>),
-    TypeCheck { expr: Box<Expr>, type_name: String },
-    Contains { needle: Box<Expr>, haystack: Box<Expr> },
-    NullCheck { expr: Box<Expr>, is_null: bool },
-    LengthCheck { expr: Box<Expr>, op: CompareOp, value: Box<Expr> },
+    TypeCheck {
+        expr: Box<Expr>,
+        type_name: String,
+    },
+    Contains {
+        needle: Box<Expr>,
+        haystack: Box<Expr>,
+    },
+    NullCheck {
+        expr: Box<Expr>,
+        is_null: bool,
+    },
+    LengthCheck {
+        expr: Box<Expr>,
+        op: CompareOp,
+        value: Box<Expr>,
+    },
     Unknown(String),
 }
 
@@ -27,7 +44,14 @@ pub enum Expr {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum CompareOp { Eq, NotEq, Lt, LtEq, Gt, GtEq }
+pub enum CompareOp {
+    Eq,
+    NotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
+}
 
 impl std::fmt::Display for CompareOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -81,7 +105,10 @@ mod tests {
             expr: Box::new(Expr::Variable("result".into())),
             is_null: true,
         };
-        assert!(matches!(cond, ConditionTree::NullCheck { is_null: true, .. }));
+        assert!(matches!(
+            cond,
+            ConditionTree::NullCheck { is_null: true, .. }
+        ));
     }
 
     #[test]

@@ -50,8 +50,8 @@ impl FlakyRepair {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apex_core::types::BranchId;
     use crate::analysis::DivergentBranch;
+    use apex_core::types::BranchId;
 
     fn make_flaky() -> FlakyTest {
         FlakyTest {
@@ -69,7 +69,8 @@ mod tests {
     #[test]
     fn build_prompt_contains_test_name() {
         let flaky = make_flaky();
-        let source = "def test_random_order():\n    items = list(set([1,2,3]))\n    assert items[0] == 1";
+        let source =
+            "def test_random_order():\n    items = list(set([1,2,3]))\n    assert items[0] == 1";
         let prompt = FlakyRepair::build_prompt(&flaky, source);
         assert!(prompt.contains("test_random_order"));
         assert!(prompt.contains("3/5"));

@@ -110,8 +110,14 @@ mod tests {
     #[test]
     fn config_defaults() {
         let cfg = DualEncoderConfig::default();
-        assert_eq!(cfg.text_model_path, PathBuf::from("models/text_encoder.onnx"));
-        assert_eq!(cfg.graph_model_path, PathBuf::from("models/graph_encoder.onnx"));
+        assert_eq!(
+            cfg.text_model_path,
+            PathBuf::from("models/text_encoder.onnx")
+        );
+        assert_eq!(
+            cfg.graph_model_path,
+            PathBuf::from("models/graph_encoder.onnx")
+        );
         assert!((cfg.confidence_threshold - 0.7).abs() < f64::EPSILON);
         assert!((cfg.text_weight - 0.5).abs() < f64::EPSILON);
     }
@@ -165,9 +171,9 @@ mod tests {
     fn filter_scores_passing() {
         let d = DualEncoderDetector::new(DualEncoderConfig::default());
         let scores = vec![
-            DualScore::combine(0.9, 0.8, 0.5),  // 0.85
-            DualScore::combine(0.3, 0.2, 0.5),  // 0.25
-            DualScore::combine(0.8, 0.7, 0.5),  // 0.75
+            DualScore::combine(0.9, 0.8, 0.5), // 0.85
+            DualScore::combine(0.3, 0.2, 0.5), // 0.25
+            DualScore::combine(0.8, 0.7, 0.5), // 0.75
         ];
         let filtered = d.filter_scores(scores);
         assert_eq!(filtered.len(), 2);

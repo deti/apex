@@ -295,7 +295,7 @@ pub fn cwe_default_cvss(cwe_id: u32) -> CvssBase {
 /// CVSS v3.1 roundup: smallest number >= x that is a multiple of 0.1.
 fn roundup(x: f64) -> f32 {
     let int_x = (x * 100_000.0) as u64;
-    if int_x % 10_000 == 0 {
+    if int_x.is_multiple_of(10_000) {
         (int_x as f64 / 100_000.0) as f32
     } else {
         ((int_x / 10_000 + 1) as f64 * 10_000.0 / 100_000.0) as f32
@@ -311,9 +311,7 @@ pub fn calculate_cvss_score(base: &CvssBase) -> f32 {
 
     let impact = match base.scope {
         Scope::Unchanged => 6.42 * isc_raw,
-        Scope::Changed => {
-            7.52 * (isc_raw - 0.029) - 3.25 * (isc_raw - 0.02).powf(15.0)
-        }
+        Scope::Changed => 7.52 * (isc_raw - 0.029) - 3.25 * (isc_raw - 0.02).powf(15.0),
     };
 
     if impact <= 0.0 {
@@ -329,11 +327,19 @@ pub fn calculate_cvss_score(base: &CvssBase) -> f32 {
     let raw = match base.scope {
         Scope::Unchanged => {
             let s = impact + exploitability;
-            if s > 10.0 { 10.0 } else { s }
+            if s > 10.0 {
+                10.0
+            } else {
+                s
+            }
         }
         Scope::Changed => {
             let s = 1.08 * (impact + exploitability);
-            if s > 10.0 { 10.0 } else { s }
+            if s > 10.0 {
+                10.0
+            } else {
+                s
+            }
         }
     };
 
@@ -410,10 +416,7 @@ mod tests {
         let base = cwe_default_cvss(99999);
         let score = calculate_cvss_score(&base);
         let diff = (score - 5.3_f32).abs();
-        assert!(
-            diff < 0.2,
-            "Unknown CWE score {score} should be ~5.3"
-        );
+        assert!(diff < 0.2, "Unknown CWE score {score} should be ~5.3");
     }
 
     #[test]
@@ -754,7 +757,10 @@ mod tests {
             availability: Impact::None,
         };
         let score = calculate_cvss_score(&base);
-        assert!(score > 0.0 && score < 3.0, "Physical+High should be very low: {score}");
+        assert!(
+            score > 0.0 && score < 3.0,
+            "Physical+High should be very low: {score}"
+        );
     }
 
     #[test]
@@ -954,7 +960,10 @@ mod tests {
         };
         let score = calculate_cvss_score(&base);
         // Low exploitability + low impact + Changed scope: should not clamp
-        assert!(score > 0.0 && score < 10.0, "Score should not be clamped: {score}");
+        assert!(
+            score > 0.0 && score < 10.0,
+            "Score should not be clamped: {score}"
+        );
     }
 
     // --- Scope::Unchanged with moderate values (exercises the s <= 10.0 else branch) ---

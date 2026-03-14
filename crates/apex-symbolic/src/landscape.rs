@@ -42,11 +42,7 @@ impl LandscapeAnalyzer {
             return false;
         }
 
-        let deltas: Vec<f64> = self
-            .samples
-            .windows(2)
-            .map(|w| w[1].1 - w[0].1)
-            .collect();
+        let deltas: Vec<f64> = self.samples.windows(2).map(|w| w[1].1 - w[0].1).collect();
 
         let sign_changes = deltas
             .windows(2)
@@ -96,8 +92,14 @@ mod tests {
 
     #[test]
     fn strategy_hint_debug() {
-        assert_eq!(format!("{:?}", StrategyHint::GradientUseful), "GradientUseful");
-        assert_eq!(format!("{:?}", StrategyHint::SwitchToRandom), "SwitchToRandom");
+        assert_eq!(
+            format!("{:?}", StrategyHint::GradientUseful),
+            "GradientUseful"
+        );
+        assert_eq!(
+            format!("{:?}", StrategyHint::SwitchToRandom),
+            "SwitchToRandom"
+        );
         assert_eq!(format!("{:?}", StrategyHint::NeedsSolver), "NeedsSolver");
     }
 

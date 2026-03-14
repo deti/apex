@@ -54,12 +54,9 @@ impl PathDecomposer {
 
         // Group constraints by representative
         let mut groups: HashMap<usize, Vec<String>> = HashMap::new();
-        for i in 0..n {
+        for (i, constraint) in constraints.iter().enumerate().take(n) {
             let root = find(&mut parent, i);
-            groups
-                .entry(root)
-                .or_default()
-                .push(constraints[i].clone());
+            groups.entry(root).or_default().push(constraint.clone());
         }
 
         let mut result: Vec<Vec<String>> = groups.into_values().collect();

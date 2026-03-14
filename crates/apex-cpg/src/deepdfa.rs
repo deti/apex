@@ -9,14 +9,14 @@ use std::collections::HashMap;
 pub const FEATURE_DIM: usize = 8;
 
 // Feature indices
-pub const IDX_IS_SOURCE: usize = 0;        // 1.0 if Parameter node
-pub const IDX_IS_SINK: usize = 1;          // 1.0 if Call node
-pub const IDX_IS_ASSIGNMENT: usize = 2;    // 1.0 if Assignment node
-pub const IDX_REACHING_DEF_IN: usize = 3;  // count of incoming ReachingDef edges
+pub const IDX_IS_SOURCE: usize = 0; // 1.0 if Parameter node
+pub const IDX_IS_SINK: usize = 1; // 1.0 if Call node
+pub const IDX_IS_ASSIGNMENT: usize = 2; // 1.0 if Assignment node
+pub const IDX_REACHING_DEF_IN: usize = 3; // count of incoming ReachingDef edges
 pub const IDX_REACHING_DEF_OUT: usize = 4; // count of outgoing ReachingDef edges
-pub const IDX_CFG_IN: usize = 5;           // count of incoming Cfg edges
-pub const IDX_CFG_OUT: usize = 6;          // count of outgoing Cfg edges
-pub const IDX_AST_CHILDREN: usize = 7;     // count of outgoing Ast edges
+pub const IDX_CFG_IN: usize = 5; // count of incoming Cfg edges
+pub const IDX_CFG_OUT: usize = 6; // count of outgoing Cfg edges
+pub const IDX_AST_CHILDREN: usize = 7; // count of outgoing Ast edges
 
 /// Extract a feature vector for every node in the CPG.
 ///
@@ -85,8 +85,20 @@ mod tests {
         });
 
         cpg.add_edge(m, p, EdgeKind::Ast);
-        cpg.add_edge(p, a, EdgeKind::ReachingDef { variable: "x".into() });
-        cpg.add_edge(a, c, EdgeKind::ReachingDef { variable: "y".into() });
+        cpg.add_edge(
+            p,
+            a,
+            EdgeKind::ReachingDef {
+                variable: "x".into(),
+            },
+        );
+        cpg.add_edge(
+            a,
+            c,
+            EdgeKind::ReachingDef {
+                variable: "y".into(),
+            },
+        );
         cpg.add_edge(m, a, EdgeKind::Cfg);
         cpg.add_edge(a, c, EdgeKind::Cfg);
 

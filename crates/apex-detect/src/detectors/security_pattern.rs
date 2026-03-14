@@ -680,9 +680,7 @@ impl Detector for SecurityPatternDetector {
                                     .any(|cp| ind.eq_ignore_ascii_case(cp))
                             })
                             .collect();
-                        if let Some(true) =
-                            should_suppress(&ctx.threat_model, &source_indicators)
-                        {
+                        if let Some(true) = should_suppress(&ctx.threat_model, &source_indicators) {
                             break;
                         }
 
@@ -1264,7 +1262,10 @@ mod tests {
         let ctx = make_ctx_with_threat_model(files, Language::Rust, tm);
         let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
         // "input" indicator is trusted for cli-tool → suppressed
-        assert!(findings.is_empty(), "expected suppression for CLI input, got {findings:?}");
+        assert!(
+            findings.is_empty(),
+            "expected suppression for CLI input, got {findings:?}"
+        );
     }
 
     #[tokio::test]
@@ -1283,7 +1284,10 @@ mod tests {
         };
         let ctx = make_ctx_with_threat_model(files, Language::Python, tm);
         let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
-        assert!(!findings.is_empty(), "web service request input should NOT be suppressed");
+        assert!(
+            !findings.is_empty(),
+            "web service request input should NOT be suppressed"
+        );
     }
 
     #[tokio::test]
@@ -1297,7 +1301,10 @@ mod tests {
         );
         let ctx = make_ctx(files, Language::Rust); // default = no threat model
         let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
-        assert!(!findings.is_empty(), "without threat model, all findings reported");
+        assert!(
+            !findings.is_empty(),
+            "without threat model, all findings reported"
+        );
     }
 
     #[tokio::test]
@@ -1316,7 +1323,10 @@ mod tests {
         };
         let ctx = make_ctx_with_threat_model(files, Language::Python, tm);
         let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
-        assert!(!findings.is_empty(), "socket input is untrusted even for CLI tools");
+        assert!(
+            !findings.is_empty(),
+            "socket input is untrusted even for CLI tools"
+        );
     }
 
     #[tokio::test]

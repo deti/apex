@@ -2,7 +2,7 @@
 //! Given a set of changed source lines, identify which tests are affected.
 //! Based on arXiv:2508.19056.
 
-use crate::types::{branch_key, BranchIndex};
+use crate::types::BranchIndex;
 use std::collections::HashSet;
 
 /// Given a set of changed source lines `(file_id, line)`, return the names
@@ -36,8 +36,8 @@ pub fn change_impact(changed_lines: &[(u64, u32)], index: &BranchIndex) -> Vec<S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apex_core::types::{BranchId, ExecutionStatus};
     use crate::types::TestTrace;
+    use apex_core::types::{BranchId, ExecutionStatus};
     use std::collections::HashMap;
     use std::path::PathBuf;
 

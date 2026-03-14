@@ -91,10 +91,7 @@ mod tests {
 
     #[test]
     fn build_seed_prompt_includes_format() {
-        let uncovered = vec![
-            BranchId::new(1, 10, 0, 0),
-            BranchId::new(1, 20, 0, 1),
-        ];
+        let uncovered = vec![BranchId::new(1, 10, 0, 0), BranchId::new(1, 20, 0, 1)];
         let prompt = build_seed_prompt(&uncovered, "JSON");
         assert!(prompt.contains("JSON"));
         assert!(prompt.contains("line 10"));

@@ -1723,14 +1723,13 @@ mod tests {
         let b = apex_core::types::BranchId::new(100, 1, 0, 0);
         oracle.register_branches([b]);
         // 0% coverage but target is 0.0 → 0.0 >= 0.0 → exit
-        let cluster =
-            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
-                OrchestratorConfig {
-                    coverage_target: 0.0,
-                    deadline_secs: None,
-                    stall_threshold: 100,
-                },
-            );
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+            OrchestratorConfig {
+                coverage_target: 0.0,
+                deadline_secs: None,
+                stall_threshold: 100,
+            },
+        );
         cluster.run().await.unwrap();
     }
 
@@ -1743,14 +1742,12 @@ mod tests {
         oracle.register_branches([b1.clone(), b2.clone()]);
         oracle.mark_covered(&b1, apex_core::types::SeedId::new());
         // 50% coverage, target 0.5 → exit immediately
-        let cluster =
-            AgentCluster::new(oracle.clone(), Arc::new(StubSandbox), test_target()).with_config(
-                OrchestratorConfig {
-                    coverage_target: 0.5,
-                    deadline_secs: None,
-                    stall_threshold: 100,
-                },
-            );
+        let cluster = AgentCluster::new(oracle.clone(), Arc::new(StubSandbox), test_target())
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.5,
+                deadline_secs: None,
+                stall_threshold: 100,
+            });
         cluster.run().await.unwrap();
         assert_eq!(oracle.covered_count(), 1);
     }
@@ -2200,14 +2197,13 @@ mod tests {
         oracle.mark_covered(&b, apex_core::types::SeedId::new());
         // 100% coverage but coverage_target is 1.0 → passes first check
         // uncovered.is_empty() → "all branches covered"
-        let cluster =
-            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
-                OrchestratorConfig {
-                    coverage_target: 1.1, // above 100% to skip coverage_target check
-                    deadline_secs: None,
-                    stall_threshold: 100,
-                },
-            );
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+            OrchestratorConfig {
+                coverage_target: 1.1, // above 100% to skip coverage_target check
+                deadline_secs: None,
+                stall_threshold: 100,
+            },
+        );
         cluster.run().await.unwrap();
     }
 
@@ -2224,14 +2220,13 @@ mod tests {
         let b = apex_core::types::BranchId::new(110, 1, 0, 0);
         oracle.register_branches([b]);
 
-        let cluster =
-            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
-                OrchestratorConfig {
-                    coverage_target: 1.0,
-                    deadline_secs: Some(0),
-                    stall_threshold: 100,
-                },
-            );
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+            OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: Some(0),
+                stall_threshold: 100,
+            },
+        );
         cluster.run().await.unwrap();
     }
 
@@ -2248,14 +2243,13 @@ mod tests {
         let b = apex_core::types::BranchId::new(111, 1, 0, 0);
         oracle.register_branches([b]);
 
-        let cluster =
-            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
-                OrchestratorConfig {
-                    coverage_target: 1.0,
-                    deadline_secs: None,
-                    stall_threshold: 1,
-                },
-            );
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+            OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 1,
+            },
+        );
         cluster.run().await.unwrap();
     }
 
@@ -2813,14 +2807,13 @@ mod tests {
         let oracle = Arc::new(CoverageOracle::new());
         let b = apex_core::types::BranchId::new(120, 1, 0, 0);
         oracle.register_branches([b]);
-        let cluster =
-            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
-                OrchestratorConfig {
-                    coverage_target: 1.0,
-                    deadline_secs: None,
-                    stall_threshold: 1,
-                },
-            );
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+            OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 1,
+            },
+        );
         cluster.run().await.unwrap();
     }
 
@@ -3081,8 +3074,8 @@ mod tests {
         let oracle = Arc::new(CoverageOracle::new());
         let mut paths = HashMap::new();
         paths.insert(1u64, PathBuf::from("single.py"));
-        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target())
-            .with_file_paths(paths);
+        let cluster =
+            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_file_paths(paths);
         assert_eq!(cluster.file_paths.len(), 1);
         assert_eq!(
             cluster.file_paths.get(&1),
@@ -3256,14 +3249,13 @@ mod tests {
     #[test]
     fn monitor_action_on_cluster_with_custom_config() {
         let oracle = Arc::new(CoverageOracle::new());
-        let cluster =
-            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
-                OrchestratorConfig {
-                    coverage_target: 0.5,
-                    deadline_secs: Some(60),
-                    stall_threshold: 5,
-                },
-            );
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+            OrchestratorConfig {
+                coverage_target: 0.5,
+                deadline_secs: Some(60),
+                stall_threshold: 5,
+            },
+        );
         assert_eq!(cluster.monitor_action(), MonitorAction::Normal);
     }
 

@@ -82,10 +82,7 @@ pub fn metamorphic_adequacy(results: &[MutationResult]) -> MetamorphicScore {
 
     let mutation_score = killed_count / total;
 
-    let strong_kills = killed
-        .iter()
-        .filter(|r| r.detection_margin > 0.5)
-        .count() as f64;
+    let strong_kills = killed.iter().filter(|r| r.detection_margin > 0.5).count() as f64;
     let detection_ratio = if killed_count > 0.0 {
         strong_kills / killed_count
     } else {
@@ -195,7 +192,12 @@ mod tests {
         assert!(result.killing_tests.is_empty());
     }
 
-    fn make_result(kind: MutationKind, line: u32, killed: bool, detection_margin: f64) -> MutationResult {
+    fn make_result(
+        kind: MutationKind,
+        line: u32,
+        killed: bool,
+        detection_margin: f64,
+    ) -> MutationResult {
         MutationResult {
             operator: MutationOperator {
                 kind,

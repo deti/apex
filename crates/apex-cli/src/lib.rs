@@ -624,7 +624,8 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         let cpg = if lang == Language::Python {
             let mut combined_cpg = apex_cpg::Cpg::new();
             for (path, source) in &file_source_cache {
-                let file_cpg = apex_cpg::builder::build_python_cpg(source, &path.display().to_string());
+                let file_cpg =
+                    apex_cpg::builder::build_python_cpg(source, &path.display().to_string());
                 combined_cpg.merge(file_cpg);
             }
             if combined_cpg.node_count() > 0 {
@@ -712,12 +713,8 @@ async fn run_agent_cluster(
         Language::Python => {
             let file_paths = Arc::new(instrumented.file_paths.clone());
             Arc::new(
-                PythonTestSandbox::new(
-                    Arc::clone(&oracle),
-                    file_paths,
-                    target_root.clone(),
-                )
-                .with_timeout(cfg.sandbox.process_timeout_ms),
+                PythonTestSandbox::new(Arc::clone(&oracle), file_paths, target_root.clone())
+                    .with_timeout(cfg.sandbox.process_timeout_ms),
             )
         }
         _ => {
@@ -744,11 +741,7 @@ async fn run_agent_cluster(
     let _ = fuzz_strategy.seed_corpus([vec![0u8]]);
 
     // Build the cluster.
-    let mut cluster = AgentCluster::new(
-        Arc::clone(&oracle),
-        sandbox,
-        instrumented.target.clone(),
-    );
+    let mut cluster = AgentCluster::new(Arc::clone(&oracle), sandbox, instrumented.target.clone());
     cluster = cluster.with_strategy(Box::new(fuzz_strategy));
 
     // For Python, also add the concolic strategy.

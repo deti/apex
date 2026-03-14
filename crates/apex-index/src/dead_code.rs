@@ -47,8 +47,8 @@ impl DeadCodeDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apex_core::types::{ExecutionStatus, Language};
     use crate::types::TestTrace;
+    use apex_core::types::{ExecutionStatus, Language};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -68,11 +68,7 @@ mod tests {
 
     #[test]
     fn detect_finds_uncovered_branches() {
-        let all_branches = vec![
-            make_branch(1, 10),
-            make_branch(1, 20),
-            make_branch(1, 30),
-        ];
+        let all_branches = vec![make_branch(1, 10), make_branch(1, 20), make_branch(1, 30)];
         let traces = vec![TestTrace {
             test_name: "t1".into(),
             branches: vec![make_branch(1, 10)],

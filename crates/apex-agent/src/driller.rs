@@ -678,10 +678,7 @@ mod tests {
         let result = driller.suggest_inputs(&ctx).await;
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
-        assert!(
-            err_msg.contains("solver mutex poisoned"),
-            "got: {err_msg}"
-        );
+        assert!(err_msg.contains("solver mutex poisoned"), "got: {err_msg}");
     }
 
     /// Solver that alternates between returning a result and returning None,
@@ -701,10 +698,7 @@ mod tests {
             ) -> Result<Option<InputSeed>> {
                 let n = self.call_count.fetch_add(1, Ordering::SeqCst);
                 if n % 2 == 0 {
-                    Ok(Some(InputSeed::new(
-                        b"even".to_vec(),
-                        SeedOrigin::Symbolic,
-                    )))
+                    Ok(Some(InputSeed::new(b"even".to_vec(), SeedOrigin::Symbolic)))
                 } else {
                     Ok(None)
                 }

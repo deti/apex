@@ -114,11 +114,18 @@ fn try_parse_typeof(text: &str) -> Option<ConditionTree> {
     for op_str in &["===", "!==", "==", "!="] {
         if let Some(pos) = rest.find(op_str) {
             let expr_str = rest[..pos].trim();
-            let type_name = rest[pos + op_str.len()..].trim().trim_matches('"').trim_matches('\'').to_string();
+            let type_name = rest[pos + op_str.len()..]
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
             let expr = parse_expr(expr_str);
             let op = parse_compare_op(op_str)?;
             // typeof x === "t"  ⇒ TypeCheck; typeof x !== "t" ⇒ Not(TypeCheck)
-            let check = ConditionTree::TypeCheck { expr: Box::new(expr), type_name };
+            let check = ConditionTree::TypeCheck {
+                expr: Box::new(expr),
+                type_name,
+            };
             return Some(if op == CompareOp::NotEq || op == CompareOp::Eq {
                 if op == CompareOp::NotEq {
                     ConditionTree::Not(Box::new(check))
@@ -209,7 +216,10 @@ fn try_parse_comparison(text: &str) -> Option<ConditionTree> {
     if is_null_literal(&left) || is_null_literal(&right) {
         let expr = if is_null_literal(&left) { right } else { left };
         let is_null = matches!(op, CompareOp::Eq);
-        return Some(ConditionTree::NullCheck { expr: Box::new(expr), is_null });
+        return Some(ConditionTree::NullCheck {
+            expr: Box::new(expr),
+            is_null,
+        });
     }
 
     Some(ConditionTree::Compare {
@@ -627,7 +637,10 @@ mod tests {
 
     #[test]
     fn parse_expr_string() {
-        assert_eq!(parse_expr(r#""hello""#), Expr::StringLiteral("hello".into()));
+        assert_eq!(
+            parse_expr(r#""hello""#),
+            Expr::StringLiteral("hello".into())
+        );
     }
 
     #[test]

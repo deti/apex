@@ -1,5 +1,8 @@
 use apex_core::{hash::fnv1a_hash, types::BranchId};
-use std::{collections::HashMap, path::{Path, PathBuf}};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 use tracing::warn;
 
 /// Remap branch IDs from emitted JS locations to original TS/source locations.
@@ -41,7 +44,12 @@ pub fn remap_source_maps(
                     let new_col = token.get_src_col().min(u16::MAX as u32) as u16;
 
                     remapped_file_paths.insert(new_file_id, original_path);
-                    remapped_branches.push(BranchId::new(new_file_id, new_line, new_col, branch.direction));
+                    remapped_branches.push(BranchId::new(
+                        new_file_id,
+                        new_line,
+                        new_col,
+                        branch.direction,
+                    ));
                     continue;
                 }
             }
@@ -115,7 +123,8 @@ mod tests {
         let mut file_paths = HashMap::new();
         file_paths.insert(42, PathBuf::from("src/app.js"));
         let branches = vec![BranchId::new(42, 10, 5, 0)];
-        let (remapped, new_files) = remap_source_maps(branches, &file_paths, Path::new("/nonexistent"));
+        let (remapped, new_files) =
+            remap_source_maps(branches, &file_paths, Path::new("/nonexistent"));
         assert_eq!(remapped.len(), 1);
         assert_eq!(remapped[0].file_id, 42);
         assert_eq!(remapped[0].line, 10);

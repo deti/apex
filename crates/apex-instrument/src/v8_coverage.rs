@@ -1,6 +1,9 @@
 use apex_core::{hash::fnv1a_hash, types::BranchId};
 use serde::Deserialize;
-use std::{collections::HashMap, path::{Path, PathBuf}};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 /// Parsed V8 coverage: (all_branches, executed_branches, file_paths).
 pub type V8ParseResult = (Vec<BranchId>, Vec<BranchId>, HashMap<u64, PathBuf>);
@@ -211,8 +214,7 @@ mod tests {
         }"#;
         let source = "if (x) {\n  doA();\n} else {\n  doB();\n}\n".repeat(3);
         let repo = Path::new("/repo");
-        let (all, exec, files) =
-            parse_v8_coverage(json, repo, &|_| Some(source.clone())).unwrap();
+        let (all, exec, files) = parse_v8_coverage(json, repo, &|_| Some(source.clone())).unwrap();
 
         assert_eq!(files.len(), 1);
         assert!(files.values().any(|p| p == Path::new("src/app.js")));
@@ -256,9 +258,21 @@ mod tests {
     #[test]
     fn extract_branch_points_two_siblings() {
         let ranges = vec![
-            V8CoverageRange { start_offset: 0, end_offset: 100, count: 1 },
-            V8CoverageRange { start_offset: 10, end_offset: 50, count: 1 },
-            V8CoverageRange { start_offset: 50, end_offset: 90, count: 0 },
+            V8CoverageRange {
+                start_offset: 0,
+                end_offset: 100,
+                count: 1,
+            },
+            V8CoverageRange {
+                start_offset: 10,
+                end_offset: 50,
+                count: 1,
+            },
+            V8CoverageRange {
+                start_offset: 50,
+                end_offset: 90,
+                count: 0,
+            },
         ];
         let groups = extract_branch_points(&ranges);
         assert_eq!(groups.len(), 1);
@@ -267,18 +281,18 @@ mod tests {
 
     #[test]
     fn extract_branch_points_no_inner_ranges() {
-        let ranges = vec![
-            V8CoverageRange { start_offset: 0, end_offset: 100, count: 1 },
-        ];
+        let ranges = vec![V8CoverageRange {
+            start_offset: 0,
+            end_offset: 100,
+            count: 1,
+        }];
         let groups = extract_branch_points(&ranges);
         assert!(groups.is_empty());
     }
 
     #[test]
     fn direction_saturates_at_u8_max() {
-        let mut ranges_json = String::from(
-            r#"{"startOffset": 0, "endOffset": 10000, "count": 1}"#
-        );
+        let mut ranges_json = String::from(r#"{"startOffset": 0, "endOffset": 10000, "count": 1}"#);
         for i in 0..260u32 {
             let start = (i + 1) * 10;
             let end = start + 9;

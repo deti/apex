@@ -1430,4 +1430,873 @@ mod tests {
         let result = run_doctor_with_runner(&runner).await;
         assert!(result.is_ok());
     }
+
+    // ==================================================================
+    // Additional coverage tests
+    // ==================================================================
+
+    // --- version_of edge cases with mocks ---
+
+    #[tokio::test]
+    async fn mock_version_of_whitespace_only_output_returns_none() {
+        let runner = MockRunner::all_succeed("   \n  \n   ");
+        let v = version_of(&runner, "tool", &["--version"]).await;
+        assert!(v.is_none());
+    }
+
+    #[tokio::test]
+    async fn mock_version_of_trims_leading_trailing_whitespace() {
+        let runner = MockRunner::all_succeed("  rustc 1.75.0  ");
+        let v = version_of(&runner, "rustc", &["--version"]).await;
+        assert_eq!(v, Some("rustc 1.75.0".into()));
+    }
+
+    #[tokio::test]
+    async fn mock_version_of_both_stdout_and_stderr() {
+        // When both stdout and stderr have content, stdout is preferred
+        let runner = MockRunner::with_handler(|_| {
+            Ok(CommandOutput {
+                exit_code: 0,
+                stdout: b"stdout version".to_vec(),
+                stderr: b"stderr version".to_vec(),
+            })
+        });
+        let v = version_of(&runner, "tool", &["--version"]).await;
+        assert_eq!(v, Some("stdout version".into()));
+    }
+
+    // --- check_env_optional with empty string ---
+
+    #[tokio::test]
+    async fn check_env_optional_with_empty_string() {
+        // Set an env var to empty string — should be treated as unset
+        std::env::set_var("APEX_TEST_EMPTY_VAR", "");
+        let c = check_env_optional("test", "Test var", "APEX_TEST_EMPTY_VAR").await;
+        assert!(matches!(c.status, Status::Warn(_)));
+        std::env::remove_var("APEX_TEST_EMPTY_VAR");
+    }
+
+    #[tokio::test]
+    async fn check_env_optional_fields_populated() {
+        let c = check_env_optional("myvar", "My description", "APEX_NONEXISTENT_VAR_XYZ").await;
+        assert_eq!(c.name, "myvar");
+        assert_eq!(c.description, "My description");
+    }
+
+    // --- Individual tool checks within groups ---
+
+    // pip3
+    #[tokio::test]
+    async fn mock_pip3_found() {
+        let runner = MockRunner::all_succeed("pip 23.3.1 from /usr/lib/python3/dist-packages/pip");
+        let checks = checks_python(&runner).await;
+        let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
+        assert!(matches!(&pip.status, Status::Ok(v) if v.contains("pip")));
+    }
+
+    #[tokio::test]
+    async fn mock_pip3_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_python(&runner).await;
+        let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
+        assert!(matches!(&pip.status, Status::Fail(_)));
+    }
+
+    // pytest
+    #[tokio::test]
+    async fn mock_pytest_found() {
+        let runner = MockRunner::all_succeed("pytest 7.4.3");
+        let checks = checks_python(&runner).await;
+        let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
+        assert!(matches!(&pytest.status, Status::Ok(v) if v.contains("pytest")));
+    }
+
+    #[tokio::test]
+    async fn mock_pytest_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_python(&runner).await;
+        let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
+        assert!(matches!(&pytest.status, Status::Warn(_)));
+    }
+
+    // coverage.py
+    #[tokio::test]
+    async fn mock_coverage_py_found() {
+        let runner = MockRunner::all_succeed("Coverage.py, version 7.3.2");
+        let checks = checks_python(&runner).await;
+        let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
+        assert!(matches!(&cov.status, Status::Ok(v) if v.contains("Coverage")));
+    }
+
+    #[tokio::test]
+    async fn mock_coverage_py_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_python(&runner).await;
+        let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
+        assert!(matches!(&cov.status, Status::Warn(_)));
+    }
+
+    // npm
+    #[tokio::test]
+    async fn mock_npm_found() {
+        let runner = MockRunner::all_succeed("10.2.3");
+        let checks = checks_javascript(&runner).await;
+        let npm = checks.iter().find(|c| c.name == "npm").unwrap();
+        assert!(matches!(&npm.status, Status::Ok(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_npm_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_javascript(&runner).await;
+        let npm = checks.iter().find(|c| c.name == "npm").unwrap();
+        assert!(matches!(&npm.status, Status::Fail(_)));
+    }
+
+    // npx
+    #[tokio::test]
+    async fn mock_npx_found() {
+        let runner = MockRunner::all_succeed("10.2.3");
+        let checks = checks_javascript(&runner).await;
+        let npx = checks.iter().find(|c| c.name == "npx").unwrap();
+        assert!(matches!(&npx.status, Status::Ok(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_npx_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_javascript(&runner).await;
+        let npx = checks.iter().find(|c| c.name == "npx").unwrap();
+        assert!(matches!(&npx.status, Status::Warn(_)));
+    }
+
+    // javac
+    #[tokio::test]
+    async fn mock_javac_found() {
+        let runner = MockRunner::all_stderr("javac 21.0.1");
+        let checks = checks_java(&runner).await;
+        let javac = checks.iter().find(|c| c.name == "javac").unwrap();
+        assert!(matches!(&javac.status, Status::Ok(v) if v.contains("javac")));
+    }
+
+    #[tokio::test]
+    async fn mock_javac_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_java(&runner).await;
+        let javac = checks.iter().find(|c| c.name == "javac").unwrap();
+        assert!(matches!(&javac.status, Status::Fail(_)));
+    }
+
+    // mvn
+    #[tokio::test]
+    async fn mock_mvn_found() {
+        let runner = MockRunner::all_succeed("Apache Maven 3.9.6");
+        let checks = checks_java(&runner).await;
+        let mvn = checks.iter().find(|c| c.name == "mvn").unwrap();
+        assert!(matches!(&mvn.status, Status::Ok(v) if v.contains("Maven")));
+    }
+
+    #[tokio::test]
+    async fn mock_mvn_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_java(&runner).await;
+        let mvn = checks.iter().find(|c| c.name == "mvn").unwrap();
+        assert!(matches!(&mvn.status, Status::Warn(_)));
+    }
+
+    // gradle
+    #[tokio::test]
+    async fn mock_gradle_found() {
+        let runner = MockRunner::all_succeed("Gradle 8.5");
+        let checks = checks_java(&runner).await;
+        let gradle = checks.iter().find(|c| c.name == "gradle").unwrap();
+        assert!(matches!(&gradle.status, Status::Ok(v) if v.contains("Gradle")));
+    }
+
+    #[tokio::test]
+    async fn mock_gradle_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_java(&runner).await;
+        let gradle = checks.iter().find(|c| c.name == "gradle").unwrap();
+        assert!(matches!(&gradle.status, Status::Warn(_)));
+    }
+
+    // llvm-cov
+    #[tokio::test]
+    async fn mock_llvm_cov_found() {
+        let runner = MockRunner::all_succeed("LLVM version 17.0.0");
+        let checks = checks_c(&runner).await;
+        let lc = checks.iter().find(|c| c.name == "llvm-cov").unwrap();
+        assert!(matches!(&lc.status, Status::Ok(v) if v.contains("LLVM")));
+    }
+
+    #[tokio::test]
+    async fn mock_llvm_cov_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_c(&runner).await;
+        let lc = checks.iter().find(|c| c.name == "llvm-cov").unwrap();
+        assert!(matches!(&lc.status, Status::Warn(_)));
+    }
+
+    // llvm-profdata
+    #[tokio::test]
+    async fn mock_llvm_profdata_found() {
+        let runner = MockRunner::all_succeed("LLVM version 17.0.0");
+        let checks = checks_c(&runner).await;
+        let lp = checks.iter().find(|c| c.name == "llvm-profdata").unwrap();
+        assert!(matches!(&lp.status, Status::Ok(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_llvm_profdata_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_c(&runner).await;
+        let lp = checks.iter().find(|c| c.name == "llvm-profdata").unwrap();
+        assert!(matches!(&lp.status, Status::Warn(_)));
+    }
+
+    // make
+    #[tokio::test]
+    async fn mock_make_found() {
+        let runner = MockRunner::all_succeed("GNU Make 4.3");
+        let checks = checks_c(&runner).await;
+        let make = checks.iter().find(|c| c.name == "make").unwrap();
+        assert!(matches!(&make.status, Status::Ok(v) if v.contains("Make")));
+    }
+
+    #[tokio::test]
+    async fn mock_make_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_c(&runner).await;
+        let make = checks.iter().find(|c| c.name == "make").unwrap();
+        assert!(matches!(&make.status, Status::Warn(_)));
+    }
+
+    // cmake
+    #[tokio::test]
+    async fn mock_cmake_found() {
+        let runner = MockRunner::all_succeed("cmake version 3.28.1");
+        let checks = checks_c(&runner).await;
+        let cmake = checks.iter().find(|c| c.name == "cmake").unwrap();
+        assert!(matches!(&cmake.status, Status::Ok(v) if v.contains("cmake")));
+    }
+
+    #[tokio::test]
+    async fn mock_cmake_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_c(&runner).await;
+        let cmake = checks.iter().find(|c| c.name == "cmake").unwrap();
+        assert!(matches!(&cmake.status, Status::Warn(_)));
+    }
+
+    // jailer
+    #[tokio::test]
+    async fn mock_jailer_found() {
+        let runner = MockRunner::all_succeed("Jailer v1.6.0");
+        let checks = checks_firecracker(&runner).await;
+        let jailer = checks.iter().find(|c| c.name == "jailer").unwrap();
+        assert!(matches!(&jailer.status, Status::Ok(v) if v.contains("Jailer")));
+    }
+
+    #[tokio::test]
+    async fn mock_jailer_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_firecracker(&runner).await;
+        let jailer = checks.iter().find(|c| c.name == "jailer").unwrap();
+        assert!(matches!(&jailer.status, Status::Warn(_)));
+    }
+
+    // cargo-llvm-cov
+    #[tokio::test]
+    async fn mock_cargo_llvm_cov_found() {
+        let runner = MockRunner::all_succeed("cargo-llvm-cov 0.5.36");
+        let checks = checks_core(&runner).await;
+        let llvm = checks.iter().find(|c| c.name == "cargo-llvm-cov").unwrap();
+        assert!(matches!(&llvm.status, Status::Ok(v) if v.contains("cargo-llvm-cov")));
+    }
+
+    #[tokio::test]
+    async fn mock_cargo_llvm_cov_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_core(&runner).await;
+        let llvm = checks.iter().find(|c| c.name == "cargo-llvm-cov").unwrap();
+        assert!(matches!(&llvm.status, Status::Warn(_)));
+    }
+
+    // --- RecordingRunner tests ---
+
+    #[tokio::test]
+    async fn recording_runner_captures_all_calls() {
+        let runner = RecordingRunner::new_all_succeed("v1.0");
+        let _ = version_of(&runner, "tool1", &["--version"]).await;
+        let _ = version_of(&runner, "tool2", &["-v"]).await;
+        let calls = runner.calls().await;
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "tool1");
+        assert_eq!(calls[0].1, vec!["--version"]);
+        assert_eq!(calls[1].0, "tool2");
+        assert_eq!(calls[1].1, vec!["-v"]);
+    }
+
+    #[tokio::test]
+    async fn recording_runner_core_calls_correct_binaries() {
+        let runner = RecordingRunner::new_all_succeed("v1.0");
+        let _ = checks_core(&runner).await;
+        let calls = runner.calls().await;
+        let programs: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
+        assert!(programs.contains(&"rustc"));
+        assert!(programs.contains(&"cargo"));
+    }
+
+    #[tokio::test]
+    async fn recording_runner_python_calls_correct_binaries() {
+        let runner = RecordingRunner::new_all_succeed("v1.0");
+        let _ = checks_python(&runner).await;
+        let calls = runner.calls().await;
+        let programs: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
+        assert!(programs.contains(&"python3"));
+        assert!(programs.contains(&"pip3"));
+    }
+
+    #[tokio::test]
+    async fn recording_runner_js_calls_correct_binaries() {
+        let runner = RecordingRunner::new_all_succeed("v1.0");
+        let _ = checks_javascript(&runner).await;
+        let calls = runner.calls().await;
+        let programs: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
+        assert!(programs.contains(&"node"));
+        assert!(programs.contains(&"npm"));
+        assert!(programs.contains(&"npx"));
+    }
+
+    #[tokio::test]
+    async fn recording_runner_c_calls_correct_binaries() {
+        let runner = RecordingRunner::new_all_succeed("v1.0");
+        let _ = checks_c(&runner).await;
+        let calls = runner.calls().await;
+        let programs: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
+        assert!(programs.contains(&"clang"));
+        assert!(programs.contains(&"llvm-cov"));
+        assert!(programs.contains(&"llvm-profdata"));
+        assert!(programs.contains(&"make"));
+        assert!(programs.contains(&"cmake"));
+    }
+
+    #[tokio::test]
+    async fn recording_runner_wasm_calls_correct_binaries() {
+        let runner = RecordingRunner::new_all_succeed("v1.0");
+        let _ = checks_wasm(&runner).await;
+        let calls = runner.calls().await;
+        let programs: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
+        assert!(programs.contains(&"wasmtime"));
+        assert!(programs.contains(&"wasm-opt"));
+    }
+
+    #[tokio::test]
+    async fn recording_runner_firecracker_calls_correct_binaries() {
+        let runner = RecordingRunner::new_all_succeed("v1.0");
+        let _ = checks_firecracker(&runner).await;
+        let calls = runner.calls().await;
+        let programs: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
+        assert!(programs.contains(&"firecracker"));
+        assert!(programs.contains(&"jailer"));
+    }
+
+    // --- Selective tool found/not-found with handler ---
+
+    #[tokio::test]
+    async fn mock_selective_some_tools_found_some_not() {
+        let runner = MockRunner::with_handler(|spec| {
+            if spec.program == "python3" {
+                Ok(CommandOutput::success(b"Python 3.12.0".to_vec()))
+            } else if spec.program == "pip3" {
+                Err(ApexError::Subprocess {
+                    exit_code: 127,
+                    stderr: "not found".into(),
+                })
+            } else {
+                Ok(CommandOutput::success(b"v1.0".to_vec()))
+            }
+        });
+        let checks = checks_python(&runner).await;
+        let py = checks.iter().find(|c| c.name == "python3").unwrap();
+        assert!(matches!(&py.status, Status::Ok(_)));
+        let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
+        assert!(matches!(&pip.status, Status::Fail(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_selective_js_node_found_npm_missing() {
+        let runner = MockRunner::with_handler(|spec| {
+            if spec.program == "node" {
+                Ok(CommandOutput::success(b"v20.0.0".to_vec()))
+            } else {
+                Err(ApexError::Subprocess {
+                    exit_code: 127,
+                    stderr: "not found".into(),
+                })
+            }
+        });
+        let checks = checks_javascript(&runner).await;
+        let node = checks.iter().find(|c| c.name == "node").unwrap();
+        assert!(matches!(&node.status, Status::Ok(_)));
+        let npm = checks.iter().find(|c| c.name == "npm").unwrap();
+        assert!(matches!(&npm.status, Status::Fail(_)));
+        let npx = checks.iter().find(|c| c.name == "npx").unwrap();
+        assert!(matches!(&npx.status, Status::Warn(_)));
+    }
+
+    // --- print_group detailed coverage ---
+
+    #[test]
+    fn print_group_with_long_name() {
+        let checks = vec![Check {
+            name: "a-very-long-tool-name-here",
+            description: "Some description",
+            status: Status::Ok("v1.0.0".into()),
+        }];
+        let fails = print_group("Long Names", &checks);
+        assert_eq!(fails, 0);
+    }
+
+    #[test]
+    fn print_group_mixed_statuses_in_order() {
+        let checks = vec![
+            Check {
+                name: "ok-tool",
+                description: "ok desc",
+                status: Status::Ok("v1.0".into()),
+            },
+            Check {
+                name: "warn-tool",
+                description: "warn desc",
+                status: Status::Warn("optional".into()),
+            },
+            Check {
+                name: "fail-tool",
+                description: "fail desc",
+                status: Status::Fail("missing".into()),
+            },
+            Check {
+                name: "ok-tool-2",
+                description: "",
+                status: Status::Ok("v2.0".into()),
+            },
+        ];
+        let fails = print_group("Mixed Order", &checks);
+        assert_eq!(fails, 1);
+    }
+
+    #[test]
+    fn print_group_single_fail() {
+        let checks = vec![Check {
+            name: "solo-fail",
+            description: "this tool is critical",
+            status: Status::Fail("not installed".into()),
+        }];
+        let fails = print_group("Single Fail", &checks);
+        assert_eq!(fails, 1);
+    }
+
+    #[test]
+    fn print_group_empty_description_still_works() {
+        let checks = vec![
+            Check {
+                name: "tool",
+                description: "",
+                status: Status::Ok("v1".into()),
+            },
+            Check {
+                name: "tool2",
+                description: "",
+                status: Status::Warn("warn".into()),
+            },
+            Check {
+                name: "tool3",
+                description: "",
+                status: Status::Fail("fail".into()),
+            },
+        ];
+        let fails = print_group("No Descriptions", &checks);
+        assert_eq!(fails, 1);
+    }
+
+    // --- run_doctor_with_runner additional coverage ---
+
+    #[tokio::test]
+    async fn mock_run_doctor_checks_all_groups() {
+        // Verify all groups are run by checking that the runner receives calls
+        // for binaries from every group
+        let runner = RecordingRunner::new_all_succeed("v1.0.0");
+        let result = run_doctor_with_runner(&runner).await;
+        assert!(result.is_ok());
+        let calls = runner.calls().await;
+        let programs: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
+        // Core
+        assert!(programs.contains(&"rustc"));
+        assert!(programs.contains(&"cargo"));
+        // Python
+        assert!(programs.contains(&"python3"));
+        assert!(programs.contains(&"pip3"));
+        // JavaScript
+        assert!(programs.contains(&"node"));
+        assert!(programs.contains(&"npm"));
+        assert!(programs.contains(&"npx"));
+        // Java
+        assert!(programs.contains(&"java"));
+        assert!(programs.contains(&"javac"));
+        // C
+        assert!(programs.contains(&"clang"));
+        // WASM
+        assert!(programs.contains(&"wasmtime"));
+        assert!(programs.contains(&"wasm-opt"));
+        // Firecracker
+        assert!(programs.contains(&"firecracker"));
+        assert!(programs.contains(&"jailer"));
+    }
+
+    // --- Status equality/inequality edge cases ---
+
+    #[test]
+    fn status_ok_different_values() {
+        assert_ne!(Status::Ok("1.0".into()), Status::Ok("2.0".into()));
+    }
+
+    #[test]
+    fn status_warn_different_values() {
+        assert_ne!(Status::Warn("a".into()), Status::Warn("b".into()));
+    }
+
+    #[test]
+    fn status_fail_different_values() {
+        assert_ne!(Status::Fail("a".into()), Status::Fail("b".into()));
+    }
+
+    #[test]
+    fn status_clone_all_variants() {
+        let ok = Status::Ok("v".into());
+        assert_eq!(ok.clone(), ok);
+        let warn = Status::Warn("w".into());
+        assert_eq!(warn.clone(), warn);
+        let fail = Status::Fail("f".into());
+        assert_eq!(fail.clone(), fail);
+    }
+
+    #[test]
+    fn status_debug_all_variants() {
+        assert!(format!("{:?}", Status::Ok("v".into())).contains("Ok"));
+        assert!(format!("{:?}", Status::Warn("w".into())).contains("Warn"));
+        assert!(format!("{:?}", Status::Fail("f".into())).contains("Fail"));
+    }
+
+    // --- version_of with nonzero exit via mock ---
+
+    #[tokio::test]
+    async fn mock_version_of_nonzero_exit_with_stdout() {
+        // Even if there's stdout, non-zero exit -> None
+        let runner = MockRunner::with_handler(|_| {
+            Ok(CommandOutput {
+                exit_code: 1,
+                stdout: b"some output".to_vec(),
+                stderr: Vec::new(),
+            })
+        });
+        let v = version_of(&runner, "tool", &["--version"]).await;
+        assert!(v.is_none());
+    }
+
+    // --- check groups with nonzero exit ---
+
+    #[tokio::test]
+    async fn mock_checks_core_nonzero_exit() {
+        let runner = MockRunner::all_exit_nonzero();
+        let checks = checks_core(&runner).await;
+        let rust = checks.iter().find(|c| c.name == "rust").unwrap();
+        assert!(matches!(&rust.status, Status::Fail(_)));
+        let cargo = checks.iter().find(|c| c.name == "cargo").unwrap();
+        assert!(matches!(&cargo.status, Status::Fail(_)));
+        let llvm = checks.iter().find(|c| c.name == "cargo-llvm-cov").unwrap();
+        assert!(matches!(&llvm.status, Status::Warn(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_checks_python_nonzero_exit() {
+        let runner = MockRunner::all_exit_nonzero();
+        let checks = checks_python(&runner).await;
+        let py = checks.iter().find(|c| c.name == "python3").unwrap();
+        assert!(matches!(&py.status, Status::Fail(_)));
+        let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
+        assert!(matches!(&pip.status, Status::Fail(_)));
+        let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
+        assert!(matches!(&pytest.status, Status::Warn(_)));
+        let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
+        assert!(matches!(&cov.status, Status::Warn(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_checks_javascript_nonzero_exit() {
+        let runner = MockRunner::all_exit_nonzero();
+        let checks = checks_javascript(&runner).await;
+        let node = checks.iter().find(|c| c.name == "node").unwrap();
+        assert!(matches!(&node.status, Status::Fail(_)));
+        let npm = checks.iter().find(|c| c.name == "npm").unwrap();
+        assert!(matches!(&npm.status, Status::Fail(_)));
+        let npx = checks.iter().find(|c| c.name == "npx").unwrap();
+        assert!(matches!(&npx.status, Status::Warn(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_checks_java_nonzero_exit() {
+        let runner = MockRunner::all_exit_nonzero();
+        let checks = checks_java(&runner).await;
+        let java = checks.iter().find(|c| c.name == "java").unwrap();
+        assert!(matches!(&java.status, Status::Fail(_)));
+        let javac = checks.iter().find(|c| c.name == "javac").unwrap();
+        assert!(matches!(&javac.status, Status::Fail(_)));
+        let mvn = checks.iter().find(|c| c.name == "mvn").unwrap();
+        assert!(matches!(&mvn.status, Status::Warn(_)));
+        let gradle = checks.iter().find(|c| c.name == "gradle").unwrap();
+        assert!(matches!(&gradle.status, Status::Warn(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_checks_c_nonzero_exit() {
+        let runner = MockRunner::all_exit_nonzero();
+        let checks = checks_c(&runner).await;
+        let clang = checks.iter().find(|c| c.name == "clang").unwrap();
+        assert!(matches!(&clang.status, Status::Fail(_)));
+        let lc = checks.iter().find(|c| c.name == "llvm-cov").unwrap();
+        assert!(matches!(&lc.status, Status::Warn(_)));
+        let lp = checks.iter().find(|c| c.name == "llvm-profdata").unwrap();
+        assert!(matches!(&lp.status, Status::Warn(_)));
+        let make = checks.iter().find(|c| c.name == "make").unwrap();
+        assert!(matches!(&make.status, Status::Warn(_)));
+        let cmake = checks.iter().find(|c| c.name == "cmake").unwrap();
+        assert!(matches!(&cmake.status, Status::Warn(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_checks_wasm_nonzero_exit() {
+        let runner = MockRunner::all_exit_nonzero();
+        let checks = checks_wasm(&runner).await;
+        for c in &checks {
+            assert!(
+                matches!(&c.status, Status::Warn(_)),
+                "expected Warn for {}",
+                c.name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_checks_firecracker_nonzero_exit() {
+        let runner = MockRunner::all_exit_nonzero();
+        let checks = checks_firecracker(&runner).await;
+        let fc = checks.iter().find(|c| c.name == "firecracker").unwrap();
+        assert!(matches!(&fc.status, Status::Warn(_)));
+        let jailer = checks.iter().find(|c| c.name == "jailer").unwrap();
+        assert!(matches!(&jailer.status, Status::Warn(_)));
+    }
+
+    // --- Check groups with empty output ---
+
+    #[tokio::test]
+    async fn mock_checks_javascript_empty_output() {
+        let runner = MockRunner::all_empty_output();
+        let checks = checks_javascript(&runner).await;
+        let node = checks.iter().find(|c| c.name == "node").unwrap();
+        assert!(matches!(&node.status, Status::Fail(_)));
+        let npm = checks.iter().find(|c| c.name == "npm").unwrap();
+        assert!(matches!(&npm.status, Status::Fail(_)));
+        let npx = checks.iter().find(|c| c.name == "npx").unwrap();
+        assert!(matches!(&npx.status, Status::Warn(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_checks_java_empty_output() {
+        let runner = MockRunner::all_empty_output();
+        let checks = checks_java(&runner).await;
+        let java = checks.iter().find(|c| c.name == "java").unwrap();
+        assert!(matches!(&java.status, Status::Fail(_)));
+        let javac = checks.iter().find(|c| c.name == "javac").unwrap();
+        assert!(matches!(&javac.status, Status::Fail(_)));
+        let mvn = checks.iter().find(|c| c.name == "mvn").unwrap();
+        assert!(matches!(&mvn.status, Status::Warn(_)));
+        let gradle = checks.iter().find(|c| c.name == "gradle").unwrap();
+        assert!(matches!(&gradle.status, Status::Warn(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_checks_c_empty_output() {
+        let runner = MockRunner::all_empty_output();
+        let checks = checks_c(&runner).await;
+        let clang = checks.iter().find(|c| c.name == "clang").unwrap();
+        assert!(matches!(&clang.status, Status::Fail(_)));
+        let lc = checks.iter().find(|c| c.name == "llvm-cov").unwrap();
+        assert!(matches!(&lc.status, Status::Warn(_)));
+        let lp = checks.iter().find(|c| c.name == "llvm-profdata").unwrap();
+        assert!(matches!(&lp.status, Status::Warn(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_checks_wasm_empty_output() {
+        let runner = MockRunner::all_empty_output();
+        let checks = checks_wasm(&runner).await;
+        for c in &checks {
+            assert!(
+                matches!(&c.status, Status::Warn(_)),
+                "expected Warn for {}",
+                c.name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_checks_firecracker_empty_output() {
+        let runner = MockRunner::all_empty_output();
+        let checks = checks_firecracker(&runner).await;
+        let fc = checks.iter().find(|c| c.name == "firecracker").unwrap();
+        assert!(matches!(&fc.status, Status::Warn(_)));
+        let jailer = checks.iter().find(|c| c.name == "jailer").unwrap();
+        assert!(matches!(&jailer.status, Status::Warn(_)));
+    }
+
+    // --- Check group sizes ---
+
+    #[tokio::test]
+    async fn mock_checks_core_returns_four_checks() {
+        let runner = MockRunner::all_succeed("v1.0");
+        let checks = checks_core(&runner).await;
+        assert_eq!(checks.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn mock_checks_python_returns_four_checks() {
+        let runner = MockRunner::all_succeed("v1.0");
+        let checks = checks_python(&runner).await;
+        assert_eq!(checks.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn mock_checks_javascript_returns_three_checks() {
+        let runner = MockRunner::all_succeed("v1.0");
+        let checks = checks_javascript(&runner).await;
+        assert_eq!(checks.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn mock_checks_java_returns_four_checks() {
+        let runner = MockRunner::all_succeed("v1.0");
+        let checks = checks_java(&runner).await;
+        assert_eq!(checks.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn mock_checks_c_returns_five_checks() {
+        let runner = MockRunner::all_succeed("v1.0");
+        let checks = checks_c(&runner).await;
+        assert_eq!(checks.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn mock_checks_wasm_returns_two_checks() {
+        let runner = MockRunner::all_succeed("v1.0");
+        let checks = checks_wasm(&runner).await;
+        assert_eq!(checks.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn mock_checks_firecracker_returns_three_checks() {
+        let runner = MockRunner::all_succeed("v1.0");
+        let checks = checks_firecracker(&runner).await;
+        assert_eq!(checks.len(), 3);
+    }
+
+    // --- Check descriptions are populated ---
+
+    #[tokio::test]
+    async fn mock_checks_core_descriptions_nonempty() {
+        let runner = MockRunner::all_succeed("v1.0");
+        let checks = checks_core(&runner).await;
+        for c in &checks {
+            assert!(
+                !c.description.is_empty(),
+                "description empty for {}",
+                c.name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_checks_python_descriptions_nonempty() {
+        let runner = MockRunner::all_succeed("v1.0");
+        let checks = checks_python(&runner).await;
+        for c in &checks {
+            assert!(
+                !c.description.is_empty(),
+                "description empty for {}",
+                c.name
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_checks_c_descriptions_nonempty() {
+        let runner = MockRunner::all_succeed("v1.0");
+        let checks = checks_c(&runner).await;
+        for c in &checks {
+            assert!(
+                !c.description.is_empty(),
+                "description empty for {}",
+                c.name
+            );
+        }
+    }
+
+    // --- version_of with various args ---
+
+    #[tokio::test]
+    async fn mock_version_of_with_multiple_args() {
+        let runner = RecordingRunner::new_all_succeed("v1.0");
+        let _ = version_of(&runner, "cargo", &["llvm-cov", "--version"]).await;
+        let calls = runner.calls().await;
+        assert_eq!(calls[0].1, vec!["llvm-cov", "--version"]);
+    }
+
+    #[tokio::test]
+    async fn mock_version_of_with_no_args() {
+        let runner = RecordingRunner::new_all_succeed("v1.0");
+        let _ = version_of(&runner, "tool", &[]).await;
+        let calls = runner.calls().await;
+        assert!(calls[0].1.is_empty());
+    }
+
+    // --- python checks pass correct args ---
+
+    #[tokio::test]
+    async fn recording_runner_python_pytest_uses_dash_m() {
+        let runner = RecordingRunner::new_all_succeed("v1.0");
+        let _ = checks_python(&runner).await;
+        let calls = runner.calls().await;
+        // pytest is invoked as python3 -m pytest --version
+        let pytest_call = calls
+            .iter()
+            .find(|c| c.1.contains(&"-m".to_string()) && c.1.contains(&"pytest".to_string()));
+        assert!(pytest_call.is_some());
+        let call = pytest_call.unwrap();
+        assert_eq!(call.0, "python3");
+        assert_eq!(call.1, vec!["-m", "pytest", "--version"]);
+    }
+
+    #[tokio::test]
+    async fn recording_runner_python_coverage_uses_dash_m() {
+        let runner = RecordingRunner::new_all_succeed("v1.0");
+        let _ = checks_python(&runner).await;
+        let calls = runner.calls().await;
+        let cov_call = calls.iter().find(|c| c.1.contains(&"coverage".to_string()));
+        assert!(cov_call.is_some());
+        let call = cov_call.unwrap();
+        assert_eq!(call.0, "python3");
+        assert_eq!(call.1, vec!["-m", "coverage", "--version"]);
+    }
 }

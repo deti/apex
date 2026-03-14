@@ -251,7 +251,7 @@ mod tests {
         // Merged nodes should have remapped IDs (offset by 2)
         assert!(cpg1.node(2).is_some()); // baz
         assert!(cpg1.node(3).is_some()); // qux
-        // Merged edge should be 2→3, not 0→1
+                                         // Merged edge should be 2→3, not 0→1
         assert_eq!(cpg1.edges_from(2).len(), 1);
     }
 

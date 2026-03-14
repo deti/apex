@@ -12,16 +12,6 @@ use crate::finding::{Finding, FindingCategory};
 use crate::report::AnalysisReport;
 use crate::Detector;
 
-/// Controls which detectors are registered in the pipeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DetectMode {
-    /// Pattern-matching only — no CPG, taint, or subprocess tools.
-    /// Designed for <2s pre-commit feedback.
-    Fast,
-    /// All detectors including CPG/taint/subprocess.
-    Full,
-}
-
 pub struct DetectorPipeline {
     pub(crate) detectors: Vec<Box<dyn Detector>>,
 }
@@ -55,54 +45,8 @@ impl DetectorPipeline {
         if cfg.enabled.contains(&"path-normalize".to_string()) {
             detectors.push(Box::new(PathNormalizationDetector));
         }
-        if cfg.enabled.contains(&"timeout".to_string()) {
-            detectors.push(Box::new(MissingTimeoutDetector));
-        }
-        if cfg.enabled.contains(&"session-security".to_string()) {
-            detectors.push(Box::new(SessionSecurityDetector));
-        }
-        if cfg.enabled.contains(&"secret-scan".to_string()) {
-            detectors.push(Box::new(SecretScanDetector::new()));
-        }
 
         Self { detectors }
-    }
-
-    /// Build a pipeline filtered by [`DetectMode`].
-    ///
-    /// * `Fast` — only pure AST-pattern detectors (no subprocess, no CPG/taint).
-    /// * `Full` — identical to [`from_config`](Self::from_config).
-    pub fn from_config_with_mode(cfg: &DetectConfig, lang: Language, mode: DetectMode) -> Self {
-        match mode {
-            DetectMode::Full => Self::from_config(cfg, lang),
-            DetectMode::Fast => {
-                let mut detectors: Vec<Box<dyn Detector>> = Vec::new();
-
-                if cfg.enabled.contains(&"panic".to_string()) {
-                    detectors.push(Box::new(PanicPatternDetector));
-                }
-                if cfg.enabled.contains(&"security".to_string()) {
-                    detectors.push(Box::new(SecurityPatternDetector));
-                }
-                if cfg.enabled.contains(&"secrets".to_string()) {
-                    detectors.push(Box::new(HardcodedSecretDetector));
-                }
-                if cfg.enabled.contains(&"path-normalize".to_string()) {
-                    detectors.push(Box::new(PathNormalizationDetector));
-                }
-                if cfg.enabled.contains(&"timeout".to_string()) {
-                    detectors.push(Box::new(MissingTimeoutDetector));
-                }
-                if cfg.enabled.contains(&"session-security".to_string()) {
-                    detectors.push(Box::new(SessionSecurityDetector));
-                }
-                if cfg.enabled.contains(&"secret-scan".to_string()) {
-                    detectors.push(Box::new(SecretScanDetector::new()));
-                }
-
-                Self { detectors }
-            }
-        }
     }
 
     pub async fn run_all(&self, ctx: &AnalysisContext) -> AnalysisReport {
@@ -245,7 +189,18 @@ mod tests {
     }
 
     fn test_context() -> AnalysisContext {
-        AnalysisContext::test_default()
+        use std::sync::Arc;
+        AnalysisContext {
+            target_root: PathBuf::from("/tmp/test"),
+            language: apex_core::types::Language::Rust,
+            oracle: Arc::new(apex_coverage::CoverageOracle::new()),
+            file_paths: std::collections::HashMap::new(),
+            known_bugs: vec![],
+            source_cache: std::collections::HashMap::new(),
+            fuzz_corpus: None,
+            config: crate::config::DetectConfig::default(),
+            runner: Arc::new(apex_core::command::RealCommandRunner),
+        }
     }
 
     fn make_finding(
@@ -269,7 +224,6 @@ mod tests {
             suggestion: "fix it".into(),
             explanation: None,
             fix: None,
-            cwe_ids: vec![],
         }
     }
 
@@ -351,7 +305,7 @@ mod tests {
     fn from_config_enables_all_by_default() {
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
-        assert_eq!(pipeline.detectors.len(), 10);
+        assert_eq!(pipeline.detectors.len(), 7);
     }
 
     #[test]
@@ -629,49 +583,379 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // DetectMode tests
+    // Additional from_config tests
     // -----------------------------------------------------------------------
 
     #[test]
-    fn fast_mode_skips_subprocess_detectors() {
-        let cfg = DetectConfig::default();
-        let pipeline =
-            DetectorPipeline::from_config_with_mode(&cfg, Language::Rust, DetectMode::Fast);
-        let names: Vec<&str> = pipeline.detectors.iter().map(|d| d.name()).collect();
-        assert!(!names.contains(&"static-analysis"));
-        assert!(!names.contains(&"dependency-audit"));
-        assert!(!names.contains(&"unsafe-reachability"));
+    fn from_config_empty_enabled_list() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec![];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        assert!(pipeline.detectors.is_empty());
     }
 
     #[test]
-    fn fast_mode_includes_pattern_detectors() {
-        let cfg = DetectConfig::default();
-        let pipeline =
-            DetectorPipeline::from_config_with_mode(&cfg, Language::Rust, DetectMode::Fast);
+    fn from_config_only_security() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["security".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        assert_eq!(pipeline.detectors.len(), 1);
+        assert_eq!(pipeline.detectors[0].name(), "security-pattern");
+    }
+
+    #[test]
+    fn from_config_only_secrets() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["secrets".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        assert_eq!(pipeline.detectors.len(), 1);
+        assert_eq!(pipeline.detectors[0].name(), "hardcoded-secret");
+    }
+
+    #[test]
+    fn from_config_only_path_normalize() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["path-normalize".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        assert_eq!(pipeline.detectors.len(), 1);
+        assert_eq!(pipeline.detectors[0].name(), "path-normalize");
+    }
+
+    #[test]
+    fn from_config_only_deps() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["deps".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Python);
+        assert_eq!(pipeline.detectors.len(), 1);
+        assert_eq!(pipeline.detectors[0].name(), "dependency-audit");
+    }
+
+    #[test]
+    fn from_config_only_static() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["static".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        assert_eq!(pipeline.detectors.len(), 1);
+        assert_eq!(pipeline.detectors[0].name(), "static-analysis");
+    }
+
+    #[test]
+    fn from_config_unsafe_included_for_rust() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["unsafe".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        assert_eq!(pipeline.detectors.len(), 1);
+        assert_eq!(pipeline.detectors[0].name(), "unsafe-reachability");
+    }
+
+    #[test]
+    fn from_config_unsafe_excluded_for_python() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["unsafe".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Python);
+        assert!(pipeline.detectors.is_empty());
+    }
+
+    #[test]
+    fn from_config_panic_and_security_together() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["panic".into(), "security".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Python);
+        assert_eq!(pipeline.detectors.len(), 2);
         let names: Vec<&str> = pipeline.detectors.iter().map(|d| d.name()).collect();
         assert!(names.contains(&"panic-pattern"));
         assert!(names.contains(&"security-pattern"));
-        assert!(names.contains(&"hardcoded-secret"));
-        assert!(names.contains(&"path-normalize"));
-        assert!(names.contains(&"timeout"));
     }
 
     #[test]
-    fn full_mode_includes_all_detectors() {
-        let cfg = DetectConfig::default();
-        let pipeline =
-            DetectorPipeline::from_config_with_mode(&cfg, Language::Rust, DetectMode::Full);
-        let full_pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
-        assert_eq!(pipeline.detectors.len(), full_pipeline.detectors.len());
+    fn from_config_unknown_detector_ignored() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["nonexistent".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        assert!(pipeline.detectors.is_empty());
     }
 
     #[test]
-    fn fast_mode_detector_count() {
+    fn from_config_all_non_rust_language() {
+        // Python should get all except unsafe
         let cfg = DetectConfig::default();
-        let pipeline =
-            DetectorPipeline::from_config_with_mode(&cfg, Language::Rust, DetectMode::Fast);
-        // panic, security, secrets, path-normalize, timeout, session-security, secret-scan = 7 detectors
-        assert_eq!(pipeline.detectors.len(), 7);
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Python);
+        assert_eq!(pipeline.detectors.len(), 6);
+        assert!(pipeline.detectors.iter().all(|d| d.name() != "unsafe-reachability"));
+    }
+
+    #[test]
+    fn new_creates_pipeline_with_given_detectors() {
+        let pipeline = DetectorPipeline::new(vec![
+            Box::new(MockDetector {
+                name: "a",
+                subprocess: false,
+                findings: vec![],
+            }),
+            Box::new(MockDetector {
+                name: "b",
+                subprocess: true,
+                findings: vec![],
+            }),
+        ]);
+        assert_eq!(pipeline.detectors.len(), 2);
+        assert_eq!(pipeline.detectors[0].name(), "a");
+        assert_eq!(pipeline.detectors[1].name(), "b");
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional deduplicate tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn deduplicate_lower_severity_does_not_override() {
+        // First finding is High, second is Low — High should remain.
+        let mut findings = vec![
+            make_finding(
+                "a",
+                "src/lib.rs",
+                10,
+                Severity::High,
+                FindingCategory::PanicPath,
+            ),
+            make_finding(
+                "b",
+                "src/lib.rs",
+                10,
+                Severity::Low,
+                FindingCategory::PanicPath,
+            ),
+        ];
+        deduplicate(&mut findings);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    #[test]
+    fn deduplicate_same_severity_keeps_first() {
+        let mut findings = vec![
+            make_finding(
+                "first",
+                "src/lib.rs",
+                10,
+                Severity::Medium,
+                FindingCategory::PanicPath,
+            ),
+            make_finding(
+                "second",
+                "src/lib.rs",
+                10,
+                Severity::Medium,
+                FindingCategory::PanicPath,
+            ),
+        ];
+        deduplicate(&mut findings);
+        assert_eq!(findings.len(), 1);
+        // Same severity → first title preserved (no override since rank is not less)
+        assert_eq!(findings[0].title, "first finding");
+    }
+
+    #[test]
+    fn deduplicate_three_findings_same_location() {
+        use crate::finding::Evidence;
+        let mut f1 = make_finding("a", "x.rs", 1, Severity::Low, FindingCategory::PanicPath);
+        f1.evidence = vec![Evidence::SanitizerReport {
+            sanitizer: "s1".into(),
+            stderr: "e1".into(),
+        }];
+        let mut f2 = make_finding("b", "x.rs", 1, Severity::High, FindingCategory::PanicPath);
+        f2.evidence = vec![Evidence::SanitizerReport {
+            sanitizer: "s2".into(),
+            stderr: "e2".into(),
+        }];
+        let mut f3 = make_finding("c", "x.rs", 1, Severity::Critical, FindingCategory::PanicPath);
+        f3.evidence = vec![Evidence::SanitizerReport {
+            sanitizer: "s3".into(),
+            stderr: "e3".into(),
+        }];
+
+        let mut findings = vec![f1, f2, f3];
+        deduplicate(&mut findings);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+        assert_eq!(findings[0].evidence.len(), 3);
+    }
+
+    #[test]
+    fn deduplicate_none_line_findings() {
+        // Findings with line=None should be grouped by (file, None, category)
+        let mut f1 = make_finding("a", "lib.rs", 0, Severity::Medium, FindingCategory::DependencyVuln);
+        f1.line = None;
+        let mut f2 = make_finding("b", "lib.rs", 0, Severity::High, FindingCategory::DependencyVuln);
+        f2.line = None;
+
+        let mut findings = vec![f1, f2];
+        deduplicate(&mut findings);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    #[test]
+    fn deduplicate_single_finding_unchanged() {
+        let mut findings = vec![make_finding(
+            "a",
+            "src/main.rs",
+            10,
+            Severity::Medium,
+            FindingCategory::PanicPath,
+        )];
+        deduplicate(&mut findings);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Medium);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional run_all tests
+    // -----------------------------------------------------------------------
+
+    struct FailingSubprocessDetector;
+
+    #[async_trait]
+    impl Detector for FailingSubprocessDetector {
+        fn name(&self) -> &str {
+            "failing-sub"
+        }
+        async fn analyze(&self, _: &AnalysisContext) -> apex_core::error::Result<Vec<Finding>> {
+            Err(apex_core::error::ApexError::Detect("subprocess boom".into()))
+        }
+        fn uses_cargo_subprocess(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn run_all_failing_subprocess_detector_marks_false() {
+        let pipeline = DetectorPipeline::new(vec![Box::new(FailingSubprocessDetector)]);
+        let ctx = test_context();
+        let report = pipeline.run_all(&ctx).await;
+
+        assert!(report.findings.is_empty());
+        assert_eq!(report.detector_status.len(), 1);
+        assert_eq!(report.detector_status[0], ("failing-sub".to_string(), false));
+    }
+
+    #[tokio::test]
+    async fn run_all_mixed_success_and_failure() {
+        let finding = make_finding(
+            "good",
+            "src/lib.rs",
+            1,
+            Severity::High,
+            FindingCategory::PanicPath,
+        );
+        let pipeline = DetectorPipeline::new(vec![
+            Box::new(MockDetector {
+                name: "good-det",
+                subprocess: false,
+                findings: vec![finding],
+            }),
+            Box::new(FailingDetector),
+        ]);
+        let ctx = test_context();
+        let report = pipeline.run_all(&ctx).await;
+
+        // One finding from good detector, none from failing
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.detector_status.len(), 2);
+
+        let good_status = report.detector_status.iter().find(|(n, _)| n == "good-det");
+        let fail_status = report.detector_status.iter().find(|(n, _)| n == "failing");
+        assert_eq!(good_status, Some(&("good-det".to_string(), true)));
+        assert_eq!(fail_status, Some(&("failing".to_string(), false)));
+    }
+
+    #[tokio::test]
+    async fn run_all_multiple_pure_detectors() {
+        let f1 = make_finding("d1", "a.rs", 1, Severity::Low, FindingCategory::PanicPath);
+        let f2 = make_finding("d2", "b.rs", 2, Severity::Medium, FindingCategory::UnsafeCode);
+        let f3 = make_finding("d3", "c.rs", 3, Severity::High, FindingCategory::SecuritySmell);
+
+        let pipeline = DetectorPipeline::new(vec![
+            Box::new(MockDetector { name: "p1", subprocess: false, findings: vec![f1] }),
+            Box::new(MockDetector { name: "p2", subprocess: false, findings: vec![f2] }),
+            Box::new(MockDetector { name: "p3", subprocess: false, findings: vec![f3] }),
+        ]);
+        let ctx = test_context();
+        let report = pipeline.run_all(&ctx).await;
+
+        assert_eq!(report.findings.len(), 3);
+        assert_eq!(report.detector_status.len(), 3);
+        assert!(report.detector_status.iter().all(|(_, ok)| *ok));
+
+        // Sorted by severity rank: High(1), Medium(2), Low(3)
+        assert_eq!(report.findings[0].severity, Severity::High);
+        assert_eq!(report.findings[1].severity, Severity::Medium);
+        assert_eq!(report.findings[2].severity, Severity::Low);
+    }
+
+    #[tokio::test]
+    async fn run_all_sorts_by_covered_within_same_severity() {
+        let mut f_uncovered = make_finding("d1", "a.rs", 1, Severity::High, FindingCategory::PanicPath);
+        f_uncovered.covered = false;
+        let mut f_covered = make_finding("d2", "b.rs", 2, Severity::High, FindingCategory::UnsafeCode);
+        f_covered.covered = true;
+
+        let pipeline = DetectorPipeline::new(vec![
+            Box::new(MockDetector { name: "p1", subprocess: false, findings: vec![f_covered] }),
+            Box::new(MockDetector { name: "p2", subprocess: false, findings: vec![f_uncovered] }),
+        ]);
+        let ctx = test_context();
+        let report = pipeline.run_all(&ctx).await;
+
+        assert_eq!(report.findings.len(), 2);
+        // Both High severity; covered=false (0) sorts before covered=true (1)
+        assert!(!report.findings[0].covered);
+        assert!(report.findings[1].covered);
+    }
+
+    #[tokio::test]
+    async fn run_all_no_timeout_uses_default_300s() {
+        // Config with no per_detector_timeout_secs → 300s default
+        let finding = make_finding("m", "x.rs", 1, Severity::Info, FindingCategory::LogicBug);
+        let pipeline = DetectorPipeline::new(vec![
+            Box::new(MockDetector { name: "det", subprocess: false, findings: vec![finding] }),
+        ]);
+        let mut ctx = test_context();
+        ctx.config.per_detector_timeout_secs = None;
+        let report = pipeline.run_all(&ctx).await;
+        assert_eq!(report.findings.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_all_detector_returning_empty_findings() {
+        let pipeline = DetectorPipeline::new(vec![
+            Box::new(MockDetector { name: "empty-det", subprocess: false, findings: vec![] }),
+        ]);
+        let ctx = test_context();
+        let report = pipeline.run_all(&ctx).await;
+
+        assert!(report.findings.is_empty());
+        assert_eq!(report.detector_status.len(), 1);
+        assert_eq!(report.detector_status[0], ("empty-det".to_string(), true));
+    }
+
+    #[tokio::test]
+    async fn run_all_subprocess_failure_with_successful_pure() {
+        let finding = make_finding("pure", "x.rs", 1, Severity::High, FindingCategory::PanicPath);
+        let pipeline = DetectorPipeline::new(vec![
+            Box::new(MockDetector { name: "pure-ok", subprocess: false, findings: vec![finding] }),
+            Box::new(FailingSubprocessDetector),
+        ]);
+        let ctx = test_context();
+        let report = pipeline.run_all(&ctx).await;
+
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.detector_status.len(), 2);
+
+        let pure_ok = report.detector_status.iter().find(|(n, _)| n == "pure-ok");
+        let sub_fail = report.detector_status.iter().find(|(n, _)| n == "failing-sub");
+        assert_eq!(pure_ok.unwrap().1, true);
+        assert_eq!(sub_fail.unwrap().1, false);
     }
 
     #[tokio::test]

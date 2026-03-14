@@ -47,9 +47,7 @@ mod tests {
     fn transform_spec_creation() {
         let spec = TransformSpec {
             function_name: "sort".to_string(),
-            input_output_pairs: vec![
-                (r#"[3,1,2]"#.to_string(), r#"[1,2,3]"#.to_string()),
-            ],
+            input_output_pairs: vec![(r#"[3,1,2]"#.to_string(), r#"[1,2,3]"#.to_string())],
             inferred_properties: vec![],
         };
         assert_eq!(spec.function_name, "sort");

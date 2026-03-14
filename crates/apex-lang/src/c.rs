@@ -1355,4 +1355,459 @@ mod tests {
         let result = runner.run_tests(dir.path(), &[]).await.unwrap();
         assert_eq!(result.exit_code, 8);
     }
+
+    // ------------------------------------------------------------------
+    // build_with_coverage — no .c files returns error
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn build_with_coverage_no_c_files_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("output_bin");
+        let result = build_with_coverage(dir.path(), &out).await;
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("no .c files found"), "unexpected: {msg}");
+    }
+
+    #[tokio::test]
+    async fn build_with_coverage_no_c_files_only_headers() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.h"), "#pragma once").unwrap();
+        std::fs::write(dir.path().join("util.hpp"), "").unwrap();
+        let out = dir.path().join("output_bin");
+        let result = build_with_coverage(dir.path(), &out).await;
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("no .c files found"), "unexpected: {msg}");
+    }
+
+    #[tokio::test]
+    async fn build_with_coverage_no_c_files_only_cpp() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.cpp"), "int main(){}").unwrap();
+        let out = dir.path().join("output_bin");
+        let result = build_with_coverage(dir.path(), &out).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn build_with_coverage_nonexistent_dir() {
+        let out = Path::new("/tmp/apex_test_nonexistent_output");
+        let result =
+            build_with_coverage(Path::new("/nonexistent/dir/that/does/not/exist"), &out).await;
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("no .c files found"), "unexpected: {msg}");
+    }
+
+    // ------------------------------------------------------------------
+    // build_with_coverage — with .c files (compiler invocation)
+    // This tests that the function gets past the walkdir check
+    // and attempts to invoke the compiler. On CI without clang/cc
+    // this may fail at compile step, which is fine — we test the error path.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn build_with_coverage_with_c_files_attempts_compile() {
+        let dir = tempfile::tempdir().unwrap();
+        // Write a trivially invalid C file so compilation fails
+        std::fs::write(dir.path().join("bad.c"), "THIS IS NOT VALID C CODE !!!").unwrap();
+        let out = dir.path().join("output_bin");
+        let result = build_with_coverage(dir.path(), &out).await;
+        // Either compilation fails (expected) or somehow succeeds — both are OK
+        // We primarily care that we got past the "no .c files" check
+        if let Err(e) = &result {
+            let msg = format!("{e}");
+            // Should NOT be "no .c files found" — should be a compilation error
+            assert!(
+                !msg.contains("no .c files found"),
+                "should have found .c files"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn build_with_coverage_with_valid_c_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.c"), "int main() { return 0; }").unwrap();
+        let out = dir.path().join("output_bin");
+        let result = build_with_coverage(dir.path(), &out).await;
+        // On systems with cc/clang this may succeed; on others it may fail.
+        // We just verify it doesn't return "no .c files found".
+        if let Err(e) = &result {
+            let msg = format!("{e}");
+            assert!(
+                !msg.contains("no .c files found"),
+                "should have found .c files"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn build_with_coverage_c_files_in_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("lib.c"), "void f() {}").unwrap();
+        let out = dir.path().join("output_bin");
+        let result = build_with_coverage(dir.path(), &out).await;
+        if let Err(e) = &result {
+            let msg = format!("{e}");
+            assert!(
+                !msg.contains("no .c files found"),
+                "should have found .c files in subdir"
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // which — additional edge cases
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn which_finds_sh() {
+        // sh should exist on all unix systems
+        assert!(which("sh"));
+    }
+
+    #[test]
+    fn which_special_characters_returns_false() {
+        assert!(!which("no-such-binary-!@#$%"));
+    }
+
+    // ------------------------------------------------------------------
+    // walkdir_c_files — deeply nested allowed directories
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn walkdir_c_files_three_levels_deep() {
+        let dir = tempfile::tempdir().unwrap();
+        let deep = dir.path().join("a").join("b").join("c");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("deep.c"), "").unwrap();
+        let files = walkdir_c_files(dir.path());
+        assert_eq!(files.len(), 1);
+        assert!(files[0].contains("deep.c"));
+    }
+
+    #[test]
+    fn walkdir_c_files_mixed_skipped_and_allowed_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create allowed subdir with .c file
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("good.c"), "").unwrap();
+        // Create excluded subdir with .c file
+        let build = dir.path().join("build");
+        std::fs::create_dir_all(&build).unwrap();
+        std::fs::write(build.join("generated.c"), "").unwrap();
+        // Root .c file
+        std::fs::write(dir.path().join("main.c"), "").unwrap();
+        let files = walkdir_c_files(dir.path());
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|f| f.contains("good.c")));
+        assert!(files.iter().any(|f| f.contains("main.c")));
+        assert!(!files.iter().any(|f| f.contains("generated.c")));
+    }
+
+    #[test]
+    fn walkdir_c_files_build_apex_inside_allowed_subdir() {
+        // build_apex nested inside an allowed subdir should still be skipped
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("src").join("build_apex");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("hidden.c"), "").unwrap();
+        let files = walkdir_c_files(dir.path());
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn walkdir_c_files_git_inside_allowed_subdir_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("lib").join(".git");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("hooks.c"), "").unwrap();
+        let files = walkdir_c_files(dir.path());
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn walkdir_c_files_target_inside_allowed_subdir_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("vendor").join("target");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("gen.c"), "").unwrap();
+        let files = walkdir_c_files(dir.path());
+        assert!(files.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — stderr is captured from command output
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_make_captures_stderr() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Makefile"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command().times(1).returning(|_| {
+            Ok(CommandOutput {
+                exit_code: 1,
+                stdout: b"some output".to_vec(),
+                stderr: b"warning: something".to_vec(),
+            })
+        });
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.stdout, "some output");
+        assert_eq!(result.stderr, "warning: something");
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — multiple extra args are passed through
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_make_multiple_extra_args() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Makefile"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| {
+                spec.program == "make"
+                    && spec.args.contains(&"check".to_string())
+                    && spec.args.contains(&"VERBOSE=1".to_string())
+                    && spec.args.contains(&"--jobs=4".to_string())
+            })
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner
+            .run_tests(dir.path(), &["VERBOSE=1".into(), "--jobs=4".into()])
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — cmake ctest receives --test-dir with correct path
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_cmake_ctest_receives_test_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CMakeLists.txt"), "").unwrap();
+        let expected_build_dir = dir.path().join("build_apex").to_string_lossy().to_string();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "cmake" && spec.args.contains(&"-B".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "cmake" && spec.args.contains(&"--build".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let build_dir_clone = expected_build_dir.clone();
+        mock.expect_run_command()
+            .withf(move |spec| {
+                spec.program == "ctest"
+                    && spec.args.contains(&"--test-dir".to_string())
+                    && spec.args.contains(&build_dir_clone)
+            })
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"pass".to_vec())));
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — cmake configure receives -DCMAKE_BUILD_TYPE=Debug
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_cmake_configure_has_debug_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CMakeLists.txt"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| {
+                spec.program == "cmake"
+                    && spec
+                        .args
+                        .contains(&"-DCMAKE_BUILD_TYPE=Debug".to_string())
+            })
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "cmake" && spec.args.contains(&"--build".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "ctest")
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // BuildSystem Debug formatting
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn build_system_debug_format() {
+        assert_eq!(format!("{:?}", BuildSystem::CMake), "CMake");
+        assert_eq!(format!("{:?}", BuildSystem::Make), "Make");
+        assert_eq!(format!("{:?}", BuildSystem::Autoconf), "Autoconf");
+        assert_eq!(format!("{:?}", BuildSystem::None), "None");
+    }
+
+    // ------------------------------------------------------------------
+    // install_deps — autogen success with stdout
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn install_deps_autogen_success_with_output() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("autogen.sh"), "#!/bin/sh\necho gen").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "sh")
+            .times(1)
+            .returning(|_| {
+                Ok(CommandOutput {
+                    exit_code: 0,
+                    stdout: b"generating...".to_vec(),
+                    stderr: Vec::new(),
+                })
+            });
+
+        let runner = CRunner::with_runner(mock);
+        assert!(runner.install_deps(dir.path()).await.is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — make with empty extra_args
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_make_empty_extra_args_only_check() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Makefile"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "make" && spec.args == vec!["check".to_string()])
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // run_tests — output contains both stdout and stderr from command
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_tests_cmake_output_contains_both_streams() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CMakeLists.txt"), "").unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "cmake" && spec.args.contains(&"-B".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "cmake" && spec.args.contains(&"--build".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"ok".to_vec())));
+        mock.expect_run_command()
+            .withf(|spec| spec.program == "ctest")
+            .times(1)
+            .returning(|_| {
+                Ok(CommandOutput {
+                    exit_code: 0,
+                    stdout: b"test output here".to_vec(),
+                    stderr: b"test warnings here".to_vec(),
+                })
+            });
+
+        let runner = CRunner::with_runner(mock);
+        let result = runner.run_tests(dir.path(), &[]).await.unwrap();
+        assert_eq!(result.stdout, "test output here");
+        assert_eq!(result.stderr, "test warnings here");
+    }
+
+    // ------------------------------------------------------------------
+    // detect — verify short-circuit: CMakeLists.txt checked first
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn detect_cmake_without_c_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CMakeLists.txt"), "cmake_minimum_required(VERSION 3.0)").unwrap();
+        // No .c files at all - should still detect because CMakeLists.txt present
+        assert!(CRunner::new().detect(dir.path()));
+    }
+
+    // ------------------------------------------------------------------
+    // walkdir_c_files — only non-c files in subdirs
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn walkdir_c_files_subdir_with_only_non_c_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("docs");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("readme.md"), "").unwrap();
+        std::fs::write(sub.join("notes.txt"), "").unwrap();
+        let files = walkdir_c_files(dir.path());
+        assert!(files.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // walkdir_c_files — empty subdir
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn walkdir_c_files_empty_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("empty_src");
+        std::fs::create_dir_all(&sub).unwrap();
+        let files = walkdir_c_files(dir.path());
+        assert!(files.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // walkdir_c_files — multiple subdirs some excluded some not
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn walkdir_c_files_multiple_parallel_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in &["src", "lib", "test", "examples"] {
+            let sub = dir.path().join(name);
+            std::fs::create_dir_all(&sub).unwrap();
+            std::fs::write(sub.join(format!("{name}.c")), "").unwrap();
+        }
+        let files = walkdir_c_files(dir.path());
+        assert_eq!(files.len(), 4);
+    }
 }

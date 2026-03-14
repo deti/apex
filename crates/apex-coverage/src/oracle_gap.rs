@@ -103,4 +103,12 @@ mod tests {
         let lines: Vec<u32> = score.survivors().iter().map(|s| s.operator.line).collect();
         assert_eq!(lines, vec![3, 10]);
     }
+
+    #[test]
+    fn gap_percent_zero_when_empty() {
+        let score = OracleGapScore::from_results(&[]);
+        assert_eq!(score.gap_percent(), 0.0);
+        assert_eq!(score.total(), 0);
+        assert!(score.survivors().is_empty());
+    }
 }

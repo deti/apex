@@ -110,9 +110,9 @@ impl Default for VulnDetectionPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::finding::FindingCategory;
     use std::path::PathBuf;
     use uuid::Uuid;
-    use crate::finding::FindingCategory;
 
     fn make_finding(severity: Severity) -> Finding {
         Finding {
@@ -214,10 +214,7 @@ mod tests {
     #[test]
     fn truncate_findings_no_truncation() {
         let p = VulnDetectionPipeline::default();
-        let findings = vec![
-            make_finding(Severity::High),
-            make_finding(Severity::Low),
-        ];
+        let findings = vec![make_finding(Severity::High), make_finding(Severity::Low)];
         let result = p.truncate_findings(findings);
         assert_eq!(result.len(), 2);
     }

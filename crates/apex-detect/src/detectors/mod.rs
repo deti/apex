@@ -1,6 +1,5 @@
 pub mod bandit;
 pub mod cegar;
-pub mod spec_miner;
 pub mod command_injection;
 pub mod dep_audit;
 pub mod dual_encoder;
@@ -14,6 +13,7 @@ pub mod path_traversal;
 pub mod secret_scan;
 pub mod security_pattern;
 pub mod session_security;
+pub mod spec_miner;
 pub mod sql_injection;
 pub mod static_analysis;
 pub mod timeout;

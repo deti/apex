@@ -126,8 +126,8 @@ pub fn detect_test_runner(target: &Path) -> JsTestRunner {
 
 fn detect_module_system(target: &Path) -> ModuleSystem {
     let pkg_content = std::fs::read_to_string(target.join("package.json")).unwrap_or_default();
-    let has_type_module = pkg_content.contains("\"type\": \"module\"")
-        || pkg_content.contains("\"type\":\"module\"");
+    let has_type_module =
+        pkg_content.contains("\"type\": \"module\"") || pkg_content.contains("\"type\":\"module\"");
 
     let src_dir = target.join("src");
     let has_mjs = src_dir.join("index.mjs").exists();

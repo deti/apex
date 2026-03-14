@@ -65,7 +65,11 @@ impl AdversarialLoop {
     }
 
     pub fn mutation_score(&self) -> f64 {
-        let with_mutants: Vec<_> = self.rounds.iter().filter(|r| r.mutant_code.is_some()).collect();
+        let with_mutants: Vec<_> = self
+            .rounds
+            .iter()
+            .filter(|r| r.mutant_code.is_some())
+            .collect();
         if with_mutants.is_empty() {
             return 0.0;
         }
@@ -108,7 +112,10 @@ mod tests {
 
     #[test]
     fn adversarial_loop_new() {
-        let config = AdversarialConfig { max_rounds: 5, target_mutation_score: 0.8 };
+        let config = AdversarialConfig {
+            max_rounds: 5,
+            target_mutation_score: 0.8,
+        };
         let loop_ = AdversarialLoop::new(config);
         assert_eq!(loop_.config.max_rounds, 5);
         assert!(loop_.rounds.is_empty());
@@ -129,7 +136,10 @@ mod tests {
 
     #[test]
     fn adversarial_loop_should_continue_under_max() {
-        let mut loop_ = AdversarialLoop::new(AdversarialConfig { max_rounds: 3, target_mutation_score: 0.8 });
+        let mut loop_ = AdversarialLoop::new(AdversarialConfig {
+            max_rounds: 3,
+            target_mutation_score: 0.8,
+        });
         let round = AdversarialRound {
             round_number: 1,
             test_code: "test".to_string(),
@@ -142,7 +152,10 @@ mod tests {
 
     #[test]
     fn adversarial_loop_stops_at_max_rounds() {
-        let config = AdversarialConfig { max_rounds: 2, target_mutation_score: 0.8 };
+        let config = AdversarialConfig {
+            max_rounds: 2,
+            target_mutation_score: 0.8,
+        };
         let mut loop_ = AdversarialLoop::new(config);
         for i in 0..2 {
             loop_.record_round(AdversarialRound {
@@ -224,7 +237,10 @@ mod tests {
 
     #[test]
     fn adversarial_loop_stops_at_target_mutation_score() {
-        let config = AdversarialConfig { max_rounds: 10, target_mutation_score: 0.5 };
+        let config = AdversarialConfig {
+            max_rounds: 10,
+            target_mutation_score: 0.5,
+        };
         let mut loop_ = AdversarialLoop::new(config);
         loop_.record_round(AdversarialRound {
             round_number: 1,

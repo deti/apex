@@ -161,10 +161,22 @@ mod tests {
     #[test]
     fn classify_covers_all_quadrants() {
         let router = S2FRouter::new();
-        assert_eq!(router.classify(&make_candidate(0.9, 0, 2, 10)), BranchClass::EasyFuzz);
-        assert_eq!(router.classify(&make_candidate(0.85, 0, 15, 10)), BranchClass::NeedsSolver);
-        assert_eq!(router.classify(&make_candidate(0.05, 20, 5, 10)), BranchClass::NeedsSynth);
-        assert_eq!(router.classify(&make_candidate(0.5, 3, 5, 10)), BranchClass::HardFuzz);
+        assert_eq!(
+            router.classify(&make_candidate(0.9, 0, 2, 10)),
+            BranchClass::EasyFuzz
+        );
+        assert_eq!(
+            router.classify(&make_candidate(0.85, 0, 15, 10)),
+            BranchClass::NeedsSolver
+        );
+        assert_eq!(
+            router.classify(&make_candidate(0.05, 20, 5, 10)),
+            BranchClass::NeedsSynth
+        );
+        assert_eq!(
+            router.classify(&make_candidate(0.5, 3, 5, 10)),
+            BranchClass::HardFuzz
+        );
     }
 
     #[test]

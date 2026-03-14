@@ -504,7 +504,6 @@ impl Sandbox for FirecrackerSandbox {
             duration_ms,
             stdout: String::from_utf8_lossy(&response.stdout).to_string(),
             stderr: String::from_utf8_lossy(&response.stderr).to_string(),
-            input: None,
         })
     }
 
@@ -1390,5 +1389,394 @@ mod tests {
     fn with_pool_size_one() {
         let sb = FirecrackerSandbox::new(Language::Python, PathBuf::from("/tmp")).with_pool_size(1);
         assert_eq!(sb.pool_size, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn decode_vsock_response_error_message_eof() {
+        let result = decode_vsock_response(&[0, 0]);
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("unexpected EOF"), "error: {msg}");
+    }
+
+    #[test]
+    fn decode_vsock_response_error_message_bytes_remain() {
+        let mut data = vec![];
+        data.extend_from_slice(&10u32.to_be_bytes());
+        data.extend_from_slice(&[1, 2]);
+        let result = decode_vsock_response(&data);
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("expected 10 bytes"), "error: {msg}");
+    }
+
+    #[tokio::test]
+    async fn run_with_empty_seed_data() {
+        use apex_core::traits::Sandbox;
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+
+        let seed = InputSeed::new(Vec::<u8>::new(), apex_core::types::SeedOrigin::Corpus);
+        let result = sb.run(&seed).await.unwrap();
+        assert_eq!(result.status, ExecutionStatus::Pass);
+        assert!(result.stdout.is_empty());
+        assert!(result.stderr.is_empty());
+        assert!(result.trace.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_result_stdout_stderr_are_strings() {
+        use apex_core::traits::Sandbox;
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+
+        let seed = InputSeed::new(b"test".to_vec(), apex_core::types::SeedOrigin::Corpus);
+        let result = sb.run(&seed).await.unwrap();
+        assert_eq!(result.stdout, "");
+        assert_eq!(result.stderr, "");
+    }
+
+    #[tokio::test]
+    async fn run_with_large_seed_data() {
+        use apex_core::traits::Sandbox;
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+
+        let big_data = vec![0xFFu8; 65536];
+        let seed = InputSeed::new(big_data, apex_core::types::SeedOrigin::Corpus);
+        let result = sb.run(&seed).await.unwrap();
+        assert_eq!(result.status, ExecutionStatus::Pass);
+    }
+
+    #[test]
+    fn with_coverage_empty_branch_index() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let sb = FirecrackerSandbox::new(Language::Python, PathBuf::from("/tmp"))
+            .with_coverage(oracle, vec![]);
+        assert!(sb.oracle.is_some());
+        assert!(sb.branch_index.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_with_oracle_empty_branch_index() {
+        use apex_core::traits::Sandbox;
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("work");
+        let oracle = Arc::new(CoverageOracle::new());
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir)
+            .with_rootfs(rootfs)
+            .with_coverage(oracle, vec![]);
+        sb.prepare().await.unwrap();
+
+        let seed = InputSeed::new(b"x".to_vec(), apex_core::types::SeedOrigin::Corpus);
+        let result = sb.run(&seed).await.unwrap();
+        assert!(result.new_branches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn prepare_creates_nested_work_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("a").join("b").join("c");
+        assert!(!work_dir.exists());
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir.clone()).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+        assert!(work_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn prepare_sets_snapshot_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir.clone()).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+
+        let snap = sb.snapshot.lock().unwrap();
+        let snap = snap.as_ref().unwrap();
+        assert_eq!(snap.snap_file, work_dir.join("snapshot.bin"));
+        assert_eq!(snap.mem_file, work_dir.join("snapshot.mem"));
+    }
+
+    #[test]
+    fn encode_vsock_frame_length_prefix_various_sizes() {
+        for size in [0usize, 1, 255, 256, 65535, 65536] {
+            let data = vec![0u8; size];
+            let frame = encode_vsock_frame(&data);
+            let len = u32::from_be_bytes([frame[0], frame[1], frame[2], frame[3]]);
+            assert_eq!(len as usize, size);
+        }
+    }
+
+    #[test]
+    fn encode_vsock_response_total_length() {
+        let resp = VsockResponse {
+            bitmap: vec![1, 2, 3],
+            exit_code: 42,
+            stdout: vec![4, 5],
+            stderr: vec![6, 7, 8, 9],
+        };
+        let encoded = encode_vsock_response(&resp);
+        let expected = 4 + 3 + 4 + 4 + 2 + 4 + 4;
+        assert_eq!(encoded.len(), expected);
+    }
+
+    #[test]
+    fn decode_vsock_response_three_bytes() {
+        let result = decode_vsock_response(&[0, 0, 0]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_vsock_response_four_bytes_no_exit() {
+        let data = 0u32.to_be_bytes();
+        let result = decode_vsock_response(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_vsock_response_no_stdout_len() {
+        let mut data = vec![];
+        data.extend_from_slice(&0u32.to_be_bytes());
+        data.extend_from_slice(&0u32.to_be_bytes());
+        let result = decode_vsock_response(&data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decode_vsock_response_max_exit_code() {
+        let resp = VsockResponse {
+            bitmap: vec![],
+            exit_code: u32::MAX,
+            stdout: vec![],
+            stderr: vec![],
+        };
+        let encoded = encode_vsock_response(&resp);
+        let decoded = decode_vsock_response(&encoded).unwrap();
+        assert_eq!(decoded.exit_code, u32::MAX);
+    }
+
+    #[tokio::test]
+    async fn restore_error_message_content() {
+        use apex_core::traits::Sandbox;
+        let sb = FirecrackerSandbox::new(Language::Python, PathBuf::from("/tmp/fc-restore-err2"));
+        let err = sb.restore(SnapshotId::new()).await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("no snapshot"), "error: {msg}");
+    }
+
+    #[tokio::test]
+    async fn run_error_message_content() {
+        use apex_core::traits::Sandbox;
+        let sb = FirecrackerSandbox::new(Language::Python, PathBuf::from("/tmp/fc-run-err2"));
+        let seed = InputSeed::new(b"x".to_vec(), apex_core::types::SeedOrigin::Corpus);
+        let err = sb.run(&seed).await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("not prepared"), "error: {msg}");
+    }
+
+    #[tokio::test]
+    async fn run_multiple_times() {
+        use apex_core::traits::Sandbox;
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+
+        for i in 0..5 {
+            let seed = InputSeed::new(
+                format!("seed-{i}").into_bytes(),
+                apex_core::types::SeedOrigin::Corpus,
+            );
+            let result = sb.run(&seed).await.unwrap();
+            assert_eq!(result.status, ExecutionStatus::Pass);
+            assert_eq!(result.seed_id, seed.id);
+        }
+    }
+
+    #[tokio::test]
+    async fn prepare_twice_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+        let id1 = sb.snapshot.lock().unwrap().as_ref().unwrap().id;
+        sb.prepare().await.unwrap();
+        let id2 = sb.snapshot.lock().unwrap().as_ref().unwrap().id;
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn builder_full_chain() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let b0 = BranchId::new(1, 1, 0, 0);
+        let sb = FirecrackerSandbox::new(Language::Rust, PathBuf::from("/tmp"))
+            .with_pool_size(16)
+            .with_rootfs(PathBuf::from("/my/rootfs.ext4"))
+            .with_coverage(oracle, vec![b0.clone()]);
+        assert_eq!(sb.pool_size, 16);
+        assert_eq!(sb.rootfs, PathBuf::from("/my/rootfs.ext4"));
+        assert!(sb.oracle.is_some());
+        assert_eq!(sb.branch_index, vec![b0]);
+    }
+
+    #[test]
+    fn encode_vsock_response_only_bitmap() {
+        let resp = VsockResponse {
+            bitmap: vec![0xFF; 100],
+            exit_code: 0,
+            stdout: vec![],
+            stderr: vec![],
+        };
+        let encoded = encode_vsock_response(&resp);
+        let decoded = decode_vsock_response(&encoded).unwrap();
+        assert_eq!(decoded.bitmap.len(), 100);
+        assert!(decoded.bitmap.iter().all(|&b| b == 0xFF));
+    }
+
+    #[test]
+    fn vsock_response_ne_exit_code() {
+        let a = VsockResponse { bitmap: vec![1], exit_code: 0, stdout: vec![], stderr: vec![] };
+        let b = VsockResponse { bitmap: vec![1], exit_code: 1, stdout: vec![], stderr: vec![] };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn vsock_response_ne_stdout() {
+        let a = VsockResponse { bitmap: vec![], exit_code: 0, stdout: vec![1], stderr: vec![] };
+        let b = VsockResponse { bitmap: vec![], exit_code: 0, stdout: vec![2], stderr: vec![] };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn vsock_response_ne_stderr() {
+        let a = VsockResponse { bitmap: vec![], exit_code: 0, stdout: vec![], stderr: vec![1] };
+        let b = VsockResponse { bitmap: vec![], exit_code: 0, stdout: vec![], stderr: vec![2] };
+        assert_ne!(a, b);
+    }
+
+    #[tokio::test]
+    async fn snapshot_trait_works_all_languages() {
+        use apex_core::traits::Sandbox;
+        for lang in [Language::Python, Language::JavaScript, Language::Rust, Language::C, Language::Java] {
+            let sb = FirecrackerSandbox::new(lang, PathBuf::from("/tmp/fc-snap-all2"));
+            let result = sb.snapshot().await;
+            assert!(result.is_ok(), "snapshot failed for {lang}");
+        }
+    }
+
+    #[tokio::test]
+    async fn run_restore_run_sequence() {
+        use apex_core::traits::Sandbox;
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+
+        let seed1 = InputSeed::new(b"first".to_vec(), apex_core::types::SeedOrigin::Corpus);
+        let r1 = sb.run(&seed1).await.unwrap();
+        assert_eq!(r1.status, ExecutionStatus::Pass);
+
+        sb.restore(SnapshotId::new()).await.unwrap();
+
+        let seed2 = InputSeed::new(b"second".to_vec(), apex_core::types::SeedOrigin::Corpus);
+        let r2 = sb.run(&seed2).await.unwrap();
+        assert_eq!(r2.status, ExecutionStatus::Pass);
+    }
+
+    #[tokio::test]
+    async fn run_with_fuzzer_origin_seed() {
+        use apex_core::traits::Sandbox;
+        let tmp = tempfile::tempdir().unwrap();
+        let rootfs = tmp.path().join("rootfs.ext4");
+        std::fs::write(&rootfs, b"fake").unwrap();
+        let work_dir = tmp.path().join("work");
+        let sb = FirecrackerSandbox::new(Language::Python, work_dir).with_rootfs(rootfs);
+        sb.prepare().await.unwrap();
+
+        let seed = InputSeed::new(b"fuzzed".to_vec(), apex_core::types::SeedOrigin::Fuzzer);
+        let result = sb.run(&seed).await.unwrap();
+        assert_eq!(result.status, ExecutionStatus::Pass);
+        assert_eq!(result.seed_id, seed.id);
+    }
+
+    #[test]
+    fn with_coverage_replaces_oracle() {
+        let oracle1 = Arc::new(CoverageOracle::new());
+        let oracle2 = Arc::new(CoverageOracle::new());
+        let b0 = BranchId::new(1, 1, 0, 0);
+        let b1 = BranchId::new(1, 2, 0, 0);
+        let sb = FirecrackerSandbox::new(Language::Python, PathBuf::from("/tmp"))
+            .with_coverage(oracle1, vec![b0])
+            .with_coverage(oracle2, vec![b1.clone()]);
+        assert_eq!(sb.branch_index.len(), 1);
+        assert_eq!(sb.branch_index[0], b1);
+    }
+
+    #[test]
+    fn default_rootfs_wasm_language() {
+        let wasm_path = FirecrackerSandbox::default_rootfs(Language::Wasm);
+        assert!(wasm_path.to_string_lossy().contains("/wasm/"));
+        assert_eq!(wasm_path.file_name().unwrap(), "rootfs.ext4");
+    }
+
+    #[test]
+    fn default_rootfs_ruby_language() {
+        let ruby_path = FirecrackerSandbox::default_rootfs(Language::Ruby);
+        assert!(ruby_path.to_string_lossy().contains("/ruby/"));
+        assert_eq!(ruby_path.file_name().unwrap(), "rootfs.ext4");
+    }
+
+    #[test]
+    fn new_with_long_work_dir() {
+        let long_path = PathBuf::from("/tmp/".to_string() + &"a/".repeat(50) + "work");
+        let sb = FirecrackerSandbox::new(Language::Python, long_path.clone());
+        assert_eq!(sb.work_dir, long_path);
+    }
+
+    #[test]
+    fn fc_client_empty_socket_path() {
+        let client = FcClient::new(PathBuf::new());
+        assert_eq!(client.socket_path, PathBuf::new());
+    }
+
+    #[test]
+    fn socket_path_various_work_dirs() {
+        let paths = vec!["/tmp", "/var/run/apex", "/home/user/.apex/work", "/"];
+        for p in paths {
+            let sb = FirecrackerSandbox::new(Language::Python, PathBuf::from(p));
+            assert_eq!(sb.socket_path(), PathBuf::from(p).join("firecracker.sock"));
+        }
+    }
+
+    #[test]
+    fn client_method_returns_correct_path() {
+        let sb = FirecrackerSandbox::new(Language::Python, PathBuf::from("/my/work"));
+        let c = sb.client();
+        assert_eq!(c.socket_path, PathBuf::from("/my/work/firecracker.sock"));
     }
 }

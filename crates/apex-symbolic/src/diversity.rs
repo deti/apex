@@ -33,10 +33,8 @@ impl<S: Solver> DiversitySolver<S> {
                     // Build a blocking clause from the solution data.
                     // We negate the current solution by adding a constraint
                     // that the output must differ from this seed.
-                    let blocking = format!(
-                        "(not (= _solution_hash {}))",
-                        hash_seed_data(&seed.data)
-                    );
+                    let blocking =
+                        format!("(not (= _solution_hash {}))", hash_seed_data(&seed.data));
                     augmented_constraints.push(blocking);
                     solutions.push(seed);
                 }
@@ -101,7 +99,9 @@ mod tests {
             Ok(Some(InputSeed::new(vec![*c as u8], SeedOrigin::Symbolic)))
         }
         fn set_logic(&mut self, _logic: SolverLogic) {}
-        fn name(&self) -> &str { "incrementing" }
+        fn name(&self) -> &str {
+            "incrementing"
+        }
     }
 
     #[test]
