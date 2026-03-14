@@ -62,6 +62,8 @@ pub enum FindingCategory {
     InsecureConfig,
     HardcodedSecret,
     LicenseViolation,
+    FeatureFlagHygiene,
+    ApiBreakingChange,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +91,10 @@ pub enum Evidence {
         input: Vec<u8>,
         expected: String,
         actual: String,
+    },
+    ReachabilityChain {
+        tool: String,
+        paths: Vec<String>,
     },
 }
 
