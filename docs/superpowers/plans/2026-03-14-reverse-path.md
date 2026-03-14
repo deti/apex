@@ -1,4 +1,4 @@
-<!-- status: FUTURE -->
+<!-- status: DONE -->
 # Reverse Path Analysis (`apex-reach`) Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use fleet crew agents (intelligence crew) for Tasks 1-6, security-detect crew for Task 7, platform crew for Task 8. Tasks 1-3 are sequential (build foundation), Tasks 4-6 are parallel (per-language extractors), Tasks 7-8 are parallel (integration). Steps use checkbox (`- [ ]`) syntax for tracking.
