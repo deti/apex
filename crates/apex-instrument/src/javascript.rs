@@ -444,7 +444,11 @@ impl Instrumentor for JavaScriptInstrumentor {
         };
 
         // --- Stage 5: Source map remapping ---
-        // TODO: Implement source map remapping
+        let (branch_ids, file_paths) = if env.is_typescript || env.source_maps {
+            crate::source_map::remap_source_maps(branch_ids, &file_paths, &target.root)
+        } else {
+            (branch_ids, file_paths)
+        };
 
         let work_dir = target.root.clone();
 

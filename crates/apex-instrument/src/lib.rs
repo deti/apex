@@ -9,6 +9,7 @@ pub mod llvm;
 pub mod python;
 pub mod rust_cov;
 pub mod rustc_wrapper;
+pub mod source_map;
 pub mod v8_coverage;
 pub mod wasm;
 
