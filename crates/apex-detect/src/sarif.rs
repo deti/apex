@@ -130,6 +130,10 @@ fn category_to_cwes(category: &FindingCategory) -> Vec<String> {
         FindingCategory::LicenseViolation => vec!["CWE-1357".into()],
         FindingCategory::FeatureFlagHygiene => vec!["CWE-1127".into()],
         FindingCategory::ApiBreakingChange => vec!["CWE-1105".into()],
+        FindingCategory::ApiSpecCoverage => vec!["CWE-1059".into()],
+        FindingCategory::ServiceDependency => vec!["CWE-1127".into()],
+        FindingCategory::SchemaMigrationRisk => vec!["CWE-1066".into()],
+        FindingCategory::TestDataQuality => vec!["CWE-1007".into()],
     }
 }
 

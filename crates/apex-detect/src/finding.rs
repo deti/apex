@@ -64,6 +64,10 @@ pub enum FindingCategory {
     LicenseViolation,
     FeatureFlagHygiene,
     ApiBreakingChange,
+    ApiSpecCoverage,
+    ServiceDependency,
+    SchemaMigrationRisk,
+    TestDataQuality,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

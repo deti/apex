@@ -2,7 +2,9 @@
 //!
 //! Detectors identify panic patterns, security vulnerabilities, and code quality issues.
 
+pub mod api_coverage;
 pub mod api_diff;
+pub mod compliance;
 pub mod config;
 pub mod context;
 pub mod cvss;
@@ -16,10 +18,12 @@ pub mod rules;
 pub mod sarif;
 pub mod sbom;
 pub mod sca;
+pub mod schema_check;
+pub mod service_map;
+pub mod test_data;
+pub mod threat;
 pub mod threat_model;
 pub mod vuln_pipeline;
-pub mod compliance;
-pub mod threat;
 
 pub use config::{DetectConfig, DetectMode};
 pub use context::AnalysisContext;
