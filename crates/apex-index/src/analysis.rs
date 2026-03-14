@@ -1218,7 +1218,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: HashSet::new(),
+                    test_names: Vec::new(),
                 },
             );
         }
@@ -1559,7 +1559,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: HashSet::new(),
+                    test_names: Vec::new(),
                 },
             );
         }
@@ -1968,7 +1968,7 @@ mod tests {
                 branch: b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: HashSet::new(),
+                test_names: Vec::new(),
             },
         );
         let index = BranchIndex {
@@ -2012,7 +2012,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: HashSet::new(),
+                    test_names: Vec::new(),
                 },
             );
         }
@@ -2110,7 +2110,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: HashSet::new(),
+                    test_names: Vec::new(),
                 },
             );
         }
@@ -2477,7 +2477,7 @@ mod tests {
                 branch: b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: HashSet::new(),
+                test_names: Vec::new(),
             },
         );
         let index = BranchIndex {
@@ -2518,7 +2518,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: HashSet::new(),
+                    test_names: Vec::new(),
                 },
             );
         }
@@ -2652,7 +2652,7 @@ mod tests {
                 branch: never_branch.clone(),
                 hit_count: 0,
                 test_count: 0,
-                test_names: HashSet::new(),
+                test_names: Vec::new(),
             },
         );
         let index = BranchIndex {
@@ -3044,7 +3044,7 @@ mod tests {
                     branch: b,
                     hit_count: 0,
                     test_count: 0,
-                    test_names: HashSet::new(),
+                    test_names: Vec::new(),
                 },
             );
         }
@@ -3081,7 +3081,7 @@ mod tests {
                 branch: b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: HashSet::new(),
+                test_names: Vec::new(),
             },
         );
         let index = BranchIndex {
@@ -3122,7 +3122,7 @@ mod tests {
                 branch: b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: HashSet::new(),
+                test_names: Vec::new(),
             },
         );
         let index = BranchIndex {
@@ -3164,7 +3164,7 @@ mod tests {
                 branch: b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: HashSet::new(),
+                test_names: Vec::new(),
             },
         );
         let index = BranchIndex {
@@ -3250,7 +3250,7 @@ mod tests {
                 branch: auth_b,
                 hit_count: 0,
                 test_count: 0,
-                test_names: HashSet::new(),
+                test_names: Vec::new(),
             },
         );
         let index = BranchIndex {
@@ -3327,7 +3327,7 @@ mod tests {
                 branch: auth_b,
                 hit_count: 1,
                 test_count: 1,
-                test_names: HashSet::from(["test_api_auth".into()]),
+                test_names: vec!["test_api_auth".into()],
             });
         let index = BranchIndex {
             profiles,
@@ -3631,7 +3631,7 @@ mod tests {
                 branch: dead,
                 hit_count: 0,
                 test_count: 0,
-                test_names: HashSet::new(),
+                test_names: Vec::new(),
             },
         );
         let index = BranchIndex {
@@ -4186,7 +4186,7 @@ mod tests {
                 branch: uncov,
                 hit_count: 0,
                 test_count: 0,
-                test_names: HashSet::new(),
+                test_names: Vec::new(),
             },
         );
         let index = BranchIndex {

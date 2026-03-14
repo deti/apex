@@ -26,6 +26,7 @@ toml = "0.8"
 tracing = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1"
+serde_yaml = "0.9"
 # Feature-gated: only with --features gnn or ml
 ort = { version = "2.0.0-rc.12", optional = true }
 

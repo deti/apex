@@ -104,6 +104,5 @@ Present findings as:
 1. **Summary table** -- per-file coverage %
 2. **Hot spots** -- files with lowest coverage that matter most
 3. **Root cause** -- why each area is uncovered (error path, untested feature, etc.)
-4. **Recommendations** -- specific test cases to write, ordered by impact
-
-**Important:** Coverage gaps are *uncovered branches* (if/else arms, match arms, loop entries) — NOT bugs or security findings. Report them clearly as "N uncovered branches" to avoid confusion with actual defects.
+4. **Bug inventory** -- if bugs were found, list them by class (crash > timeout > oom_kill > assertion_failure), note locations and reproducer seeds
+5. **Recommendations** -- specific test cases to write, ordered by impact; for found bugs, recommend fixing them before pursuing more coverage

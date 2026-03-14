@@ -16,6 +16,7 @@ pub mod junit;
 pub mod llm;
 pub mod mutation_hint;
 pub mod prompt_registry;
+pub mod property;
 pub mod python;
 pub mod rust;
 pub mod segment;
@@ -36,6 +37,7 @@ pub use llm::{
 };
 pub use mutation_hint::{format_hints_block, MutationHint};
 pub use prompt_registry::PromptRegistry;
+pub use property::{InferredProperty, PropertyInferer};
 pub use python::PytestSynthesizer;
 pub use rust::CargoTestSynthesizer;
 pub use segment::{clean_error_output, extract_segment, CodeSegment};

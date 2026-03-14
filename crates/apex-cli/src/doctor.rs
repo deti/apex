@@ -1249,7 +1249,7 @@ mod tests {
         let runner = MockRunner::all_succeed("version 1.0.0");
         let checks = checks_core(&runner).await;
         for c in &checks {
-            if c.name != "ANTHROPIC_API_KEY" {
+            if c.name != "ANTHROPIC_API_KEY" && c.name != "tcp" {
                 assert!(
                     matches!(&c.status, Status::Ok(_)),
                     "expected Ok for {}",

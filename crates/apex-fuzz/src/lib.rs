@@ -18,11 +18,13 @@ pub mod qemu_backend;
 pub mod scheduler;
 pub mod seedmind;
 pub mod semantic_feedback;
+pub mod shrinker;
 pub mod thompson;
 pub mod traits;
 
 pub use de_scheduler::DeScheduler;
 pub use semantic_feedback::{SemFeedbackScore, SemanticFeedback};
+pub use shrinker::BinaryShrinker;
 pub use thompson::ThompsonScheduler;
 
 use crate::corpus::Corpus;

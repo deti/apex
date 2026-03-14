@@ -151,6 +151,12 @@ fn select_coverage_tool(env: &JsEnvironment, target: &Path) -> CoverageToolConfi
                 }
             }
         }
+        JsRuntime::Deno => CoverageToolConfig {
+            tool: CoverageTool::C8, // Deno uses V8 coverage format like c8
+            command: vec!["deno".into(), "test".into(), "--coverage".into()],
+            output_path: CoverageOutput::Stdout,
+            format: CoverageFormat::V8,
+        },
     }
 }
 

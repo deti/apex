@@ -9,6 +9,7 @@ description = "Code Property Graph (AST + CFG + REACHING_DEF) with taint analysi
 
 [dependencies]
 anyhow = { workspace = true }
+regex = "1"
 serde = { workspace = true }
 toml = "0.8"
 

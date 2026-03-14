@@ -4,6 +4,7 @@ use std::path::Path;
 pub enum JsRuntime {
     Node,
     Bun,
+    Deno,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +13,7 @@ pub enum PkgManager {
     Yarn,
     Pnpm,
     Bun,
+    Deno,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +22,7 @@ pub enum JsTestRunner {
     Mocha,
     Vitest,
     BunTest,
+    DenoTest,
     NpmScript,
 }
 
@@ -80,6 +83,8 @@ impl JsEnvironment {
 fn detect_runtime(target: &Path) -> JsRuntime {
     if target.join("bun.lockb").exists() || target.join("bunfig.toml").exists() {
         JsRuntime::Bun
+    } else if target.join("deno.json").exists() || target.join("deno.jsonc").exists() {
+        JsRuntime::Deno
     } else {
         JsRuntime::Node
     }
@@ -88,6 +93,9 @@ fn detect_runtime(target: &Path) -> JsRuntime {
 fn detect_pkg_manager(target: &Path, runtime: JsRuntime) -> PkgManager {
     if runtime == JsRuntime::Bun {
         return PkgManager::Bun;
+    }
+    if runtime == JsRuntime::Deno {
+        return PkgManager::Deno;
     }
     if target.join("yarn.lock").exists() {
         return PkgManager::Yarn;
@@ -102,7 +110,16 @@ fn detect_pkg_manager(target: &Path, runtime: JsRuntime) -> PkgManager {
 pub fn detect_test_runner(target: &Path) -> JsTestRunner {
     let pkg_content = std::fs::read_to_string(target.join("package.json")).unwrap_or_default();
 
-    if detect_runtime(target) == JsRuntime::Bun {
+    let runtime = detect_runtime(target);
+
+    if runtime == JsRuntime::Deno {
+        if pkg_content.contains("\"vitest\"") {
+            return JsTestRunner::Vitest;
+        }
+        return JsTestRunner::DenoTest;
+    }
+
+    if runtime == JsRuntime::Bun {
         if pkg_content.contains("\"vitest\"") {
             return JsTestRunner::Vitest;
         }
@@ -198,6 +215,7 @@ pub fn test_command(env: &JsEnvironment) -> (String, Vec<String>) {
             vec!["vitest".to_string(), "run".to_string()],
         ),
         JsTestRunner::BunTest => ("bun".to_string(), vec!["test".to_string()]),
+        JsTestRunner::DenoTest => ("deno".to_string(), vec!["test".to_string()]),
         JsTestRunner::NpmScript => ("npm".to_string(), vec!["test".to_string()]),
     }
 }
@@ -209,6 +227,7 @@ pub fn install_command(env: &JsEnvironment) -> &'static str {
         PkgManager::Yarn => "yarn",
         PkgManager::Pnpm => "pnpm",
         PkgManager::Bun => "bun",
+        PkgManager::Deno => "deno",
     }
 }
 
@@ -427,6 +446,58 @@ mod tests {
                 monorepo: None,
             }),
             "bun"
+        );
+    }
+
+    #[test]
+    fn detect_deno_runtime() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name": "deno-proj"}"#).unwrap();
+        std::fs::write(dir.path().join("deno.json"), "{}").unwrap();
+        let env = JsEnvironment::detect(dir.path()).unwrap();
+        assert_eq!(env.runtime, JsRuntime::Deno);
+        assert_eq!(env.pkg_manager, PkgManager::Deno);
+        assert_eq!(env.test_runner, JsTestRunner::DenoTest);
+    }
+
+    #[test]
+    fn detect_deno_runtime_jsonc() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name": "deno-proj"}"#).unwrap();
+        std::fs::write(dir.path().join("deno.jsonc"), "{}").unwrap();
+        let env = JsEnvironment::detect(dir.path()).unwrap();
+        assert_eq!(env.runtime, JsRuntime::Deno);
+    }
+
+    #[test]
+    fn test_command_deno() {
+        let env = JsEnvironment {
+            runtime: JsRuntime::Deno,
+            pkg_manager: PkgManager::Deno,
+            test_runner: JsTestRunner::DenoTest,
+            module_system: ModuleSystem::ESM,
+            is_typescript: false,
+            source_maps: false,
+            monorepo: None,
+        };
+        let (bin, args) = test_command(&env);
+        assert_eq!(bin, "deno");
+        assert_eq!(args, vec!["test"]);
+    }
+
+    #[test]
+    fn install_command_deno() {
+        assert_eq!(
+            install_command(&JsEnvironment {
+                runtime: JsRuntime::Deno,
+                pkg_manager: PkgManager::Deno,
+                test_runner: JsTestRunner::DenoTest,
+                module_system: ModuleSystem::ESM,
+                is_typescript: false,
+                source_maps: false,
+                monorepo: None,
+            }),
+            "deno"
         );
     }
 }

@@ -31,12 +31,15 @@ impl<R: CommandRunner> JavaScriptRunner<R> {
     /// Returns (binary, args).
     fn detect_test_runner(target: &Path) -> (String, Vec<String>) {
         let runner = js_env::detect_test_runner(target);
+        let runtime = if target.join("bun.lockb").exists() || target.join("bunfig.toml").exists() {
+            js_env::JsRuntime::Bun
+        } else if target.join("deno.json").exists() || target.join("deno.jsonc").exists() {
+            js_env::JsRuntime::Deno
+        } else {
+            js_env::JsRuntime::Node
+        };
         let env = JsEnvironment {
-            runtime: if target.join("bun.lockb").exists() || target.join("bunfig.toml").exists() {
-                js_env::JsRuntime::Bun
-            } else {
-                js_env::JsRuntime::Node
-            },
+            runtime,
             pkg_manager: js_env::PkgManager::Npm,
             test_runner: runner,
             module_system: js_env::ModuleSystem::CommonJS,
@@ -55,6 +58,9 @@ impl<R: CommandRunner> JavaScriptRunner<R> {
         // Fallback when there is no package.json: inspect lockfiles directly.
         if target.join("bun.lockb").exists() || target.join("bunfig.toml").exists() {
             return "bun";
+        }
+        if target.join("deno.json").exists() || target.join("deno.jsonc").exists() {
+            return "deno";
         }
         if target.join("yarn.lock").exists() {
             return "yarn";
@@ -80,6 +86,8 @@ impl<R: CommandRunner> LanguageRunner for JavaScriptRunner<R> {
 
     fn detect(&self, target: &Path) -> bool {
         target.join("package.json").exists()
+            || target.join("deno.json").exists()
+            || target.join("deno.jsonc").exists()
     }
 
     async fn install_deps(&self, target: &Path) -> Result<()> {
@@ -743,5 +751,42 @@ mod tests {
             JavaScriptRunner::<RealCommandRunner>::detect_package_manager(dir.path()),
             "bun"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Task 12: Deno detection
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn detect_deno_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("deno.json"), "{}").unwrap();
+        assert!(JavaScriptRunner::new().detect(dir.path()));
+    }
+
+    #[test]
+    fn detect_deno_project_jsonc() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("deno.jsonc"), "{}").unwrap();
+        assert!(JavaScriptRunner::new().detect(dir.path()));
+    }
+
+    #[test]
+    fn detect_package_manager_deno() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("deno.json"), "{}").unwrap();
+        assert_eq!(
+            JavaScriptRunner::<RealCommandRunner>::detect_package_manager(dir.path()),
+            "deno"
+        );
+    }
+
+    #[test]
+    fn detect_test_runner_deno() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("deno.json"), "{}").unwrap();
+        let (bin, args) = JavaScriptRunner::<RealCommandRunner>::detect_test_runner(dir.path());
+        assert_eq!(bin, "deno");
+        assert_eq!(args, vec!["test"]);
     }
 }

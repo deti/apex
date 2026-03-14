@@ -34,33 +34,36 @@ impl ApexConfig {
 
     /// Parse config from a TOML string.
     pub fn parse_toml(s: &str) -> crate::Result<Self> {
-        toml::from_str(s).map_err(|e| crate::ApexError::Config(format!("invalid TOML: {e}")))
+        let cfg: Self =
+            toml::from_str(s).map_err(|e| crate::ApexError::Config(format!("invalid TOML: {e}")))?;
+        Ok(cfg.validate())
+    }
+
+    /// Clamp coverage fields to valid 0.0–1.0 range.
+    fn validate(mut self) -> Self {
+        self.coverage.target = self.coverage.target.clamp(0.0, 1.0);
+        self.coverage.min_ratchet = self.coverage.min_ratchet.clamp(0.0, 1.0);
+        self
     }
 
     /// Try to discover and load `apex.toml` from the given directory (or parents).
-    /// Returns the default config if no file is found.
-    pub fn discover(start_dir: &Path) -> Self {
+    /// Returns the default config if no file is found, or an error if the file
+    /// exists but cannot be parsed.
+    pub fn discover(start_dir: &Path) -> crate::Result<Self> {
         let mut dir = start_dir;
         loop {
             let candidate = dir.join("apex.toml");
             if candidate.is_file() {
-                match Self::from_file(&candidate) {
-                    Ok(cfg) => {
-                        tracing::info!(path = %candidate.display(), "loaded apex.toml");
-                        return cfg;
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed to parse apex.toml; using defaults");
-                        return Self::default();
-                    }
-                }
+                let cfg = Self::from_file(&candidate)?;
+                tracing::info!(path = %candidate.display(), "loaded apex.toml");
+                return Ok(cfg);
             }
             match dir.parent() {
                 Some(parent) => dir = parent,
                 None => break,
             }
         }
-        Self::default()
+        Ok(Self::default())
     }
 }
 
@@ -75,6 +78,23 @@ pub struct CoverageConfig {
     pub target: f64,
     /// Minimum coverage for `apex ratchet` CI gate. Default: 0.8.
     pub min_ratchet: f64,
+    /// Directory name patterns to omit when collecting source files.
+    pub omit_patterns: Vec<String>,
+}
+
+impl CoverageConfig {
+    /// Default directory omit patterns.
+    pub fn default_omit_patterns() -> Vec<String> {
+        vec![
+            "target".into(),
+            "node_modules".into(),
+            "__pycache__".into(),
+            ".venv".into(),
+            "venv".into(),
+            "dist".into(),
+            "build".into(),
+        ]
+    }
 }
 
 impl Default for CoverageConfig {
@@ -82,6 +102,7 @@ impl Default for CoverageConfig {
         CoverageConfig {
             target: 1.0,
             min_ratchet: 0.8,
+            omit_patterns: Self::default_omit_patterns(),
         }
     }
 }
@@ -441,7 +462,7 @@ format = "json"
 
     #[test]
     fn discover_returns_default_when_no_file() {
-        let cfg = ApexConfig::discover(Path::new("/nonexistent/path"));
+        let cfg = ApexConfig::discover(Path::new("/nonexistent/path")).unwrap();
         assert_eq!(cfg.fuzz.corpus_max, 10_000);
     }
 
@@ -494,19 +515,18 @@ alpha = 0.3
         let dir = std::env::temp_dir().join("apex_test_discover_find");
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("apex.toml"), "[coverage]\ntarget = 0.42\n").unwrap();
-        let cfg = ApexConfig::discover(&dir);
+        let cfg = ApexConfig::discover(&dir).unwrap();
         assert_eq!(cfg.coverage.target, 0.42);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn discover_with_invalid_file_returns_defaults() {
-        let dir = std::env::temp_dir().join("apex_test_discover_invalid");
+    fn discover_with_invalid_file_returns_error() {
+        let dir = std::env::temp_dir().join("apex_test_discover_invalid_err");
         let _ = std::fs::create_dir_all(&dir);
         std::fs::write(dir.join("apex.toml"), "this is not valid toml [[[").unwrap();
-        let cfg = ApexConfig::discover(&dir);
-        // Should return defaults when parse fails
-        assert_eq!(cfg.fuzz.corpus_max, 10_000);
+        let result = ApexConfig::discover(&dir);
+        assert!(result.is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -551,7 +571,7 @@ per_detector_timeout_secs = 30
         let child = base.join("subdir");
         let _ = std::fs::create_dir_all(&child);
         std::fs::write(base.join("apex.toml"), "[coverage]\ntarget = 0.33\n").unwrap();
-        let cfg = ApexConfig::discover(&child);
+        let cfg = ApexConfig::discover(&child).unwrap();
         assert!((cfg.coverage.target - 0.33).abs() < f64::EPSILON);
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -616,5 +636,54 @@ type = "ci-pipeline"
         assert!(cfg.threat_model.model_type.is_none());
         assert!(cfg.threat_model.trusted_sources.is_empty());
         assert!(cfg.threat_model.untrusted_sources.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage target bound checking (Task 7)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn coverage_target_clamped_to_valid_range() {
+        let toml = "[coverage]\ntarget = 2.0\n";
+        let cfg = ApexConfig::parse_toml(toml).unwrap();
+        assert_eq!(cfg.coverage.target, 1.0);
+    }
+
+    #[test]
+    fn coverage_target_negative_clamped() {
+        let toml = "[coverage]\ntarget = -0.5\n";
+        let cfg = ApexConfig::parse_toml(toml).unwrap();
+        assert_eq!(cfg.coverage.target, 0.0);
+    }
+
+    #[test]
+    fn min_ratchet_clamped() {
+        let toml = "[coverage]\nmin_ratchet = 1.5\n";
+        let cfg = ApexConfig::parse_toml(toml).unwrap();
+        assert_eq!(cfg.coverage.min_ratchet, 1.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Omit patterns (Task 11)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_omit_patterns() {
+        let toml = r#"
+[coverage]
+omit_patterns = ["vendor", "third_party"]
+"#;
+        let cfg = ApexConfig::parse_toml(toml).unwrap();
+        assert_eq!(cfg.coverage.omit_patterns, vec!["vendor", "third_party"]);
+    }
+
+    #[test]
+    fn default_omit_patterns() {
+        let cfg = ApexConfig::default();
+        assert!(cfg.coverage.omit_patterns.contains(&"node_modules".into()));
+        assert!(cfg.coverage.omit_patterns.contains(&"__pycache__".into()));
+        assert!(cfg.coverage.omit_patterns.contains(&"target".into()));
+        assert!(cfg.coverage.omit_patterns.contains(&"dist".into()));
+        assert!(cfg.coverage.omit_patterns.contains(&"build".into()));
     }
 }

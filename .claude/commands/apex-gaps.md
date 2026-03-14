@@ -1,7 +1,6 @@
 # APEX Gaps
 
-List **uncovered branches** (if/else arms, match arms, loop entries) and explain what tests would cover them.
-These are NOT bugs or security findings — they are source code paths that no test currently exercises.
+List uncovered code regions and explain what tests would cover them.
 
 ## Usage
 ```

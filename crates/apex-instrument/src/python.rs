@@ -22,8 +22,22 @@ const INSTRUMENT_SCRIPT: &str = include_str!("scripts/apex_instrument.py");
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
+struct CoverageMeta {
+    version: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct ApexCoverageJson {
+    #[serde(default)]
+    meta: Option<CoverageMeta>,
     files: HashMap<String, FileData>,
+}
+
+impl ApexCoverageJson {
+    /// Return the coverage.py version from the `meta` block, if present.
+    fn meta_version(&self) -> Option<&str> {
+        self.meta.as_ref().and_then(|m| m.version.as_deref())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +89,12 @@ impl PythonInstrumentor {
             .map_err(|e| ApexError::Instrumentation(e.to_string()))?;
         let data: ApexCoverageJson = serde_json::from_str(&content)
             .map_err(|e| ApexError::Instrumentation(format!("parse coverage JSON: {e}")))?;
+
+        if let Some(v) = data.meta_version() {
+            debug!(version = %v, "coverage.py JSON version");
+        } else {
+            warn!("coverage JSON has no version metadata");
+        }
 
         self.branch_ids.clear();
         self.executed_branch_ids.clear();
@@ -857,6 +877,44 @@ mod tests {
             "expected '-q' in args: {:?}",
             *args
         );
+    }
+
+    #[test]
+    fn parse_coverage_json_warns_on_missing_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = r#"{"files": {}}"#;
+        std::fs::write(&json_path, json).unwrap();
+
+        let mut inst = PythonInstrumentor::new();
+        inst.parse_coverage_json(&json_path, repo_root).unwrap();
+
+        // Parse the JSON directly to verify meta_version is None
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        assert!(data.meta_version().is_none());
+    }
+
+    #[test]
+    fn parse_coverage_json_with_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let json_path = repo_root.join("cov.json");
+        let json = r#"{"meta": {"version": "7.4.0"}, "files": {}}"#;
+        std::fs::write(&json_path, json).unwrap();
+
+        let mut inst = PythonInstrumentor::new();
+        inst.parse_coverage_json(&json_path, repo_root).unwrap();
+
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        assert_eq!(data.meta_version(), Some("7.4.0"));
+    }
+
+    #[test]
+    fn parse_coverage_json_with_meta_but_no_version() {
+        let json = r#"{"meta": {}, "files": {}}"#;
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        assert!(data.meta_version().is_none());
     }
 
     #[test]

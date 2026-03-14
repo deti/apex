@@ -98,6 +98,89 @@ impl Strategy for DrillerStrategy {
     }
 }
 
+/// Detects coverage plateaus to trigger driller escalation.
+pub struct StuckDetector {
+    /// How many iterations to look back.
+    plateau_window: usize,
+    /// Coverage count below which we consider stuck.
+    threshold: usize,
+    /// Recent coverage observations: (iteration, total_covered).
+    history: Vec<(u64, usize)>,
+}
+
+impl StuckDetector {
+    pub fn new(plateau_window: usize, threshold: usize) -> Self {
+        Self {
+            plateau_window,
+            threshold,
+            history: Vec::new(),
+        }
+    }
+
+    /// Record an observation. Call each iteration.
+    pub fn record(&mut self, iteration: u64, covered: usize) {
+        self.history.push((iteration, covered));
+    }
+
+    /// True if coverage hasn't grown by more than `threshold` over the last
+    /// `plateau_window` observations.
+    pub fn is_stuck(&self) -> bool {
+        if self.history.len() < self.plateau_window {
+            return false;
+        }
+        let window = &self.history[self.history.len() - self.plateau_window..];
+        let first = window[0].1;
+        let last = window[window.len() - 1].1;
+        let growth = last.saturating_sub(first);
+        growth <= self.threshold
+    }
+
+    /// Reset after escalation succeeds (new coverage found).
+    pub fn reset(&mut self) {
+        self.history.clear();
+    }
+}
+
+/// Wraps StuckDetector + DrillerStrategy for escalation decisions.
+pub struct DrillerEscalation {
+    detector: StuckDetector,
+    strategy: Arc<Mutex<DrillerStrategy>>,
+}
+
+impl DrillerEscalation {
+    pub fn new(
+        strategy: Arc<Mutex<DrillerStrategy>>,
+        plateau_window: usize,
+        threshold: usize,
+    ) -> Self {
+        Self {
+            detector: StuckDetector::new(plateau_window, threshold),
+            strategy,
+        }
+    }
+
+    /// Record coverage observation (delegates to StuckDetector).
+    pub fn record(&mut self, iteration: u64, covered: usize) {
+        self.detector.record(iteration, covered);
+    }
+
+    /// Should we escalate to symbolic execution?
+    pub fn should_escalate(&self) -> bool {
+        self.detector.is_stuck()
+    }
+
+    /// Perform escalation: use DrillerStrategy to generate constraint-solving seeds.
+    #[allow(clippy::await_holding_lock)]
+    pub async fn escalate(&mut self, ctx: &ExplorationContext) -> Result<Vec<InputSeed>> {
+        let strategy = self.strategy.lock().unwrap_or_else(|e| e.into_inner());
+        let seeds = strategy.suggest_inputs(ctx).await?;
+        if !seeds.is_empty() {
+            self.detector.reset();
+        }
+        Ok(seeds)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -950,5 +1033,169 @@ mod tests {
         let ctx = make_ctx(vec![b2, b4]);
         let inputs = driller.suggest_inputs(&ctx).await.unwrap();
         assert_eq!(inputs.len(), 2);
+    }
+
+    // ------------------------------------------------------------------
+    // StuckDetector tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn stuck_detector_not_stuck_initially() {
+        let d = StuckDetector::new(5, 0);
+        assert!(!d.is_stuck());
+    }
+
+    #[test]
+    fn stuck_detector_becomes_stuck_on_plateau() {
+        let mut d = StuckDetector::new(5, 0);
+        for i in 0..5 {
+            d.record(i, 100); // same coverage each time
+        }
+        assert!(d.is_stuck());
+    }
+
+    #[test]
+    fn stuck_detector_not_stuck_when_growing() {
+        let mut d = StuckDetector::new(5, 0);
+        for i in 0..5 {
+            d.record(i, i as usize * 10);
+        }
+        assert!(!d.is_stuck());
+    }
+
+    #[test]
+    fn stuck_detector_reset_clears_history() {
+        let mut d = StuckDetector::new(5, 0);
+        for i in 0..5 {
+            d.record(i, 100);
+        }
+        assert!(d.is_stuck());
+        d.reset();
+        assert!(!d.is_stuck());
+    }
+
+    #[test]
+    fn stuck_detector_threshold_matters() {
+        let mut d = StuckDetector::new(5, 2);
+        // Growth of 2 within threshold → still stuck
+        d.record(0, 100);
+        d.record(1, 100);
+        d.record(2, 101);
+        d.record(3, 101);
+        d.record(4, 102);
+        assert!(d.is_stuck());
+    }
+
+    #[test]
+    fn stuck_detector_growth_beyond_threshold() {
+        let mut d = StuckDetector::new(5, 2);
+        // Growth of 3 exceeds threshold → not stuck
+        d.record(0, 100);
+        d.record(1, 100);
+        d.record(2, 101);
+        d.record(3, 102);
+        d.record(4, 103);
+        assert!(!d.is_stuck());
+    }
+
+    #[test]
+    fn stuck_detector_empty_window() {
+        // Fewer observations than plateau_window → not stuck
+        let mut d = StuckDetector::new(10, 0);
+        for i in 0..5 {
+            d.record(i, 50);
+        }
+        assert!(!d.is_stuck());
+    }
+
+    #[test]
+    fn stuck_detector_partial_growth() {
+        // Some growth early but last entries flat → stuck
+        let mut d = StuckDetector::new(5, 0);
+        d.record(0, 100);
+        d.record(1, 110);
+        d.record(2, 120);
+        d.record(3, 120);
+        d.record(4, 120);
+        // Window: [100, 110, 120, 120, 120] → growth = 120-100 = 20 > 0 → not stuck
+        // But if we add more flat entries, the window shifts
+        d.record(5, 120);
+        d.record(6, 120);
+        // Window of last 5: [120, 120, 120, 120, 120] → growth = 0 → stuck
+        assert!(d.is_stuck());
+    }
+
+    // ------------------------------------------------------------------
+    // DrillerEscalation tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn escalation_not_stuck_initially() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let strategy = Arc::new(Mutex::new(DrillerStrategy::new(solver, 10)));
+        let esc = DrillerEscalation::new(strategy, 5, 0);
+        assert!(!esc.should_escalate());
+    }
+
+    #[test]
+    fn escalation_delegates_to_stuck_detector() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let strategy = Arc::new(Mutex::new(DrillerStrategy::new(solver, 10)));
+        let mut esc = DrillerEscalation::new(strategy, 3, 0);
+        for i in 0..3 {
+            esc.record(i, 50);
+        }
+        assert!(esc.should_escalate());
+    }
+
+    #[test]
+    fn escalation_record_forwards_to_detector() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let strategy = Arc::new(Mutex::new(DrillerStrategy::new(solver, 10)));
+        let mut esc = DrillerEscalation::new(strategy, 5, 0);
+        // Record fewer than window → not stuck
+        esc.record(0, 10);
+        esc.record(1, 10);
+        assert!(!esc.should_escalate());
+    }
+
+    #[test]
+    fn escalation_becomes_stuck() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let strategy = Arc::new(Mutex::new(DrillerStrategy::new(solver, 10)));
+        let mut esc = DrillerEscalation::new(strategy, 4, 0);
+        for i in 0..4 {
+            esc.record(i, 100);
+        }
+        assert!(esc.should_escalate());
+    }
+
+    #[tokio::test]
+    async fn escalation_resets_on_successful_escalate() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let strategy = Arc::new(Mutex::new(DrillerStrategy::new(solver, 10)));
+
+        // Record a constraint so the solver returns seeds
+        {
+            let s = strategy.lock().unwrap();
+            let branch = BranchId::new(1, 10, 0, 0);
+            s.record_constraints(vec![PathConstraint {
+                branch,
+                smtlib2: "(assert true)".into(),
+                direction_taken: true,
+            }]);
+        }
+
+        let mut esc = DrillerEscalation::new(strategy, 3, 0);
+        for i in 0..3 {
+            esc.record(i, 50);
+        }
+        assert!(esc.should_escalate());
+
+        let ctx = make_ctx(vec![BranchId::new(1, 10, 0, 0)]);
+        let seeds = esc.escalate(&ctx).await.unwrap();
+        assert!(!seeds.is_empty());
+        // After successful escalation, detector is reset
+        assert!(!esc.should_escalate());
     }
 }

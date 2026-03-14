@@ -18,6 +18,8 @@ pub mod sbom;
 pub mod sca;
 pub mod threat_model;
 pub mod vuln_pipeline;
+pub mod compliance;
+pub mod threat;
 
 pub use config::{DetectConfig, DetectMode};
 pub use context::AnalysisContext;

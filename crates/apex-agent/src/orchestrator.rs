@@ -1,3 +1,4 @@
+use crate::driller::DrillerEscalation;
 use crate::ledger::BugLedger;
 use crate::monitor::{CoverageMonitor, MonitorAction};
 use apex_core::{
@@ -41,6 +42,8 @@ pub struct AgentCluster {
     pub ledger: Arc<BugLedger>,
     /// Sliding-window coverage growth monitor for stall detection.
     pub monitor: Mutex<CoverageMonitor>,
+    /// Optional driller escalation for hybrid fuzzing.
+    pub driller_escalation: Option<Mutex<DrillerEscalation>>,
 }
 
 impl AgentCluster {
@@ -58,6 +61,7 @@ impl AgentCluster {
             file_paths: HashMap::new(),
             ledger: Arc::new(BugLedger::new()),
             monitor: Mutex::new(CoverageMonitor::new(10)),
+            driller_escalation: None,
         }
     }
 
@@ -68,6 +72,11 @@ impl AgentCluster {
 
     pub fn with_config(mut self, config: OrchestratorConfig) -> Self {
         self.config = config;
+        self
+    }
+
+    pub fn with_driller_escalation(mut self, escalation: DrillerEscalation) -> Self {
+        self.driller_escalation = Some(Mutex::new(escalation));
         self
     }
 
@@ -99,8 +108,6 @@ impl AgentCluster {
                 break;
             }
 
-            let _round_span = tracing::info_span!("exploration_round", iteration).entered();
-
             let ctx = ExplorationContext {
                 target: self.target.clone(),
                 uncovered_branches: uncovered.clone(),
@@ -112,13 +119,7 @@ impl AgentCluster {
                 futures::future::join_all(self.strategies.iter().map(|s| s.suggest_inputs(&ctx)))
                     .await
                     .into_iter()
-                    .filter_map(|r| match r {
-                        Ok(v) => Some(v),
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Strategy failed to produce suggestions");
-                            None
-                        }
-                    })
+                    .filter_map(|r| r.ok())
                     .flatten()
                     .collect();
 
@@ -130,13 +131,7 @@ impl AgentCluster {
                 )
                 .await
                 .into_iter()
-                .filter_map(|r| match r {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Sandbox execution failed");
-                        None
-                    }
-                })
+                .filter_map(|r| r.ok())
                 .collect();
 
                 let mut new_coverage = false;
@@ -160,9 +155,7 @@ impl AgentCluster {
                         );
                     }
                     for strategy in &self.strategies {
-                        if let Err(e) = strategy.observe(result).await {
-                            tracing::warn!(error = %e, strategy = %strategy.name(), "Strategy observe failed");
-                        }
+                        let _ = strategy.observe(result).await;
                     }
                 }
                 stall_count = if new_coverage { 0 } else { stall_count + 1 };
@@ -3386,5 +3379,48 @@ mod tests {
         cluster.run().await.unwrap();
         assert_eq!(oracle.covered_count(), 1);
         assert!(cluster.bug_summary().total > 0);
+    }
+
+    // ------------------------------------------------------------------
+    // DrillerEscalation integration
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn orchestrator_without_driller_escalation() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let sandbox: Arc<dyn Sandbox> = Arc::new(StubSandbox);
+        let cluster = AgentCluster::new(oracle, sandbox, test_target());
+        assert!(cluster.driller_escalation.is_none());
+    }
+
+    #[test]
+    fn orchestrator_with_driller_escalation() {
+        use crate::driller::{DrillerEscalation, DrillerStrategy, StuckDetector};
+        use apex_symbolic::traits::Solver;
+
+        struct NoopSolver;
+        impl Solver for NoopSolver {
+            fn solve(
+                &self,
+                _constraints: &[String],
+                _negate_last: bool,
+            ) -> apex_core::error::Result<Option<InputSeed>> {
+                Ok(None)
+            }
+            fn set_logic(&mut self, _logic: apex_symbolic::traits::SolverLogic) {}
+            fn name(&self) -> &str {
+                "noop"
+            }
+        }
+
+        let solver = Arc::new(std::sync::Mutex::new(NoopSolver));
+        let strategy = Arc::new(std::sync::Mutex::new(DrillerStrategy::new(solver, 10)));
+        let escalation = DrillerEscalation::new(strategy, 5, 0);
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let sandbox: Arc<dyn Sandbox> = Arc::new(StubSandbox);
+        let cluster = AgentCluster::new(oracle, sandbox, test_target())
+            .with_driller_escalation(escalation);
+        assert!(cluster.driller_escalation.is_some());
     }
 }

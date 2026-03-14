@@ -6,6 +6,7 @@
 //! This library crate exposes [`Cli`], [`Commands`], and [`run_cli`] so that
 //! integration tests can exercise CLI logic without spawning a subprocess.
 
+pub mod attest;
 pub mod doctor;
 pub mod fuzz;
 
@@ -69,8 +70,6 @@ pub enum Commands {
     TestOptimize(TestOptimizeArgs),
     /// Order tests by relevance to changed files.
     TestPrioritize(TestPrioritizeArgs),
-    /// Identify tests affected by changed source lines (test impact analysis).
-    TestImpact(TestImpactArgs),
     /// Detect semantically dead code via branch analysis.
     DeadCode(DeadCodeArgs),
     /// Runtime-prioritized lint findings.
@@ -184,9 +183,9 @@ pub struct AuditArgs {
     #[arg(long, short)]
     pub output: Option<PathBuf>,
 
-    /// Detection mode: full (all detectors) or fast (skip subprocess detectors).
-    #[arg(long, default_value = "full")]
-    pub detect_mode: String,
+    /// ASVS compliance level: L1, L2, or L3.
+    #[arg(long)]
+    pub compliance_level: Option<String>,
 }
 
 #[derive(Parser)]
@@ -222,17 +221,6 @@ pub struct TestPrioritizeArgs {
     pub target: PathBuf,
 
     /// Comma-separated list of changed files (relative to target root).
-    #[arg(long, value_delimiter = ',')]
-    pub changed_files: Vec<String>,
-}
-
-#[derive(Parser)]
-pub struct TestImpactArgs {
-    /// Path to the target repository (must have .apex/index.json).
-    #[arg(long, short)]
-    pub target: PathBuf,
-
-    /// Changed file paths (relative to target root), comma-separated.
     #[arg(long, value_delimiter = ',')]
     pub changed_files: Vec<String>,
 }
@@ -515,7 +503,6 @@ pub async fn run_cli(cli: Cli, cfg: &ApexConfig) -> Result<()> {
         Commands::Index(args) => run_index(args).await,
         Commands::TestOptimize(args) => run_test_optimize(args).await,
         Commands::TestPrioritize(args) => run_test_prioritize(args).await,
-        Commands::TestImpact(args) => run_test_impact(args).await,
         Commands::DeadCode(args) => run_dead_code(args).await,
         Commands::Lint(args) => run_lint(args, cfg).await,
         Commands::Diff(args) => run_diff(args).await,
@@ -556,16 +543,12 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
 
     // 1. Install deps
     if !args.no_install {
-        let _span = tracing::info_span!("install_deps", lang = %lang).entered();
         install_deps(lang, &target_path).await?;
     }
 
     // 2. Instrument -> populate oracle
     let oracle = Arc::new(CoverageOracle::new());
-    let instrumented = {
-        let _span = tracing::info_span!("instrument", lang = %lang, target = %target_path.display()).entered();
-        instrument(lang, &target_path, &oracle).await?
-    };
+    let instrumented = instrument(lang, &target_path, &oracle).await?;
 
     // 2b. For fuzz/driller/all/agent strategies on Rust targets, compile binary
     //     with SanitizerCoverage so the SHM feedback loop works.
@@ -578,8 +561,6 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
     }
 
     // 3. Strategy dispatch
-    {
-    let _span = tracing::info_span!("explore", strategy = %args.strategy).entered();
     match args.strategy.as_str() {
         "fuzz" => {
             let cmd = fuzz_command(&args, &target_path);
@@ -623,8 +604,20 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
             )
             .await?;
         }
-        // "all", "agent", and any unknown strategy use the AgentCluster orchestrator.
-        _ => {
+        // "all" and "agent" use the AgentCluster orchestrator.
+        "all" | "agent" => {
+            run_agent_cluster(
+                Arc::clone(&oracle),
+                &instrumented,
+                coverage_target,
+                fuzz_iters,
+                &args,
+                cfg,
+            )
+            .await?;
+        }
+        unknown => {
+            warn!(strategy = %unknown, "Unknown strategy — falling back to agent orchestrator");
             run_agent_cluster(
                 Arc::clone(&oracle),
                 &instrumented,
@@ -636,7 +629,6 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
             .await?;
         }
     }
-    } // explore span
 
     // 4. Run detection pipeline for agent/all strategies (all output formats)
     let uses_agent = matches!(args.strategy.as_str(), "agent" | "all")
@@ -677,7 +669,6 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         };
 
         let pipeline = apex_detect::DetectorPipeline::from_config(&detect_cfg, lang);
-        let _span = tracing::info_span!("detect").entered();
         Some(pipeline.run_all(&detect_ctx).await)
     } else {
         None
@@ -904,6 +895,7 @@ async fn instrument(
         Language::Wasm => WasmInstrumentor::new().instrument(&target).await?,
         Language::Ruby => {
             // Ruby instrumentation not yet implemented -- return empty target.
+            warn!("Ruby instrumentation is not yet implemented — returning empty coverage");
             apex_core::types::InstrumentedTarget {
                 target: target.clone(),
                 branch_ids: Vec::new(),
@@ -1255,9 +1247,6 @@ async fn ratchet(args: RatchetArgs, cfg: &ApexConfig) -> Result<()> {
 
     info!(target = %target_path.display(), "running ratchet check");
 
-    // Install deps before instrumentation (mirrors `run()` behaviour)
-    install_deps(lang, &target_path).await?;
-
     let oracle = Arc::new(CoverageOracle::new());
     let _instrumented = instrument(lang, &target_path, &oracle).await?;
 
@@ -1269,11 +1258,12 @@ async fn ratchet(args: RatchetArgs, cfg: &ApexConfig) -> Result<()> {
     );
 
     if pct < min_coverage {
-        return Err(color_eyre::eyre::eyre!(
+        eprintln!(
             "FAIL: coverage {:.1}% is below minimum {:.1}%",
             pct * 100.0,
             min_coverage * 100.0
-        ));
+        );
+        std::process::exit(1);
     }
 
     println!("PASS");
@@ -1301,9 +1291,6 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
     // CLI --detectors overrides config file
     if let Some(detectors) = args.detectors {
         detect_cfg.enabled = detectors;
-    }
-    if args.detect_mode.eq_ignore_ascii_case("fast") {
-        detect_cfg.detect_mode = apex_detect::DetectMode::Fast;
     }
 
     // Build source cache
@@ -1350,6 +1337,28 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
         _ => Severity::Info,
     };
 
+    // --- STRIDE threat analysis ---
+    let combined_source: String = ctx.source_cache.values().cloned().collect::<Vec<_>>().join("\n");
+    let stride_matrix = apex_detect::threat::stride::analyze_stride(&combined_source);
+
+    // --- ASVS compliance report ---
+    let finding_detector_ids: Vec<String> = report
+        .findings
+        .iter()
+        .map(|f| f.detector.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let asvs_level = match args.compliance_level.as_deref() {
+        Some("L2" | "l2") => apex_detect::compliance::asvs::AsvsLevel::L2,
+        Some("L3" | "l3") => apex_detect::compliance::asvs::AsvsLevel::L3,
+        _ => apex_detect::compliance::asvs::AsvsLevel::L1,
+    };
+    let asvs_report = apex_detect::compliance::asvs::generate_asvs_report(&finding_detector_ids, asvs_level);
+
+    // --- SSDF compliance report ---
+    let ssdf_report = apex_detect::compliance::ssdf::generate_ssdf_report();
+
     let output_text = match args.output_format {
         OutputFormat::Json => serde_json::to_string_pretty(&report)?,
         OutputFormat::Text => {
@@ -1395,6 +1404,50 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
                 .collect::<Vec<_>>()
                 .join("  ");
             writeln!(buf, "Detectors: {status_line}").ok();
+
+            // --- STRIDE threat matrix ---
+            writeln!(buf, "\n--- STRIDE Threat Model ---\n").ok();
+            for entry in &stride_matrix.entries {
+                let risk = match entry.risk_level {
+                    apex_detect::threat::stride::RiskLevel::Low => "LOW",
+                    apex_detect::threat::stride::RiskLevel::Medium => "MEDIUM",
+                    apex_detect::threat::stride::RiskLevel::High => "HIGH",
+                };
+                writeln!(buf, "  {:<25} Risk: {:<6}  Mitigations: {}/{}",
+                    entry.category.to_string(),
+                    risk,
+                    entry.mitigations_found.len(),
+                    entry.mitigations_found.len() + entry.mitigations_missing.len(),
+                ).ok();
+                if !entry.mitigations_missing.is_empty() {
+                    for missing in &entry.mitigations_missing {
+                        writeln!(buf, "    ! Missing: {missing}").ok();
+                    }
+                }
+            }
+
+            // --- ASVS compliance ---
+            writeln!(buf, "\n--- ASVS Compliance ({:?}) ---\n", asvs_report.level).ok();
+            let cov = &asvs_report.coverage;
+            writeln!(buf, "  Total: {}  Verified: {}  Failed: {}  Manual: {}",
+                cov.total, cov.verified, cov.failed, cov.manual_required).ok();
+            for req_status in &asvs_report.requirements {
+                if req_status.status == apex_detect::compliance::asvs::AsvsStatus::Failed {
+                    writeln!(buf, "    FAIL  {} — {}",
+                        req_status.requirement.id,
+                        req_status.requirement.description).ok();
+                }
+            }
+
+            // --- SSDF compliance ---
+            writeln!(buf, "\n--- SSDF Compliance (NIST SP 800-218) ---\n").ok();
+            writeln!(buf, "  Satisfied: {}/{}",
+                ssdf_report.satisfied_count, ssdf_report.total_count).ok();
+            for task in &ssdf_report.tasks {
+                let mark = if task.apex_satisfies { "+" } else { "-" };
+                writeln!(buf, "    [{mark}] {} — {}", task.id, task.description).ok();
+            }
+
             buf
         }
     };
@@ -1704,69 +1757,6 @@ async fn run_test_prioritize(args: TestPrioritizeArgs) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// `apex test-impact`
-// ---------------------------------------------------------------------------
-
-async fn run_test_impact(args: TestImpactArgs) -> Result<()> {
-    use apex_index::change_impact::change_impact;
-
-    let target_path = args.target.canonicalize()?;
-    let index = load_index(&target_path)?;
-
-    if args.changed_files.is_empty() {
-        return Err(color_eyre::eyre::eyre!(
-            "--changed-files is required (comma-separated list of relative paths)"
-        ));
-    }
-
-    // Map changed file paths to file_ids from the index.
-    // For each matched file_id, collect all lines from traces.
-    let changed_lines: Vec<(u64, u32)> = index
-        .file_paths
-        .iter()
-        .filter(|(_, path)| {
-            let path_str = path.to_string_lossy();
-            args.changed_files
-                .iter()
-                .any(|cf| path_str.contains(cf.as_str()))
-        })
-        .flat_map(|(file_id, _)| {
-            let mut lines: HashSet<u32> = HashSet::new();
-            for trace in &index.traces {
-                for branch in &trace.branches {
-                    if branch.file_id == *file_id {
-                        lines.insert(branch.line);
-                    }
-                }
-            }
-            lines
-                .into_iter()
-                .map(|line| (*file_id, line))
-                .collect::<Vec<_>>()
-        })
-        .collect();
-
-    if changed_lines.is_empty() {
-        eprintln!("Warning: none of the changed files match indexed files.");
-        println!("No tests affected by the changed files.");
-        return Ok(());
-    }
-
-    let affected = change_impact(&changed_lines, &index);
-
-    if affected.is_empty() {
-        println!("No tests affected by the changed files.");
-    } else {
-        println!("Affected tests ({}):", affected.len());
-        for test in &affected {
-            println!("  {test}");
-        }
-    }
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // `apex dead-code`
 // ---------------------------------------------------------------------------
 
@@ -1856,7 +1846,7 @@ async fn run_dead_code(args: DeadCodeArgs) -> Result<()> {
 // `apex lint`
 // ---------------------------------------------------------------------------
 
-async fn run_lint(args: LintArgs, cfg: &ApexConfig) -> Result<()> {
+async fn run_lint(args: LintArgs, _cfg: &ApexConfig) -> Result<()> {
     use apex_detect::{AnalysisContext, DetectConfig, DetectorPipeline, Severity};
 
     let lang: Language = args.lang.into();
@@ -1865,14 +1855,8 @@ async fn run_lint(args: LintArgs, cfg: &ApexConfig) -> Result<()> {
     // Load the branch index for runtime prioritization
     let index = load_index(&target_path).ok();
 
-    // Build detect config from apex.toml (mirrors run_audit behaviour)
-    let mut detect_cfg = DetectConfig::default();
-    if !cfg.detect.enabled.is_empty() {
-        detect_cfg.enabled = cfg.detect.enabled.clone();
-    }
-    detect_cfg.severity_threshold = cfg.detect.severity_threshold.clone();
-    detect_cfg.per_detector_timeout_secs = cfg.detect.per_detector_timeout_secs;
-
+    // Run detectors
+    let detect_cfg = DetectConfig::default();
     let source_cache = build_source_cache(&target_path, lang);
 
     // Build CPG for Python projects (other languages: TODO)
@@ -1902,7 +1886,7 @@ async fn run_lint(args: LintArgs, cfg: &ApexConfig) -> Result<()> {
         config: detect_cfg.clone(),
         runner: Arc::new(apex_core::command::RealCommandRunner),
         cpg,
-        threat_model: cfg.threat_model.clone(),
+        threat_model: apex_core::config::ThreatModelConfig::default(),
     };
 
     let pipeline = DetectorPipeline::from_config(&detect_cfg, lang);
@@ -3163,5 +3147,17 @@ mod tests {
         report.discovered_at_iteration = 42;
         let summary = apex_core::types::BugSummary::new(vec![report]);
         print_json_bug_report(&summary);
+    }
+
+    #[test]
+    fn unknown_strategy_is_rejected() {
+        let valid = ["fuzz", "concolic", "driller", "agent", "all"];
+        assert!(!valid.contains(&"typo"));
+        assert!(!valid.contains(&""));
+        assert!(!valid.contains(&"FUZZ"));
+        // Known strategies should be valid
+        assert!(valid.contains(&"fuzz"));
+        assert!(valid.contains(&"agent"));
+        assert!(valid.contains(&"all"));
     }
 }

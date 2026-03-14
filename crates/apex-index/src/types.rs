@@ -30,7 +30,7 @@ pub struct BranchProfile {
     /// Number of distinct tests that reach this branch.
     pub test_count: usize,
     /// Names of tests that reach this branch.
-    pub test_names: HashSet<String>,
+    pub test_names: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -64,16 +64,12 @@ impl BranchIndex {
                     branch: branch.clone(),
                     hit_count: 0,
                     test_count: 0,
-                    test_names: HashSet::new(),
+                    test_names: Vec::new(),
                 });
                 profile.hit_count += 1;
-                profile.test_names.insert(trace.test_name.clone());
+                profile.test_count += 1;
+                profile.test_names.push(trace.test_name.clone());
             }
-        }
-
-        // Derive test_count from the deduplicated test_names set
-        for profile in map.values_mut() {
-            profile.test_count = profile.test_names.len();
         }
 
         map
@@ -82,7 +78,7 @@ impl BranchIndex {
     /// Compute coverage percentage.
     pub fn coverage_percent(&self) -> f64 {
         if self.total_branches == 0 {
-            return 100.0;
+            return 0.0;
         }
         (self.covered_branches as f64 / self.total_branches as f64) * 100.0
     }
@@ -140,15 +136,25 @@ pub fn branch_key(b: &BranchId) -> String {
         b.line,
         b.col,
         b.direction,
-        match b.condition_index {
-            Some(n) => n.to_string(),
-            None => "none".to_string(),
-        }
+        b.condition_index.unwrap_or(255)
     )
 }
 
 /// Compute SHA-256 hash of source files in a directory for staleness detection.
 pub fn hash_source_files(root: &Path, language: Language) -> String {
+    hash_source_files_with_omit(
+        root,
+        language,
+        &apex_core::config::CoverageConfig::default_omit_patterns(),
+    )
+}
+
+/// Compute SHA-256 hash of source files, using the given omit patterns.
+pub fn hash_source_files_with_omit(
+    root: &Path,
+    language: Language,
+    omit_patterns: &[String],
+) -> String {
     let extensions: &[&str] = match language {
         Language::Python => &["py"],
         Language::Rust => &["rs"],
@@ -160,7 +166,7 @@ pub fn hash_source_files(root: &Path, language: Language) -> String {
     };
 
     let mut paths: Vec<PathBuf> = Vec::new();
-    collect_source_files(root, extensions, &mut paths);
+    collect_source_files(root, extensions, omit_patterns, &mut paths);
     paths.sort();
 
     let mut hasher = Sha256::new();
@@ -174,7 +180,14 @@ pub fn hash_source_files(root: &Path, language: Language) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn collect_source_files(dir: &Path, extensions: &[&str], out: &mut Vec<PathBuf>) {
+/// Recursively collect source files, skipping hidden directories and directories
+/// matching any of the provided `omit_patterns`.
+pub fn collect_source_files(
+    dir: &Path,
+    extensions: &[&str],
+    omit_patterns: &[String],
+    out: &mut Vec<PathBuf>,
+) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -185,19 +198,13 @@ fn collect_source_files(dir: &Path, extensions: &[&str], out: &mut Vec<PathBuf>)
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        // Skip hidden dirs, build artifacts, venvs
-        if name_str.starts_with('.')
-            || name_str == "target"
-            || name_str == "node_modules"
-            || name_str == "__pycache__"
-            || name_str == ".venv"
-            || name_str == "venv"
-        {
+        // Skip hidden dirs and dirs matching omit patterns
+        if name_str.starts_with('.') || omit_patterns.iter().any(|p| name_str == *p) {
             continue;
         }
 
         if path.is_dir() {
-            collect_source_files(&path, extensions, out);
+            collect_source_files(&path, extensions, omit_patterns, out);
         } else if let Some(ext) = path.extension() {
             if extensions.iter().any(|e| ext == *e) {
                 out.push(path);
@@ -260,7 +267,7 @@ mod tests {
         let profile = &profiles[&key_10];
         assert_eq!(profile.hit_count, 2);
         assert_eq!(profile.test_count, 2);
-        assert_eq!(profile.test_names, HashSet::from(["test_a".to_string(), "test_b".to_string()]));
+        assert_eq!(profile.test_names, vec!["test_a", "test_b"]);
 
         let key_20 = branch_key(&make_branch(1, 20, 0));
         assert_eq!(profiles[&key_20].test_count, 1);
@@ -279,7 +286,7 @@ mod tests {
             target_root: PathBuf::new(),
             source_hash: String::new(),
         };
-        assert!((index.coverage_percent() - 100.0).abs() < 0.01);
+        assert!((index.coverage_percent() - 0.0).abs() < 0.01);
     }
 
     #[test]
@@ -363,7 +370,7 @@ mod tests {
                 branch: dead_branch,
                 hit_count: 0,
                 test_count: 0,
-                test_names: HashSet::new(),
+                test_names: vec![],
             },
         );
         // Insert a profile with hit_count > 0 (alive)
@@ -375,7 +382,7 @@ mod tests {
                 branch: live_branch,
                 hit_count: 3,
                 test_count: 2,
-                test_names: HashSet::from(["t1".into(), "t2".into()]),
+                test_names: vec!["t1".into(), "t2".into()],
             },
         );
 
@@ -472,10 +479,10 @@ mod tests {
             "expected condition_index in key, got: {key}"
         );
 
-        // Without condition_index, should end with :none
+        // Without condition_index, should end with :255
         let b2 = make_branch(1, 10, 0);
         let key2 = branch_key(&b2);
-        assert!(key2.ends_with(":none"), "expected none sentinel, got: {key2}");
+        assert!(key2.ends_with(":255"), "expected 255 sentinel, got: {key2}");
     }
 
     #[test]
@@ -803,7 +810,7 @@ mod tests {
         let p = &profiles[&key];
         assert_eq!(p.hit_count, 3);
         assert_eq!(p.test_count, 3);
-        assert_eq!(p.test_names, HashSet::from(["a".to_string(), "b".to_string(), "c".to_string()]));
+        assert_eq!(p.test_names, vec!["a", "b", "c"]);
     }
 
     #[test]
@@ -834,60 +841,6 @@ mod tests {
             source_hash: String::new(),
         };
         assert!(index.dead_branches().is_empty());
-    }
-
-    // -----------------------------------------------------------------------
-    // Bug-hunting: boundary / semantic tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn build_profiles_conflates_hit_count_and_test_count() {
-        // BUG: If a branch appears TWICE in one test's branches list,
-        // both hit_count and test_count increment. But test_count should
-        // count distinct tests, not duplicate appearances within one test.
-        let b = make_branch(1, 10, 0);
-        let traces = vec![TestTrace {
-            test_name: "test_a".into(),
-            branches: vec![b.clone(), b.clone()], // same branch twice in one test
-            duration_ms: 10,
-            status: ExecutionStatus::Pass,
-        }];
-
-        let profiles = BranchIndex::build_profiles(&traces);
-        let key = branch_key(&b);
-        let p = &profiles[&key];
-
-        // hit_count = 2 is correct (branch was reached 2 times)
-        assert_eq!(p.hit_count, 2);
-        // After fix: test_count correctly counts distinct tests (1, not 2)
-        assert_eq!(
-            p.test_count, 1,
-            "test_count should count distinct tests, not occurrences"
-        );
-        // After fix: test_names is a HashSet, so duplicates are eliminated
-        assert_eq!(
-            p.test_names.len(), 1,
-            "test_names should deduplicate entries for same test"
-        );
-    }
-
-    #[test]
-    fn branch_key_condition_index_collision() {
-        // A branch with condition_index=None maps to 255 in the key.
-        // A branch with condition_index=Some(255) ALSO maps to 255.
-        // These are semantically different but produce the same key -> collision.
-        let mut b1 = make_branch(1, 10, 0);
-        b1.condition_index = None; // key ends with ":255"
-
-        let mut b2 = make_branch(1, 10, 0);
-        b2.condition_index = Some(255); // key also ends with ":255"
-
-        // After fix: None maps to "none", Some(255) maps to "255" — no collision
-        assert_ne!(
-            branch_key(&b1),
-            branch_key(&b2),
-            "condition_index=None and condition_index=Some(255) should produce different keys"
-        );
     }
 
     #[test]

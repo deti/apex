@@ -102,6 +102,70 @@ pub fn metamorphic_adequacy(results: &[MutationResult]) -> MetamorphicScore {
     }
 }
 
+/// Runs mutation testing against a test suite.
+pub struct MutationRunner {
+    /// Command to run tests (e.g., `["pytest", "tests/"]`).
+    #[allow(dead_code)]
+    test_command: Vec<String>,
+}
+
+impl MutationRunner {
+    pub fn new(test_command: Vec<String>) -> Self {
+        Self { test_command }
+    }
+
+    /// Run a single mutant: inject mutation, check if killed.
+    /// For MVP, a mutant is "killed" if the mutated line has test coverage.
+    pub fn run_mutant(&self, op: &MutationOperator, covered_lines: &[u32]) -> MutationResult {
+        let killed = covered_lines.contains(&op.line);
+        MutationResult {
+            operator: op.clone(),
+            killed,
+            killing_tests: if killed {
+                vec!["simulated".to_string()]
+            } else {
+                vec![]
+            },
+            detection_margin: if killed { 0.8 } else { 0.0 },
+        }
+    }
+
+    /// Run all mutants and compute aggregate score.
+    pub fn run_all(&self, operators: &[MutationOperator], covered_lines: &[u32]) -> MutationScore {
+        let results: Vec<_> = operators
+            .iter()
+            .map(|op| self.run_mutant(op, covered_lines))
+            .collect();
+        MutationScore::from_results(&results)
+    }
+}
+
+/// Aggregate mutation testing score.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MutationScore {
+    pub total: usize,
+    pub killed: usize,
+    pub survived: usize,
+    pub score: f64,
+}
+
+impl MutationScore {
+    pub fn from_results(results: &[MutationResult]) -> Self {
+        let total = results.len();
+        let killed = results.iter().filter(|r| r.killed).count();
+        MutationScore {
+            total,
+            killed,
+            survived: total - killed,
+            score: if total > 0 {
+                killed as f64 / total as f64
+            } else {
+                0.0
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +306,108 @@ mod tests {
         assert!((score.mutation_score - 1.0).abs() < f64::EPSILON);
         assert!((score.detection_ratio - 1.0).abs() < f64::EPSILON);
         assert!(score.weak_mutations.is_empty());
+    }
+
+    fn make_op(kind: MutationKind, line: u32) -> MutationOperator {
+        MutationOperator {
+            kind,
+            file: "src/lib.py".into(),
+            line,
+            original: "x".into(),
+            replacement: "y".into(),
+        }
+    }
+
+    #[test]
+    fn mutation_runner_killed_when_covered() {
+        let runner = MutationRunner::new(vec!["pytest".into()]);
+        let op = make_op(MutationKind::ArithmeticReplace, 5);
+        let result = runner.run_mutant(&op, &[3, 5, 10]);
+        assert!(result.killed);
+        assert!(!result.killing_tests.is_empty());
+    }
+
+    #[test]
+    fn mutation_runner_survived_when_uncovered() {
+        let runner = MutationRunner::new(vec!["pytest".into()]);
+        let op = make_op(MutationKind::ArithmeticReplace, 7);
+        let result = runner.run_mutant(&op, &[3, 5, 10]);
+        assert!(!result.killed);
+        assert!(result.killing_tests.is_empty());
+    }
+
+    #[test]
+    fn mutation_score_all_killed() {
+        let runner = MutationRunner::new(vec!["pytest".into()]);
+        let ops = vec![
+            make_op(MutationKind::ArithmeticReplace, 1),
+            make_op(MutationKind::BoundaryShift, 2),
+        ];
+        let score = runner.run_all(&ops, &[1, 2, 3]);
+        assert!((score.score - 1.0).abs() < f64::EPSILON);
+        assert_eq!(score.killed, 2);
+        assert_eq!(score.survived, 0);
+    }
+
+    #[test]
+    fn mutation_score_none_killed() {
+        let runner = MutationRunner::new(vec!["pytest".into()]);
+        let ops = vec![
+            make_op(MutationKind::ArithmeticReplace, 10),
+            make_op(MutationKind::BoundaryShift, 20),
+        ];
+        let score = runner.run_all(&ops, &[1, 2, 3]);
+        assert!((score.score - 0.0).abs() < f64::EPSILON);
+        assert_eq!(score.killed, 0);
+        assert_eq!(score.survived, 2);
+    }
+
+    #[test]
+    fn mutation_score_partial() {
+        let runner = MutationRunner::new(vec!["pytest".into()]);
+        let ops = vec![
+            make_op(MutationKind::ArithmeticReplace, 1),
+            make_op(MutationKind::BoundaryShift, 2),
+            make_op(MutationKind::ConditionalNegation, 3),
+            make_op(MutationKind::ReturnValueChange, 10),
+            make_op(MutationKind::StatementDeletion, 20),
+        ];
+        let score = runner.run_all(&ops, &[1, 2, 3]);
+        assert!((score.score - 0.6).abs() < f64::EPSILON);
+        assert_eq!(score.killed, 3);
+        assert_eq!(score.survived, 2);
+    }
+
+    #[test]
+    fn mutation_score_empty() {
+        let score = MutationScore::from_results(&[]);
+        assert!((score.score - 0.0).abs() < f64::EPSILON);
+        assert_eq!(score.total, 0);
+    }
+
+    #[test]
+    fn run_all_returns_correct_counts() {
+        let runner = MutationRunner::new(vec!["cargo".into(), "test".into()]);
+        let ops = vec![
+            make_op(MutationKind::ArithmeticReplace, 1),
+            make_op(MutationKind::BoundaryShift, 5),
+            make_op(MutationKind::ConditionalNegation, 10),
+            make_op(MutationKind::ReturnValueChange, 15),
+        ];
+        let score = runner.run_all(&ops, &[1, 5]);
+        assert_eq!(score.total, 4);
+        assert_eq!(score.killed, 2);
+        assert_eq!(score.survived, 2);
+        assert!((score.score - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn mutation_runner_new() {
+        let cmd = vec!["pytest".into(), "tests/".into()];
+        let runner = MutationRunner::new(cmd);
+        // Verify construction doesn't panic and runner is usable
+        let op = make_op(MutationKind::StatementDeletion, 1);
+        let result = runner.run_mutant(&op, &[1]);
+        assert!(result.killed);
     }
 }
