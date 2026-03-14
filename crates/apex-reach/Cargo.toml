@@ -1,0 +1,15 @@
+[package]
+name = "apex-reach"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Reverse path analysis — call graph + backward traversal to entry points"
+
+[dependencies]
+apex-core = { path = "../apex-core" }
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"

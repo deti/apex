@@ -719,6 +719,14 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
             None
         };
 
+        // Build call graph for reverse path analysis
+        let reach_graph = apex_reach::extractors::build_call_graph(&file_source_cache, lang);
+        let reverse_path_engine = if reach_graph.node_count() > 0 {
+            Some(Arc::new(apex_reach::ReversePathEngine::new(reach_graph)))
+        } else {
+            None
+        };
+
         let detect_ctx = apex_detect::AnalysisContext {
             target_root: target_path.clone(),
             language: lang,
@@ -731,7 +739,7 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
             runner: Arc::new(apex_core::command::RealCommandRunner),
             cpg,
             threat_model: cfg.threat_model.clone(),
-            reverse_path_engine: None,
+            reverse_path_engine,
         };
 
         let pipeline = apex_detect::DetectorPipeline::from_config(&detect_cfg, lang);

@@ -148,7 +148,7 @@ impl Detector for JsCommandInjectionDetector {
                                 path.display(),
                                 line_1based
                             ),
-                            evidence: vec![],
+                            evidence: super::util::reachability_evidence(ctx, path, line_1based),
                             covered: false,
                             suggestion:
                                 "Use execFile() or spawn() with an argument array instead of \

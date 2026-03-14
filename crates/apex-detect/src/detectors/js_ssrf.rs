@@ -67,7 +67,7 @@ impl Detector for JsSsrfDetector {
                             path.display(),
                             line_1based
                         ),
-                        evidence: vec![],
+                        evidence: super::util::reachability_evidence(ctx, path, line_1based),
                         covered: false,
                         suggestion: "Validate and allowlist URLs before making HTTP requests. \
                                      Use a URL allowlist or validate the scheme and host."

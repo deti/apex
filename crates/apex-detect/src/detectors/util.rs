@@ -1,6 +1,70 @@
 use apex_core::types::Language;
 use std::path::Path;
 
+use crate::finding::Evidence;
+
+/// Enrich a finding with reachability chains from HTTP entry points.
+/// Returns evidence entries to append to the finding's evidence vec.
+pub fn reachability_evidence(
+    ctx: &crate::context::AnalysisContext,
+    file: &Path,
+    line: u32,
+) -> Vec<Evidence> {
+    let engine = match ctx.reverse_path_engine.as_ref() {
+        Some(e) => e,
+        None => return vec![],
+    };
+
+    let target = apex_reach::TargetRegion::FileLine(file.to_path_buf(), line);
+    let paths = engine.paths_to_entry_kind(
+        &target,
+        apex_reach::EntryPointKind::HttpHandler,
+        apex_reach::Granularity::Line,
+    );
+
+    if paths.is_empty() {
+        // Also check test entry points
+        let test_paths = engine.paths_to_entry_kind(
+            &target,
+            apex_reach::EntryPointKind::Test,
+            apex_reach::Granularity::Line,
+        );
+        if test_paths.is_empty() {
+            return vec![];
+        }
+        return vec![Evidence::ReachabilityChain {
+            tool: "apex-reach".into(),
+            paths: test_paths
+                .iter()
+                .take(3)
+                .map(|p| format_reverse_path(p, engine.graph()))
+                .collect(),
+        }];
+    }
+
+    vec![Evidence::ReachabilityChain {
+        tool: "apex-reach".into(),
+        paths: paths
+            .iter()
+            .take(3)
+            .map(|p| format_reverse_path(p, engine.graph()))
+            .collect(),
+    }]
+}
+
+fn format_reverse_path(path: &apex_reach::ReversePath, graph: &apex_reach::CallGraph) -> String {
+    let mut parts = Vec::new();
+    if let Some(entry_node) = graph.node(path.entry_point) {
+        parts.push(format!("{} ({})", entry_node.name, path.entry_kind));
+    }
+    for (fn_id, line) in &path.chain {
+        if let Some(node) = graph.node(*fn_id) {
+            parts.push(format!("{} ({}:{})", node.name, node.file.display(), line));
+        }
+    }
+    parts.join(" → ")
+}
+
 /// Returns true if the file path looks like a test file.
 pub fn is_test_file(path: &Path) -> bool {
     let s = path.to_string_lossy();

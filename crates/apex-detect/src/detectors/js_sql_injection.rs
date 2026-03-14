@@ -130,6 +130,7 @@ impl Detector for JsSqlInjectionDetector {
                     if pattern.regex.is_match(trimmed) {
                         let line_1based = (line_num + 1) as u32;
 
+                        let evidence = super::util::reachability_evidence(ctx, path, line_1based);
                         findings.push(Finding {
                             id: Uuid::new_v4(),
                             detector: self.name().into(),
@@ -147,7 +148,7 @@ impl Detector for JsSqlInjectionDetector {
                                 path.display(),
                                 line_1based
                             ),
-                            evidence: vec![],
+                            evidence,
                             covered: false,
                             suggestion:
                                 "Use parameterized queries (e.g., db.query(sql, [param])) \
