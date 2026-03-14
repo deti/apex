@@ -273,7 +273,7 @@ fn check_custom(expr: &str, deny: &[String], allow: &[String]) -> PolicyVerdict 
 fn normalize_spdx(expr: &str) -> String {
     let mut s = expr.trim().to_string();
     // Strip parentheses (simple — handles nested too)
-    s = s.replace('(', "").replace(')', "");
+    s = s.replace(['(', ')'], "");
     // Normalize whitespace (tabs, multiple spaces → single space)
     s = s.split_whitespace().collect::<Vec<_>>().join(" ");
     // Normalize operator case

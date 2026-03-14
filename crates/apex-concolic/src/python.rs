@@ -140,7 +140,7 @@ impl PythonConcolicStrategy {
     async fn get_trace(&self) -> Result<Vec<BranchTrace>> {
         // Run fresh each call — the oracle state changes between rounds.
         let trace = self.run_tracer().await?;
-        *self.trace_cache.lock().unwrap() = Some(trace.clone());
+        *self.trace_cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(trace.clone());
         Ok(trace)
     }
 

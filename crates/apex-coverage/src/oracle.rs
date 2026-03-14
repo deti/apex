@@ -12,6 +12,8 @@ pub struct DeltaCoverage {
 /// Thread-safe store of branch coverage state.
 pub struct CoverageOracle {
     branches: DashMap<BranchId, BranchState>,
+    /// Insertion-ordered branch list for deterministic bitmap indexing.
+    branch_order: Mutex<Vec<BranchId>>,
     covered_count: AtomicUsize,
     total_count: AtomicUsize,
     level: Mutex<CoverageLevel>,
@@ -22,6 +24,7 @@ impl CoverageOracle {
     pub fn new() -> Self {
         CoverageOracle {
             branches: DashMap::new(),
+            branch_order: Mutex::new(Vec::new()),
             covered_count: AtomicUsize::new(0),
             total_count: AtomicUsize::new(0),
             level: Mutex::new(CoverageLevel::Branch),
@@ -31,12 +34,12 @@ impl CoverageOracle {
 
     /// Set the coverage analysis level.
     pub fn set_coverage_level(&self, level: CoverageLevel) {
-        *self.level.lock().unwrap() = level;
+        *self.level.lock().unwrap_or_else(|e| e.into_inner()) = level;
     }
 
     /// Get the current coverage analysis level.
     pub fn coverage_level(&self) -> CoverageLevel {
-        *self.level.lock().unwrap()
+        *self.level.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Return MC/DC independence pairs for a given compound decision (file_id, line).
@@ -88,9 +91,11 @@ impl CoverageOracle {
 
     /// Register all known branches (e.g. from static analysis / instrumentation).
     pub fn register_branches(&self, ids: impl IntoIterator<Item = BranchId>) {
+        let mut order = self.branch_order.lock().unwrap_or_else(|e| e.into_inner());
         for id in ids {
-            self.branches.entry(id).or_insert_with(|| {
+            self.branches.entry(id.clone()).or_insert_with(|| {
                 self.total_count.fetch_add(1, Ordering::Relaxed);
+                order.push(id);
                 BranchState::Uncovered
             });
         }
@@ -122,14 +127,13 @@ impl CoverageOracle {
     }
 
     /// Merge an AFL++ style coverage bitmap (one byte per edge, non-zero = hit).
-    /// Branch IDs are resolved by index position in the registered set.
+    /// Branch IDs are resolved by index position in the registration-ordered list.
     pub fn merge_bitmap(&self, bitmap: &[u8], seed_id: SeedId) -> DeltaCoverage {
         let mut delta = DeltaCoverage::default();
-        // Collect ordered keys once so index matches bitmap position.
-        let keys: Vec<BranchId> = self.branches.iter().map(|r| r.key().clone()).collect();
+        let order = self.branch_order.lock().unwrap_or_else(|e| e.into_inner());
         for (idx, &byte) in bitmap.iter().enumerate() {
             if byte > 0 {
-                if let Some(branch) = keys.get(idx) {
+                if let Some(branch) = order.get(idx) {
                     if self.mark_covered(branch, seed_id) {
                         delta.newly_covered.push(branch.clone());
                     }

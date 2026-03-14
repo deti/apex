@@ -43,7 +43,7 @@ impl ThompsonScheduler {
                 let sample = Beta::new(*a, *b).ok().map(|d| d.sample(rng)).unwrap_or(0.0);
                 (i, sample)
             })
-            .max_by(|x, y| x.1.partial_cmp(&y.1).unwrap())
+            .max_by(|x, y| x.1.partial_cmp(&y.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(i, _)| i)
             .unwrap_or(0)
     }

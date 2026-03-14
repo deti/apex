@@ -48,7 +48,7 @@ impl TaintTriageScorer {
                 }
             })
             .collect();
-        triaged.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+        triaged.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         triaged
     }
 }
