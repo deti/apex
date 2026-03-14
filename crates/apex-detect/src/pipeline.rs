@@ -200,6 +200,8 @@ mod tests {
             fuzz_corpus: None,
             config: crate::config::DetectConfig::default(),
             runner: Arc::new(apex_core::command::RealCommandRunner),
+            cpg: None,
+            threat_model: Default::default(),
         }
     }
 
@@ -224,6 +226,7 @@ mod tests {
             suggestion: "fix it".into(),
             explanation: None,
             fix: None,
+            cwe_ids: vec![],
         }
     }
 

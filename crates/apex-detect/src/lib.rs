@@ -21,7 +21,7 @@ pub mod vuln_pipeline;
 pub use config::DetectConfig;
 pub use context::AnalysisContext;
 pub use finding::{Evidence, Finding, FindingCategory, Fix, Severity};
-pub use pipeline::{DetectMode, DetectorPipeline};
+pub use pipeline::DetectorPipeline;
 pub use report::{AnalysisReport, SecuritySummary};
 
 use apex_core::error::Result;
