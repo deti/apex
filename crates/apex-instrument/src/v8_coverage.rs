@@ -2,6 +2,9 @@ use apex_core::{hash::fnv1a_hash, types::BranchId};
 use serde::Deserialize;
 use std::{collections::HashMap, path::{Path, PathBuf}};
 
+/// Parsed V8 coverage: (all_branches, executed_branches, file_paths).
+pub type V8ParseResult = (Vec<BranchId>, Vec<BranchId>, HashMap<u64, PathBuf>);
+
 // V8 coverage JSON schema
 #[derive(Debug, Deserialize)]
 pub struct V8CoverageResult {
@@ -68,7 +71,7 @@ pub fn parse_v8_coverage(
     json_str: &str,
     repo_root: &Path,
     source_loader: &dyn Fn(&Path) -> Option<String>,
-) -> Result<(Vec<BranchId>, Vec<BranchId>, HashMap<u64, PathBuf>), String> {
+) -> Result<V8ParseResult, String> {
     let data: V8CoverageResult =
         serde_json::from_str(json_str).map_err(|e| format!("parse V8 JSON: {e}"))?;
 
@@ -122,8 +125,7 @@ fn extract_branch_points(ranges: &[V8CoverageRange]) -> Vec<Vec<usize>> {
     let mut current_group: Vec<usize> = Vec::new();
     let mut parent_end: usize = ranges[0].end_offset;
 
-    for i in 1..ranges.len() {
-        let range = &ranges[i];
+    for (i, range) in ranges.iter().enumerate().skip(1) {
         if range.start_offset >= parent_end {
             if current_group.len() >= 2 {
                 groups.push(current_group.clone());

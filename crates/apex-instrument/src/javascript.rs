@@ -199,7 +199,6 @@ pub struct JavaScriptInstrumentor {
     branch_ids: Vec<BranchId>,
     executed_branch_ids: Vec<BranchId>,
     file_paths: HashMap<u64, PathBuf>,
-    work_dir: Option<PathBuf>,
     runner: Arc<dyn CommandRunner>,
 }
 
@@ -209,7 +208,6 @@ impl JavaScriptInstrumentor {
             branch_ids: Vec::new(),
             executed_branch_ids: Vec::new(),
             file_paths: HashMap::new(),
-            work_dir: None,
             runner: Arc::new(RealCommandRunner),
         }
     }
@@ -220,7 +218,6 @@ impl JavaScriptInstrumentor {
             branch_ids: Vec::new(),
             executed_branch_ids: Vec::new(),
             file_paths: HashMap::new(),
-            work_dir: None,
             runner,
         }
     }
@@ -439,7 +436,7 @@ impl Instrumentor for JavaScriptInstrumentor {
                 v8_coverage::parse_v8_coverage(&json_str, &target.root, &|path| {
                     std::fs::read_to_string(path).ok()
                 })
-                .map_err(|e| ApexError::Instrumentation(e))?
+                .map_err(ApexError::Instrumentation)?
             }
         };
 
@@ -702,7 +699,6 @@ mod tests {
         let inst = JavaScriptInstrumentor::default();
         assert!(inst.branch_ids.is_empty());
         assert!(inst.file_paths.is_empty());
-        assert!(inst.work_dir.is_none());
     }
 
     #[test]
