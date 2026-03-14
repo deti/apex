@@ -1765,4 +1765,237 @@ mod tests {
             assert!(seeds.len() <= 3, "val={val}: got {} seeds", seeds.len());
         }
     }
+
+    #[test]
+    fn boundary_seeds_startswith_want_false() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "f.py",
+            1,
+            0,
+            "x.startswith('foo')",
+            "f",
+            "m",
+            vec!["x"],
+            [("x".into(), serde_json::json!("foobar"))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 1);
+        assert!(!seeds.is_empty());
+        assert!(seeds[0].contains("__no_match__"));
+    }
+
+    #[test]
+    fn boundary_seeds_endswith_want_true() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "f.py",
+            1,
+            0,
+            "x.endswith('.py')",
+            "f",
+            "m",
+            vec!["x"],
+            [("x".into(), serde_json::json!("foo"))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 0);
+        assert!(!seeds.is_empty());
+        assert!(seeds[0].contains(".py"));
+    }
+
+    #[test]
+    fn boundary_seeds_endswith_want_false() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "f.py",
+            1,
+            0,
+            "x.endswith('.py')",
+            "f",
+            "m",
+            vec!["x"],
+            [("x".into(), serde_json::json!("test.py"))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 1);
+        assert!(!seeds.is_empty());
+        assert!(seeds[0].contains("__no_match__"));
+    }
+
+    #[test]
+    fn boundary_seeds_in_list_want_false() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "f.py",
+            1,
+            0,
+            "x in ['a', 'b', 'c']",
+            "f",
+            "m",
+            vec!["x"],
+            [("x".into(), serde_json::json!("a"))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 1);
+        assert!(!seeds.is_empty());
+        assert!(seeds[0].contains("__NOT_IN_LIST__"));
+    }
+
+    #[test]
+    fn boundary_seeds_isinstance_want_false_various() {
+        let s = make_strategy();
+        for (type_name, expected) in [
+            ("str", "0"),
+            ("int", "not_a_number"),
+            ("float", "not_a_number"),
+        ] {
+            let cond = format!("isinstance(x, {type_name})");
+            let entry = make_trace_entry(
+                "f.py",
+                1,
+                0,
+                &cond,
+                "f",
+                "m",
+                vec!["x"],
+                [("x".into(), serde_json::json!("val"))].into(),
+            );
+            let seeds = s.boundary_seeds(&entry, 1);
+            assert!(!seeds.is_empty(), "isinstance want-false for {type_name}");
+            assert!(
+                seeds[0].contains(expected),
+                "isinstance {type_name}: expected {expected} in {}",
+                seeds[0]
+            );
+        }
+    }
+
+    #[test]
+    fn boundary_seeds_isinstance_want_true_all_types() {
+        let s = make_strategy();
+        for type_name in ["int", "float", "bool", "list", "dict"] {
+            let cond = format!("isinstance(x, {type_name})");
+            let entry = make_trace_entry(
+                "f.py",
+                1,
+                0,
+                &cond,
+                "f",
+                "m",
+                vec!["x"],
+                [("x".into(), serde_json::json!("val"))].into(),
+            );
+            let seeds = s.boundary_seeds(&entry, 0);
+            assert!(!seeds.is_empty(), "isinstance want-true for {type_name}");
+        }
+    }
+
+    #[test]
+    fn boundary_seeds_isinstance_unknown_type() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "f.py",
+            1,
+            0,
+            "isinstance(x, CustomType)",
+            "f",
+            "m",
+            vec!["x"],
+            [("x".into(), serde_json::json!("val"))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 1);
+        assert!(!seeds.is_empty());
+        assert!(seeds[0].contains("null"));
+    }
+
+    #[test]
+    fn boundary_seeds_substring_contains_want_false() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "f.py",
+            1,
+            0,
+            "\"://\" in x",
+            "f",
+            "m",
+            vec!["x"],
+            [("x".into(), serde_json::json!("http://foo"))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 1);
+        assert!(!seeds.is_empty());
+        assert!(seeds[0].contains("no_match_here"));
+    }
+
+    #[test]
+    fn boundary_seeds_len_various_ops() {
+        let s = make_strategy();
+        for (cond, dir) in [
+            ("len(x) >= 5", 1),
+            ("len(x) < 3", 0),
+            ("len(x) <= 3", 1),
+            ("len(x) == 2", 1),
+        ] {
+            let entry = make_trace_entry(
+                "f.py",
+                1,
+                0,
+                cond,
+                "f",
+                "m",
+                vec!["x"],
+                [("x".into(), serde_json::json!("hello"))].into(),
+            );
+            let seeds = s.boundary_seeds(&entry, dir);
+            assert!(!seeds.is_empty(), "len check {cond} dir={dir}");
+        }
+    }
+
+    #[test]
+    fn boundary_seeds_len_zero_boundary() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "f.py",
+            1,
+            0,
+            "len(x) > 0",
+            "f",
+            "m",
+            vec!["x"],
+            [("x".into(), serde_json::json!("a"))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 1); // want false: len <= 0
+        assert!(!seeds.is_empty());
+    }
+
+    #[test]
+    fn boundary_seeds_is_not_none_want_true() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "f.py",
+            1,
+            0,
+            "x is not None",
+            "f",
+            "m",
+            vec!["x"],
+            [("x".into(), serde_json::json!(null))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 0);
+        assert!(!seeds.is_empty());
+    }
+
+    #[test]
+    fn boundary_seeds_is_not_none_want_false() {
+        let s = make_strategy();
+        let entry = make_trace_entry(
+            "f.py",
+            1,
+            0,
+            "x is not None",
+            "f",
+            "m",
+            vec!["x"],
+            [("x".into(), serde_json::json!(42))].into(),
+        );
+        let seeds = s.boundary_seeds(&entry, 1);
+        assert!(!seeds.is_empty());
+        assert!(seeds[0].contains("null"));
+    }
 }
