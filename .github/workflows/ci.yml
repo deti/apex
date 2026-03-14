@@ -51,3 +51,73 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --check
+
+  dist-npm:
+    name: Validate npm package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Validate package.json
+        working-directory: npm
+        run: |
+          node -e "const p = require('./package.json'); if (!p.name || !p.version || !p.bin) { process.exit(1); }"
+          node -e "require('./install.js'); process.exit(0);" 2>/dev/null || true
+      - name: Check version sync
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          NPM_VERSION=$(node -p "require('./npm/package.json').version")
+          if [ "$CARGO_VERSION" != "$NPM_VERSION" ]; then
+            echo "::error::npm version ($NPM_VERSION) != Cargo version ($CARGO_VERSION)"
+            exit 1
+          fi
+
+  dist-python:
+    name: Validate Python package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate package
+        working-directory: python
+        run: |
+          pip install build
+          python -m build --sdist
+      - name: Check version sync
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          PY_VERSION=$(python -c "import tomllib; print(tomllib.load(open('python/pyproject.toml','rb'))['project']['version'])")
+          if [ "$CARGO_VERSION" != "$PY_VERSION" ]; then
+            echo "::error::Python version ($PY_VERSION) != Cargo version ($CARGO_VERSION)"
+            exit 1
+          fi
+
+  dist-homebrew:
+    name: Validate Homebrew formula
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formula syntax
+        run: ruby -c HomebrewFormula/apex.rb
+
+  dist-nix:
+    name: Validate Nix flake
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v27
+      - run: nix flake check --no-build
+
+  dist-install-script:
+    name: Validate install script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck
+        run: |
+          sudo apt-get install -y shellcheck
+          shellcheck install.sh

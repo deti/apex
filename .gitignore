@@ -57,3 +57,9 @@ fuzz/
 
 # Plans (internal planning docs, not shipped)
 /plans/
+
+# Distribution — downloaded binaries
+python/apex_cli/bin/
+
+# Nix
+result

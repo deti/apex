@@ -62,6 +62,24 @@ cargo fmt --check                         # format check
 - Specs: `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`
 - Internal planning: `/plans/` (gitignored)
 
+## Distribution
+
+Binary: 5MB static release (`lto = true`, `codegen-units = 1`). No runtime deps beyond libc.
+
+| Channel | Location | Install |
+|---------|----------|---------|
+| GitHub Releases | `.github/workflows/release.yml` | Tag `v*` triggers cross-build for 4 targets |
+| curl installer | `install.sh` | `curl -sSL .../install.sh \| sh` |
+| Homebrew | `HomebrewFormula/apex.rb` | `brew install allexdav2/tap/apex` |
+| npm | `npm/` | `npx @apex-coverage/cli run` |
+| pip | `python/` | `pipx install apex-coverage` |
+| Nix | `flake.nix` | `nix run github:allexdav2/apex` |
+| cargo | source | `cargo install --git https://github.com/allexdav2/apex` |
+
+**Release process:** `git tag v<version> && git push --tags` → CI builds binaries → update sha256 in Homebrew formula → `npm publish` / `twine upload`.
+
+Keep versions in sync: `Cargo.toml`, `npm/package.json`, `python/pyproject.toml`, `python/apex_cli/__init__.py`, `HomebrewFormula/apex.rb`.
+
 ## Git Workflow
 
 - Use worktrees for feature branches: `.worktrees/<name>/`

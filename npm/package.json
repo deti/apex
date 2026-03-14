@@ -1,0 +1,31 @@
+{
+  "name": "@apex-coverage/cli",
+  "version": "0.1.0",
+  "description": "Autonomous path exploration — coverage-guided security analysis",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/allexdav2/apex"
+  },
+  "bin": {
+    "apex": "bin/apex"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin/",
+    "install.js"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ]
+}

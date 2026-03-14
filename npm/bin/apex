@@ -1,0 +1,17 @@
+#!/usr/bin/env node
+"use strict";
+
+const { execFileSync } = require("child_process");
+const path = require("path");
+const os = require("os");
+
+const binary = path.join(__dirname, os.platform() === "win32" ? "apex.exe" : "apex");
+
+try {
+  execFileSync(binary, process.argv.slice(2), { stdio: "inherit" });
+} catch (err) {
+  if (err.status !== undefined) {
+    process.exit(err.status);
+  }
+  throw err;
+}

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apex-coverage"
+version = "0.1.0"
+description = "Autonomous path exploration — coverage-guided security analysis"
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [{name = "AD", email = "allexdav@gmail.com"}]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Security",
+    "Topic :: Software Development :: Testing",
+]
+
+[project.scripts]
+apex = "apex_cli:main"
+
+[project.urls]
+Homepage = "https://github.com/allexdav2/apex"
+Repository = "https://github.com/allexdav2/apex"
