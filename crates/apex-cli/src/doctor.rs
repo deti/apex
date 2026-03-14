@@ -106,6 +106,31 @@ async fn check_env_optional(name: &'static str, desc: &'static str, var: &str) -
 }
 
 // ---------------------------------------------------------------------------
+// Non-command checks (TCP, filesystem, etc.)
+// ---------------------------------------------------------------------------
+
+fn check_tcp_basics() -> Check {
+    match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => {
+            let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+            drop(listener);
+            Check {
+                name: "tcp",
+                description: "TCP/IP networking",
+                status: Status::Ok(format!("localhost TCP available (tested port {port})")),
+            }
+        }
+        Err(e) => Check {
+            name: "tcp",
+            description: "TCP/IP networking",
+            status: Status::Warn(format!(
+                "cannot bind TCP on localhost: {e}. RPC features may not work."
+            )),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Check groups
 // ---------------------------------------------------------------------------
 
@@ -127,6 +152,7 @@ async fn checks_core(runner: &dyn CommandRunner) -> Vec<Check> {
             "ANTHROPIC_API_KEY",
         )
         .await,
+        check_tcp_basics(),
     ]
 }
 
@@ -2164,10 +2190,10 @@ mod tests {
     // --- Check group sizes ---
 
     #[tokio::test]
-    async fn mock_checks_core_returns_four_checks() {
+    async fn mock_checks_core_returns_five_checks() {
         let runner = MockRunner::all_succeed("v1.0");
         let checks = checks_core(&runner).await;
-        assert_eq!(checks.len(), 4);
+        assert_eq!(checks.len(), 5);
     }
 
     #[tokio::test]

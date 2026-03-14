@@ -985,6 +985,7 @@ mod tests {
             duration_ms: 0,
             stdout: String::new(),
             stderr: String::new(),
+            input: None,
         };
         s.observe(&result).await.unwrap();
     }
@@ -2375,6 +2376,7 @@ mod tests {
             duration_ms: 100,
             stdout: "output".to_string(),
             stderr: "error".to_string(),
+            input: None,
         };
         s.observe(&result).await.unwrap();
     }
@@ -2390,6 +2392,7 @@ mod tests {
             duration_ms: 5000,
             stdout: String::new(),
             stderr: String::new(),
+            input: None,
         };
         s.observe(&result).await.unwrap();
     }
