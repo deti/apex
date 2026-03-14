@@ -49,28 +49,29 @@ pub fn branch_distance(op: CmpOp, a: i64, b: i64) -> f64 {
             if a < b {
                 1.0
             } else {
-                1.0 - normalize((a as f64 - b as f64) + 1.0)
+                // Clamp to 0.0 to guard against f64 precision loss on extreme i64 values.
+                1.0 - normalize(((a as f64 - b as f64) + 1.0).max(0.0))
             }
         }
         CmpOp::Le => {
             if a <= b {
                 1.0
             } else {
-                1.0 - normalize(a as f64 - b as f64)
+                1.0 - normalize((a as f64 - b as f64).max(0.0))
             }
         }
         CmpOp::Gt => {
             if a > b {
                 1.0
             } else {
-                1.0 - normalize((b as f64 - a as f64) + 1.0)
+                1.0 - normalize(((b as f64 - a as f64) + 1.0).max(0.0))
             }
         }
         CmpOp::Ge => {
             if a >= b {
                 1.0
             } else {
-                1.0 - normalize(b as f64 - a as f64)
+                1.0 - normalize((b as f64 - a as f64).max(0.0))
             }
         }
     }
@@ -154,6 +155,34 @@ mod tests {
     fn normalize_large() {
         let n = normalize(1_000_000.0);
         assert!(n > 0.99 && n < 1.0);
+    }
+
+    #[test]
+    fn branch_distance_extreme_values() {
+        let extreme_pairs = [
+            (i64::MAX, i64::MIN),
+            (i64::MIN, i64::MAX),
+            (i64::MAX, 0),
+            (0, i64::MIN),
+            (i64::MAX, i64::MAX),
+            (i64::MIN, i64::MIN),
+        ];
+        for op in [
+            CmpOp::Eq,
+            CmpOp::Ne,
+            CmpOp::Lt,
+            CmpOp::Le,
+            CmpOp::Gt,
+            CmpOp::Ge,
+        ] {
+            for (a, b) in extreme_pairs {
+                let d = branch_distance(op, a, b);
+                assert!(
+                    (0.0..=1.0).contains(&d),
+                    "out of range for {op:?}({a}, {b}): {d}"
+                );
+            }
+        }
     }
 
     #[test]

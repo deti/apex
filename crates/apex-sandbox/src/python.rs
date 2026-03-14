@@ -1,5 +1,6 @@
 use apex_core::{
     error::{ApexError, Result},
+    hash::fnv1a_hash,
     traits::Sandbox,
     types::{BranchId, ExecutionResult, ExecutionStatus, InputSeed, Language, SnapshotId},
 };
@@ -15,17 +16,8 @@ use std::{
 use tracing::{debug, warn};
 
 // ---------------------------------------------------------------------------
-// Coverage JSON wire types (mirrors apex-instrument; intentionally duplicated)
+// Coverage JSON wire types (mirrors apex-instrument)
 // ---------------------------------------------------------------------------
-
-fn fnv1a_hash(s: &str) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in s.bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
 
 #[derive(Deserialize)]
 struct ApexCoverageJson {

@@ -142,10 +142,14 @@ impl Mutator for CmpLogMutator {
             return input.to_vec();
         }
 
-        // Replace at a random matching position
+        // Replace at a random matching position, handling length differences.
         let pos = positions[(rng.next_u32() as usize) % positions.len()];
         let mut out = input.to_vec();
-        out[pos..pos + needle.len()].copy_from_slice(replacement);
+        if needle.len() == replacement.len() {
+            out[pos..pos + needle.len()].copy_from_slice(replacement);
+        } else {
+            out.splice(pos..pos + needle.len(), replacement.iter().copied());
+        }
         out
     }
 
@@ -212,11 +216,11 @@ impl CmpLogTable {
         ring.push_back(entry);
     }
 
-    /// Return all entries for a given branch (empty slice if none).
-    pub fn entries_for(&self, branch: &BranchId) -> &[CmpLogEntry] {
+    /// Return all entries for a given branch (empty vec if none).
+    pub fn entries_for(&self, branch: &BranchId) -> Vec<&CmpLogEntry> {
         match self.entries.get(branch) {
-            Some(ring) => ring.as_slices().0, // VecDeque may be non-contiguous
-            None => &[],
+            Some(ring) => ring.iter().collect(),
+            None => Vec::new(),
         }
     }
 
@@ -644,7 +648,6 @@ mod tests {
 
         assert_eq!(table.len(), 3);
         assert!(!table.is_empty());
-        // entries_for returns a contiguous slice (may be partial for VecDeque)
         assert!(!table.entries_for(&branch(10)).is_empty());
         assert!(!table.entries_for(&branch(20)).is_empty());
         assert!(table.entries_for(&branch(99)).is_empty());
@@ -850,5 +853,51 @@ mod tests {
         let mut rng = rand::thread_rng();
         let out = m.mutate(input, &mut rng);
         assert_eq!(out, input);
+    }
+
+    #[test]
+    fn cmplog_mutator_different_length_operands() {
+        // Task 5: copy_from_slice panics when needle.len() != replacement.len()
+        let mut log = CmpLog::new();
+        // 0x41414141 = "AAAA" (4 bytes), 0x424242 = "BBB" (3 bytes)
+        log.add(CmpEntry::new(
+            0x41414141u32.to_be_bytes().to_vec(), // b"AAAA"
+            0x424242u32.to_be_bytes()[1..].to_vec(), // b"BBB"
+        ));
+        let m = CmpLogMutator::new(log);
+        let input = b"xxAAAAyy";
+        let mut rng = rand::thread_rng();
+        let mut found = false;
+        for _ in 0..100 {
+            let out = m.mutate(input, &mut rng);
+            assert!(!out.is_empty(), "result must be non-empty");
+            if out == b"xxBBByy" {
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "CmpLogMutator should splice different-length operands");
+    }
+
+    #[test]
+    fn entries_for_returns_all_after_wrap() {
+        // Task 6: as_slices().0 drops entries after VecDeque wraps
+        let mut table = CmpLogTable::new();
+        let b = branch(1);
+        // Insert 300 entries to force wrap (ring max = 256)
+        for i in 0..300u16 {
+            table.record(CmpLogEntry {
+                op: CmpOp::Eq,
+                operand_a: i.to_le_bytes().to_vec(),
+                operand_b: vec![0],
+                branch_id: b.clone(),
+            });
+        }
+        let entries = table.entries_for(&b);
+        assert_eq!(
+            entries.len(),
+            CMPLOG_RING_MAX,
+            "entries_for must return all 256 entries, not just the first contiguous slice"
+        );
     }
 }

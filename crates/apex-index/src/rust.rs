@@ -9,6 +9,7 @@
 
 use crate::types::{BranchIndex, TestTrace};
 use apex_core::command::{CommandRunner, CommandSpec, RealCommandRunner};
+use apex_core::hash::fnv1a_hash;
 use apex_core::types::{BranchId, ExecutionStatus, Language};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -51,14 +52,11 @@ impl<R: CommandRunner> RustIndexBuilder<R> {
     }
 }
 
-/// FNV-1a hash — same implementation as apex-instrument for file_id compatibility.
+/// FNV-1a hash — delegates to apex_core::hash::fnv1a_hash for file_id compatibility.
 fn fnv1a(data: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for &byte in data {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
+    // Safety: we only hash valid UTF-8 path strings, but accept &[u8] for API compat.
+    let s = std::str::from_utf8(data).unwrap_or("");
+    fnv1a_hash(s)
 }
 
 // ---------------------------------------------------------------------------

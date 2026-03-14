@@ -1,6 +1,7 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
+    hash::fnv1a_hash,
     traits::Instrumentor,
     types::{BranchId, InstrumentedTarget, Target},
 };
@@ -13,16 +14,6 @@ use std::{
 use tracing::{info, warn};
 
 type JacocoParseResult = (Vec<BranchId>, Vec<BranchId>, HashMap<u64, PathBuf>);
-
-/// FNV-1a 64-bit hash of a path string.
-fn fnv1a_hash(s: &str) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in s.bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
 
 /// Detect whether the project uses Gradle or Maven.
 fn detect_build_tool(target: &Path) -> &'static str {

@@ -1255,6 +1255,9 @@ async fn ratchet(args: RatchetArgs, cfg: &ApexConfig) -> Result<()> {
 
     info!(target = %target_path.display(), "running ratchet check");
 
+    // Install deps before instrumentation (mirrors `run()` behaviour)
+    install_deps(lang, &target_path).await?;
+
     let oracle = Arc::new(CoverageOracle::new());
     let _instrumented = instrument(lang, &target_path, &oracle).await?;
 
@@ -1266,12 +1269,11 @@ async fn ratchet(args: RatchetArgs, cfg: &ApexConfig) -> Result<()> {
     );
 
     if pct < min_coverage {
-        eprintln!(
+        return Err(color_eyre::eyre::eyre!(
             "FAIL: coverage {:.1}% is below minimum {:.1}%",
             pct * 100.0,
             min_coverage * 100.0
-        );
-        std::process::exit(1);
+        ));
     }
 
     println!("PASS");
@@ -1854,7 +1856,7 @@ async fn run_dead_code(args: DeadCodeArgs) -> Result<()> {
 // `apex lint`
 // ---------------------------------------------------------------------------
 
-async fn run_lint(args: LintArgs, _cfg: &ApexConfig) -> Result<()> {
+async fn run_lint(args: LintArgs, cfg: &ApexConfig) -> Result<()> {
     use apex_detect::{AnalysisContext, DetectConfig, DetectorPipeline, Severity};
 
     let lang: Language = args.lang.into();
@@ -1863,8 +1865,14 @@ async fn run_lint(args: LintArgs, _cfg: &ApexConfig) -> Result<()> {
     // Load the branch index for runtime prioritization
     let index = load_index(&target_path).ok();
 
-    // Run detectors
-    let detect_cfg = DetectConfig::default();
+    // Build detect config from apex.toml (mirrors run_audit behaviour)
+    let mut detect_cfg = DetectConfig::default();
+    if !cfg.detect.enabled.is_empty() {
+        detect_cfg.enabled = cfg.detect.enabled.clone();
+    }
+    detect_cfg.severity_threshold = cfg.detect.severity_threshold.clone();
+    detect_cfg.per_detector_timeout_secs = cfg.detect.per_detector_timeout_secs;
+
     let source_cache = build_source_cache(&target_path, lang);
 
     // Build CPG for Python projects (other languages: TODO)
@@ -1894,7 +1902,7 @@ async fn run_lint(args: LintArgs, _cfg: &ApexConfig) -> Result<()> {
         config: detect_cfg.clone(),
         runner: Arc::new(apex_core::command::RealCommandRunner),
         cpg,
-        threat_model: apex_core::config::ThreatModelConfig::default(),
+        threat_model: cfg.threat_model.clone(),
     };
 
     let pipeline = DetectorPipeline::from_config(&detect_cfg, lang);

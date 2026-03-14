@@ -12,6 +12,8 @@ pub struct DeltaCoverage {
 /// Thread-safe store of branch coverage state.
 pub struct CoverageOracle {
     branches: DashMap<BranchId, BranchState>,
+    /// Insertion-ordered list of branch IDs for stable bitmap indexing.
+    branch_order: Mutex<Vec<BranchId>>,
     covered_count: AtomicUsize,
     total_count: AtomicUsize,
     level: Mutex<CoverageLevel>,
@@ -22,6 +24,7 @@ impl CoverageOracle {
     pub fn new() -> Self {
         CoverageOracle {
             branches: DashMap::new(),
+            branch_order: Mutex::new(Vec::new()),
             covered_count: AtomicUsize::new(0),
             total_count: AtomicUsize::new(0),
             level: Mutex::new(CoverageLevel::Branch),
@@ -88,9 +91,11 @@ impl CoverageOracle {
 
     /// Register all known branches (e.g. from static analysis / instrumentation).
     pub fn register_branches(&self, ids: impl IntoIterator<Item = BranchId>) {
+        let mut order = self.branch_order.lock().unwrap();
         for id in ids {
-            self.branches.entry(id).or_insert_with(|| {
+            self.branches.entry(id.clone()).or_insert_with(|| {
                 self.total_count.fetch_add(1, Ordering::Relaxed);
+                order.push(id);
                 BranchState::Uncovered
             });
         }
@@ -122,14 +127,14 @@ impl CoverageOracle {
     }
 
     /// Merge an AFL++ style coverage bitmap (one byte per edge, non-zero = hit).
-    /// Branch IDs are resolved by index position in the registered set.
+    /// Branch IDs are resolved by index position in the insertion-ordered branch list,
+    /// ensuring deterministic mapping regardless of DashMap iteration order.
     pub fn merge_bitmap(&self, bitmap: &[u8], seed_id: SeedId) -> DeltaCoverage {
         let mut delta = DeltaCoverage::default();
-        // Collect ordered keys once so index matches bitmap position.
-        let keys: Vec<BranchId> = self.branches.iter().map(|r| r.key().clone()).collect();
+        let order = self.branch_order.lock().unwrap();
         for (idx, &byte) in bitmap.iter().enumerate() {
             if byte > 0 {
-                if let Some(branch) = keys.get(idx) {
+                if let Some(branch) = order.get(idx) {
                     if self.mark_covered(branch, seed_id) {
                         delta.newly_covered.push(branch.clone());
                     }
@@ -711,6 +716,36 @@ mod tests {
         let oracle = CoverageOracle::new();
         let b = make_branch(999, 0);
         assert!(oracle.heuristic_for(&b).is_none());
+    }
+
+    #[test]
+    fn merge_bitmap_uses_stable_ordering() {
+        // Create two oracles with the same branches in the same order.
+        // Merge the same bitmap into both and verify identical results.
+        let branches: Vec<_> = (0u32..8).map(|l| make_branch(l, 0)).collect();
+        let bitmap = vec![1u8, 0, 1, 0, 1, 0, 1, 0];
+
+        let mut results = Vec::new();
+        for _ in 0..10 {
+            let oracle = CoverageOracle::new();
+            oracle.register_branches(branches.clone());
+            let seed = SeedId::new();
+            let delta = oracle.merge_bitmap(&bitmap, seed);
+            results.push(delta.newly_covered);
+        }
+        // All runs must produce identical newly_covered lists.
+        for r in &results[1..] {
+            assert_eq!(
+                &results[0], r,
+                "merge_bitmap produced non-deterministic results"
+            );
+        }
+        // Verify the correct branches were covered (indices 0, 2, 4, 6).
+        assert_eq!(results[0].len(), 4);
+        assert_eq!(results[0][0], branches[0]);
+        assert_eq!(results[0][1], branches[2]);
+        assert_eq!(results[0][2], branches[4]);
+        assert_eq!(results[0][3], branches[6]);
     }
 
     use proptest::prelude::*;

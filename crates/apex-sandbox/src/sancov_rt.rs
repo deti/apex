@@ -18,7 +18,11 @@ static COUNTERS: [AtomicU8; MAX_EDGES] = {
 };
 
 /// Total number of guards (edges) registered.
-static NUM_GUARDS: AtomicU32 = AtomicU32::new(0);
+/// Starts at 1: guard index 0 is reserved as the "uninitialized" sentinel.
+/// The C shim's `!*guard` check treats 0 as "guard not yet assigned", so
+/// assigning real edge IDs starting from 1 keeps the Rust runtime and
+/// C shim semantics aligned. LLVM initialises all guard slots to 0.
+static NUM_GUARDS: AtomicU32 = AtomicU32::new(1);
 
 /// Called by the instrumented binary once at startup for each module.
 ///
@@ -187,7 +191,7 @@ mod tests {
     fn reset_all() {
         reset_bitmap();
         reset_cmp_log();
-        NUM_GUARDS.store(0, Ordering::SeqCst);
+        NUM_GUARDS.store(1, Ordering::SeqCst); // 1 matches the initial sentinel value
     }
 
     #[test]
@@ -362,9 +366,9 @@ mod tests {
         unsafe {
             __sanitizer_cov_trace_pc_guard_init(start, stop);
         }
-        // NUM_GUARDS was reset to 0, so IDs start at 0.
+        // NUM_GUARDS was reset to 1 (sentinel), so IDs start at 1.
         for (i, &g) in guards.iter().enumerate() {
-            assert_eq!(g, i as u32);
+            assert_eq!(g, (i + 1) as u32);
         }
     }
 
@@ -407,7 +411,7 @@ mod tests {
     #[serial]
     fn num_guards_returns_current_count() {
         reset_all();
-        assert_eq!(num_guards(), 0);
+        assert_eq!(num_guards(), 1); // sentinel value; no real guards registered yet
     }
 
     #[test]
@@ -420,7 +424,7 @@ mod tests {
         unsafe {
             __sanitizer_cov_trace_pc_guard_init(start, stop);
         }
-        assert_eq!(NUM_GUARDS.load(Ordering::SeqCst), 3);
+        assert_eq!(NUM_GUARDS.load(Ordering::SeqCst), 4); // 1 (sentinel) + 3 guards
     }
 
     // --- guard_init clamps IDs that exceed MAX_EDGES ---
@@ -593,12 +597,12 @@ mod tests {
         assert!(bitmap.iter().all(|&b| b == 0));
     }
 
-    /// `num_guards()` after `reset_all()` returns 0.
+    /// `num_guards()` after `reset_all()` returns 1 (sentinel).
     #[test]
     #[serial]
-    fn num_guards_zero_after_reset() {
+    fn num_guards_sentinel_after_reset() {
         reset_all();
-        assert_eq!(num_guards(), 0);
+        assert_eq!(num_guards(), 1);
     }
 
     /// `reset_cmp_log()` called when already empty stays empty.
@@ -722,17 +726,17 @@ mod tests {
         unsafe {
             __sanitizer_cov_trace_pc_guard_init(g1.as_mut_ptr(), g1.as_mut_ptr().add(2));
         }
-        // NUM_GUARDS should be 2 now.
-        assert_eq!(NUM_GUARDS.load(Ordering::SeqCst), 2);
+        // NUM_GUARDS should be 1 (sentinel) + 2 = 3 now.
+        assert_eq!(NUM_GUARDS.load(Ordering::SeqCst), 3);
         unsafe {
             __sanitizer_cov_trace_pc_guard_init(g2.as_mut_ptr(), g2.as_mut_ptr().add(3));
         }
-        // After second call: NUM_GUARDS = 5.
-        assert_eq!(NUM_GUARDS.load(Ordering::SeqCst), 5);
-        // g2 guards should have IDs starting from 2.
-        assert_eq!(g2[0], 2);
-        assert_eq!(g2[1], 3);
-        assert_eq!(g2[2], 4);
+        // After second call: NUM_GUARDS = 3 + 3 = 6.
+        assert_eq!(NUM_GUARDS.load(Ordering::SeqCst), 6);
+        // g2 guards should have IDs starting from 3.
+        assert_eq!(g2[0], 3);
+        assert_eq!(g2[1], 4);
+        assert_eq!(g2[2], 5);
     }
 
     /// `MAX_EDGES` constant is correct.
@@ -745,6 +749,45 @@ mod tests {
     #[test]
     fn max_cmp_entries_constant() {
         assert_eq!(MAX_CMP_ENTRIES, 4096);
+    }
+
+    /// Verify the shim and runtime agree on guard semantics: guard index 0
+    /// is reserved as the "uninitialized" sentinel, real IDs start from 1.
+    /// The C shim's `!*guard` check skips guard value 0, and guard_init
+    /// must never assign 0 to a real edge.
+    #[test]
+    #[serial]
+    fn sancov_shim_source_does_not_skip_guard_zero() {
+        reset_all();
+
+        // After reset, NUM_GUARDS is 1 (sentinel). guard_init should assign
+        // IDs starting from 1, never 0.
+        let mut guards = [0u32; 4];
+        let start = guards.as_mut_ptr();
+        let stop = unsafe { start.add(guards.len()) };
+        unsafe {
+            __sanitizer_cov_trace_pc_guard_init(start, stop);
+        }
+
+        // No guard should be assigned ID 0 — that's the sentinel.
+        for (i, &g) in guards.iter().enumerate() {
+            assert_ne!(g, 0, "guard[{i}] must not be 0 (sentinel)");
+            assert_eq!(g, (i + 1) as u32);
+        }
+
+        // The C shim source uses `!*guard` to skip uninitialized guards.
+        // Verify the shim contains this check.
+        let shim_src = crate::shim::coverage_shim_source();
+        assert!(
+            shim_src.contains("!*guard"),
+            "C shim must check !*guard to skip uninitialized (0) guards"
+        );
+
+        // The C shim uses `++n` (pre-increment from 0) so IDs also start from 1.
+        assert!(
+            shim_src.contains("++n"),
+            "C shim guard_init must use pre-increment (++n) to start IDs from 1"
+        );
     }
 
     /// `CmpLogEntry` inequality — two entries with different args are not equal.

@@ -119,6 +119,9 @@ impl CommandRunner for RealCommandRunner {
         let result = tokio::time::timeout(deadline, child.wait_with_output()).await;
 
         match result {
+            // On timeout, the `child` future is dropped. tokio's `Child` Drop impl
+            // sends SIGKILL on Unix (and terminates on Windows), so the child process
+            // is cleaned up automatically — no orphaned processes.
             Err(_) => Err(ApexError::Timeout(spec.timeout_ms)),
             Ok(Err(e)) => Err(ApexError::Subprocess {
                 exit_code: -1,
@@ -273,6 +276,25 @@ mod tests {
         let spec = CommandSpec::new("missing", "/tmp");
         let result = mock.run_command(&spec).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn timeout_kills_child_process() {
+        let runner = RealCommandRunner;
+        let spec = CommandSpec::new("sleep", "/tmp").args(["10"]).timeout(100);
+        let start = std::time::Instant::now();
+        let result = runner.run_command(&spec).await;
+        let elapsed = start.elapsed();
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ApexError::Timeout(ms) => assert_eq!(ms, 100),
+            other => panic!("expected Timeout, got {other:?}"),
+        }
+        // Should return promptly (well under the 10s sleep).
+        assert!(
+            elapsed.as_secs() < 2,
+            "timeout took too long: {elapsed:?}, child may not have been killed"
+        );
     }
 
     #[test]

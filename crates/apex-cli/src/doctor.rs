@@ -381,8 +381,9 @@ async fn run_doctor_with_runner(runner: &dyn CommandRunner) -> color_eyre::Resul
     if total_failures == 0 {
         println!("\x1b[32m\x1b[1mAll required tools present.\x1b[0m");
     } else {
-        println!("\x1b[31m\x1b[1m{total_failures} required tool(s) missing. Install them and re-run `apex doctor`.\x1b[0m");
-        std::process::exit(1);
+        return Err(color_eyre::eyre::eyre!(
+            "{total_failures} required tool(s) missing. Install them and re-run `apex doctor`."
+        ));
     }
 
     Ok(())

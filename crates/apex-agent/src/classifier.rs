@@ -21,7 +21,7 @@ impl BranchClassifier {
         if snippet.contains("except") || snippet.contains("raise") || snippet.contains("catch") {
             return BranchDifficulty::ExceptionHandler;
         }
-        if snippet.contains('[') || snippet.contains('.') && snippet.contains('>') {
+        if (snippet.contains('[') || snippet.contains('.')) && snippet.contains('>') {
             return BranchDifficulty::DataFlow;
         }
         BranchDifficulty::Trivial
@@ -54,6 +54,18 @@ mod tests {
     fn data_flow_via_multiple_assignments() {
         let diff = BranchClassifier::classify_source("if result[0] > threshold:");
         assert_eq!(diff, BranchDifficulty::DataFlow);
+    }
+
+    #[test]
+    fn classify_list_literal_not_dataflow() {
+        let result = BranchClassifier::classify_source("[1, 2, 3]");
+        assert_ne!(result, BranchDifficulty::DataFlow);
+    }
+
+    #[test]
+    fn classify_dict_access_is_dataflow() {
+        let result = BranchClassifier::classify_source("data[key].score > threshold");
+        assert_eq!(result, BranchDifficulty::DataFlow);
     }
 
     #[test]

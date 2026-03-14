@@ -160,7 +160,9 @@ impl AgentCluster {
                         );
                     }
                     for strategy in &self.strategies {
-                        let _ = strategy.observe(result).await;
+                        if let Err(e) = strategy.observe(result).await {
+                            tracing::warn!(error = %e, strategy = %strategy.name(), "Strategy observe failed");
+                        }
                     }
                 }
                 stall_count = if new_coverage { 0 } else { stall_count + 1 };

@@ -37,8 +37,12 @@ impl TaintRuleSet {
                 "os.environ".into(),
             ],
             sinks: vec![
-                "execute".into(),
-                "executemany".into(),
+                "cursor.execute".into(),
+                "conn.execute".into(),
+                "db.execute".into(),
+                "session.execute".into(),
+                "cursor.executemany".into(),
+                "conn.executemany".into(),
                 "os.system".into(),
                 "os.popen".into(),
                 "subprocess.call".into(),
@@ -49,13 +53,12 @@ impl TaintRuleSet {
                 "render_template_string".into(),
             ],
             sanitizers: vec![
-                "escape".into(),
-                "quote".into(),
-                "sanitize".into(),
-                "clean".into(),
-                "parameterize".into(),
-                "bleach.clean".into(),
+                "html.escape".into(),
                 "markupsafe.escape".into(),
+                "shlex.quote".into(),
+                "bleach.clean".into(),
+                "bleach.sanitize".into(),
+                "parameterize".into(),
             ],
         }
     }
@@ -115,18 +118,34 @@ impl TaintRuleSet {
     }
 
     /// Check if a function name matches any source pattern.
+    ///
+    /// Uses exact or dotted-suffix matching: `name` must equal a rule exactly,
+    /// or end with `.<rule>`.  This avoids false positives where a substring
+    /// like `"input"` would match `"input_sanitized"`.
     pub fn is_source(&self, name: &str) -> bool {
-        self.sources.iter().any(|s| name.contains(s.as_str()))
+        self.sources
+            .iter()
+            .any(|s| name == s.as_str() || name.ends_with(&format!(".{s}")))
     }
 
     /// Check if a function name matches any sink pattern.
+    ///
+    /// Uses exact or dotted-suffix matching to prevent false positives such as
+    /// `"executor"` matching the `"exec"` rule.
     pub fn is_sink(&self, name: &str) -> bool {
-        self.sinks.iter().any(|s| name.contains(s.as_str()))
+        self.sinks
+            .iter()
+            .any(|s| name == s.as_str() || name.ends_with(&format!(".{s}")))
     }
 
     /// Check if a function name matches any sanitizer pattern.
+    ///
+    /// Uses exact or dotted-suffix matching to prevent false positives such as
+    /// `"cleanup_data"` matching the `"clean"` rule.
     pub fn is_sanitizer(&self, name: &str) -> bool {
-        self.sanitizers.iter().any(|s| name.contains(s.as_str()))
+        self.sanitizers
+            .iter()
+            .any(|s| name == s.as_str() || name.ends_with(&format!(".{s}")))
     }
 }
 
@@ -145,7 +164,7 @@ mod tests {
     fn default_python_rules_have_sinks() {
         let rules = TaintRuleSet::python_defaults();
         assert!(!rules.sinks.is_empty());
-        assert!(rules.sinks.iter().any(|s| s.contains("execute")));
+        assert!(rules.sinks.iter().any(|s| s.ends_with("execute")));
     }
 
     #[test]
@@ -211,6 +230,43 @@ mod tests {
         };
         assert!(rules.is_sanitizer("escape"));
         assert!(!rules.is_sanitizer("noop"));
+    }
+
+    #[test]
+    fn is_sink_rejects_substring_match() {
+        let rules = TaintRuleSet::python_defaults();
+        assert!(rules.is_sink("exec"));
+        assert!(!rules.is_sink("executor"));
+        assert!(!rules.is_sink("execute_callback"));
+    }
+
+    #[test]
+    fn is_sanitizer_rejects_substring_match() {
+        let rules = TaintRuleSet::python_defaults();
+        assert!(rules.is_sanitizer("shlex.quote"));
+        assert!(!rules.is_sanitizer("cleanup_data"));
+        assert!(!rules.is_sanitizer("my_escape_plan"));
+    }
+
+    #[test]
+    fn is_source_rejects_substring_match() {
+        let rules = TaintRuleSet::python_defaults();
+        assert!(rules.is_source("request.args"));
+        assert!(!rules.is_source("my_request_args_parser"));
+        assert!(!rules.is_source("input_handler"));
+    }
+
+    #[test]
+    fn dotted_suffix_matching_works() {
+        let rules = TaintRuleSet::python_defaults();
+        // "cursor.execute" is a sink rule; "db.cursor.execute" should match via .suffix
+        assert!(rules.is_sink("cursor.execute"));
+        assert!(rules.is_sink("db.cursor.execute"));
+        // "eval" exact match
+        assert!(rules.is_sink("eval"));
+        // dotted suffix for sanitizer
+        assert!(rules.is_sanitizer("markupsafe.escape"));
+        assert!(rules.is_sanitizer("jinja2.markupsafe.escape"));
     }
 
     #[test]
