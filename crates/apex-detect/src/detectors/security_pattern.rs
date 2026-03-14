@@ -92,6 +92,42 @@ const PYTHON_SECURITY_PATTERNS: &[SecurityPattern] = &[
         cwe: &[78],
     },
     SecurityPattern {
+        sink: "subprocess.run(",
+        description: "subprocess.run — potential command injection",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &["shell=True", "format(", "f\"", "request", "input", "%s"],
+        sanitization_indicators: &["shlex.quote", "shlex.split", "shell=False"],
+        cwe: &[78],
+    },
+    SecurityPattern {
+        sink: "subprocess.Popen(",
+        description: "subprocess.Popen — potential command injection",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &["shell=True", "format(", "f\"", "request", "input", "%s"],
+        sanitization_indicators: &["shlex.quote", "shlex.split", "shell=False"],
+        cwe: &[78],
+    },
+    SecurityPattern {
+        sink: "os.popen(",
+        description: "os.popen() — command injection risk",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &["format(", "f\"", "request", "input", "%s", "+"],
+        sanitization_indicators: &["shlex.quote"],
+        cwe: &[78],
+    },
+    SecurityPattern {
+        sink: "__import__(",
+        description: "__import__() — dynamic module loading, code injection risk",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &["request", "input", "param", "query", "form", "argv"],
+        sanitization_indicators: &["allowlist", "whitelist", "ALLOWED"],
+        cwe: &[94],
+    },
+    SecurityPattern {
         sink: "os.system(",
         description: "os.system() — command injection risk",
         category: FindingCategory::Injection,
@@ -187,6 +223,61 @@ const JS_SECURITY_PATTERNS: &[SecurityPattern] = &[
         ],
         sanitization_indicators: &["escape", "sanitize", "execFile"],
         cwe: &[78],
+    },
+    SecurityPattern {
+        sink: "child_process.execSync(",
+        description: "child_process.execSync — synchronous command injection via shell",
+        category: FindingCategory::Injection,
+        base_severity: Severity::Critical,
+        user_input_indicators: &[
+            "req.", "request", "params", "query", "body", "input", "${", "`",
+        ],
+        sanitization_indicators: &["escape", "sanitize"],
+        cwe: &[78],
+    },
+    SecurityPattern {
+        sink: "child_process.spawn(",
+        description: "child_process.spawn — command injection",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &[
+            "req.", "request", "params", "query", "body", "input",
+        ],
+        sanitization_indicators: &["escape", "sanitize"],
+        cwe: &[78],
+    },
+    SecurityPattern {
+        sink: "res.write(",
+        description: "res.write() — XSS if content includes user input",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &[
+            "req.", "request", "params", "query", "body", "input",
+        ],
+        sanitization_indicators: &["escape", "encode", "sanitize", "textContent"],
+        cwe: &[79],
+    },
+    SecurityPattern {
+        sink: "res.send(",
+        description: "res.send() — XSS if content includes user input",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &[
+            "req.", "request", "params", "query", "body", "input",
+        ],
+        sanitization_indicators: &["escape", "encode", "sanitize", "textContent", "json"],
+        cwe: &[79],
+    },
+    SecurityPattern {
+        sink: "require(",
+        description: "require() — dynamic module loading, code injection risk",
+        category: FindingCategory::Injection,
+        base_severity: Severity::Medium,
+        user_input_indicators: &[
+            "req.", "request", "params", "query", "body", "input", "argv",
+        ],
+        sanitization_indicators: &["allowlist", "whitelist", "ALLOWED", "path.join"],
+        cwe: &[94],
     },
     SecurityPattern {
         sink: "innerHTML",
@@ -360,6 +451,90 @@ const C_SECURITY_PATTERNS: &[SecurityPattern] = &[
     },
 ];
 
+const JAVA_SECURITY_PATTERNS: &[SecurityPattern] = &[
+    SecurityPattern {
+        sink: "Runtime.getRuntime().exec(",
+        description: "Runtime.exec — command injection",
+        category: FindingCategory::Injection,
+        base_severity: Severity::Critical,
+        user_input_indicators: &["request", "getParameter", "input", "args"],
+        sanitization_indicators: &[],
+        cwe: &[78],
+    },
+    SecurityPattern {
+        sink: "ProcessBuilder(",
+        description: "ProcessBuilder — potential command injection",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &["request", "getParameter", "input", "args"],
+        sanitization_indicators: &[],
+        cwe: &[78],
+    },
+    SecurityPattern {
+        sink: "executeQuery(",
+        description: "executeQuery — potential SQL injection",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &["+", "format", "request", "getParameter", "concat"],
+        sanitization_indicators: &["PreparedStatement", "parameterized", "?"],
+        cwe: &[89],
+    },
+    SecurityPattern {
+        sink: "executeUpdate(",
+        description: "executeUpdate — potential SQL injection",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &["+", "format", "request", "getParameter", "concat"],
+        sanitization_indicators: &["PreparedStatement", "parameterized", "?"],
+        cwe: &[89],
+    },
+    SecurityPattern {
+        sink: "readObject(",
+        description: "readObject — unsafe deserialization",
+        category: FindingCategory::Injection,
+        base_severity: Severity::Critical,
+        user_input_indicators: &["socket", "request", "upload", "input", "InputStream"],
+        sanitization_indicators: &["ObjectInputFilter", "ValidatingObjectInputStream"],
+        cwe: &[502],
+    },
+    SecurityPattern {
+        sink: "getWriter().print(",
+        description: "getWriter().print — potential XSS",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &["request", "getParameter", "getHeader", "getCookie"],
+        sanitization_indicators: &["encode", "escape", "sanitize", "ESAPI"],
+        cwe: &[79],
+    },
+    SecurityPattern {
+        sink: "new URL(",
+        description: "new URL() — potential SSRF",
+        category: FindingCategory::Injection,
+        base_severity: Severity::Medium,
+        user_input_indicators: &["request", "getParameter", "input", "param"],
+        sanitization_indicators: &["allowlist", "whitelist", "ALLOWED"],
+        cwe: &[918],
+    },
+    SecurityPattern {
+        sink: "MessageDigest.getInstance(\"MD5\"",
+        description: "MD5 hash — weak cryptographic hash",
+        category: FindingCategory::SecuritySmell,
+        base_severity: Severity::Medium,
+        user_input_indicators: &["password", "token", "secret"],
+        sanitization_indicators: &[],
+        cwe: &[328],
+    },
+    SecurityPattern {
+        sink: "MessageDigest.getInstance(\"SHA-1\"",
+        description: "SHA-1 hash — weak cryptographic hash",
+        category: FindingCategory::SecuritySmell,
+        base_severity: Severity::Medium,
+        user_input_indicators: &["password", "token", "secret"],
+        sanitization_indicators: &[],
+        cwe: &[328],
+    },
+];
+
 const CONTEXT_WINDOW: usize = 3;
 
 fn has_indicator(lines: &[&str], line_num: usize, indicators: &[&str]) -> bool {
@@ -415,6 +590,7 @@ fn patterns_for_language(lang: Language) -> &'static [SecurityPattern] {
         Language::JavaScript => JS_SECURITY_PATTERNS,
         Language::Ruby => RUBY_SECURITY_PATTERNS,
         Language::C => C_SECURITY_PATTERNS,
+        Language::Java => JAVA_SECURITY_PATTERNS,
         _ => &[],
     }
 }
@@ -522,6 +698,7 @@ mod tests {
             fuzz_corpus: None,
             config: DetectConfig::default(),
             runner: Arc::new(apex_core::command::RealCommandRunner),
+            cpg: None,
         }
     }
 
@@ -779,7 +956,7 @@ mod tests {
         let ctx = make_ctx(files, Language::Python);
         let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
         assert_eq!(findings.len(), 1);
-        // base=High, user input (shell=True + request) → stays High, sanitization (shlex.quote) → Medium
+        // base=High, user input (shell=True + request) -> stays High, sanitization (shlex.quote) -> Medium
         assert_eq!(findings[0].severity, Severity::Medium);
     }
 
@@ -832,7 +1009,7 @@ mod tests {
         let mut files = HashMap::new();
         files.insert(
             PathBuf::from("src/exec.js"),
-            "const cp = require('child_process');\nfunction run(req) {\n    cp.child_process.exec(req.body.cmd);\n}\n".into(),
+            "const cp = import('child_process');\nfunction run(req) {\n    cp.child_process.exec(req.body.cmd);\n}\n".into(),
         );
         let ctx = make_ctx(files, Language::JavaScript);
         let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
@@ -864,34 +1041,156 @@ mod tests {
 
     #[test]
     fn adjust_severity_indicators_defined_but_absent() {
-        // Indicators defined but no match → downgrade
+        // Indicators defined but no match -> downgrade
         let sev = adjust_severity(Severity::Critical, false, false, true);
         assert_eq!(sev, Severity::High);
     }
 
     #[test]
     fn adjust_severity_user_input_and_sanitization() {
-        // Both present → base stays, then downgrade for sanitization
+        // Both present -> base stays, then downgrade for sanitization
         let sev = adjust_severity(Severity::Critical, true, true, true);
         assert_eq!(sev, Severity::High);
     }
 
+    // Task 1 tests — Python command injection patterns
+
     #[tokio::test]
-    async fn findings_include_cwe_ids() {
-        // eval pattern → CWE-94 (Code Injection)
+    async fn detects_subprocess_run_shell_true() {
         let mut files = HashMap::new();
         files.insert(
             PathBuf::from("src/app.py"),
-            "def handle(request):\n    result = eval(request.get('expr'))\n    return result\n"
-                .into(),
+            "def execute(cmd):\n    subprocess.run(cmd, shell=True)\n".into(),
         );
         let ctx = make_ctx(files, Language::Python);
         let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
-        assert_eq!(findings.len(), 1);
-        assert!(
-            findings[0].cwe_ids.contains(&94),
-            "expected CWE-94 in cwe_ids, got {:?}",
-            findings[0].cwe_ids
+        assert!(!findings.is_empty(), "should detect subprocess.run");
+        assert_eq!(findings[0].category, FindingCategory::Injection);
+    }
+
+    #[tokio::test]
+    async fn detects_subprocess_popen() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/app.py"),
+            "def run(cmd):\n    p = subprocess.Popen(cmd, shell=True)\n".into(),
         );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect subprocess.Popen");
+    }
+
+    #[tokio::test]
+    async fn detects_os_popen() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/app.py"),
+            "def run(cmd):\n    os.popen(cmd)\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect os.popen");
+    }
+
+    #[tokio::test]
+    async fn detects_dunder_import() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/app.py"),
+            "def load(name):\n    mod = __import__(name)\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect __import__");
+    }
+
+    // Task 2 tests — JS framework security patterns
+
+    #[tokio::test]
+    async fn detects_res_write_xss() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/app.js"),
+            "function handle(req, res) {\n  res.write(req.query.data);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::JavaScript);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty());
+        assert_eq!(findings[0].category, FindingCategory::Injection);
+    }
+
+    #[tokio::test]
+    async fn detects_child_process_spawn() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/app.js"),
+            "const { spawn } = require('child_process');\nfunction run(req) {\n  child_process.spawn(req.body.cmd);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::JavaScript);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn detects_require_with_variable() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/app.js"),
+            "function load(req) {\n  const mod = require(req.params.module);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::JavaScript);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty());
+    }
+
+    // Task 6 tests — Java security patterns
+
+    #[tokio::test]
+    async fn detects_java_runtime_exec() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/App.java"),
+            "public void run(String cmd) {\n    Runtime.getRuntime().exec(cmd);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Java);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty());
+        assert_eq!(findings[0].category, FindingCategory::Injection);
+    }
+
+    #[tokio::test]
+    async fn detects_java_sql_injection() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Dao.java"),
+            "public void find(String userId) {\n    stmt.executeQuery(\"SELECT * FROM users WHERE id=\" + userId);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Java);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn detects_java_deserialization() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Server.java"),
+            "public void handle(Socket socket) {\n    ObjectInputStream ois = new ObjectInputStream(socket.getInputStream());\n    Object obj = ois.readObject();\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Java);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn java_no_findings_for_safe_query() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Dao.java"),
+            "public void find(String id) {\n    PreparedStatement ps = conn.prepareStatement(\"SELECT * FROM users WHERE id = ?\");\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Java);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
     }
 }

@@ -160,13 +160,18 @@ impl Strategy for FuzzStrategy {
     async fn observe(&self, result: &ExecutionResult) -> Result<()> {
         // Add to corpus any input that found new coverage.
         if !result.new_branches.is_empty() {
-            info!(
-                newly_covered = result.new_branches.len(),
-                "fuzzer: interesting input added to corpus"
-            );
-            // The seed data is not stored in ExecutionResult; the orchestrator
-            // must call seed_corpus() separately with the winning input.
-            // TODO(phase3): thread the winning InputSeed back through result.
+            if let Some(ref input_data) = result.input {
+                let mut corpus = self
+                    .corpus
+                    .lock()
+                    .map_err(|e| ApexError::Other(format!("corpus mutex poisoned: {e}")))?;
+                corpus.add(input_data.clone(), result.new_branches.len());
+                info!(
+                    newly_covered = result.new_branches.len(),
+                    corpus_size = corpus.len(),
+                    "fuzzer: interesting input added to corpus"
+                );
+            }
         }
         Ok(())
     }
@@ -268,6 +273,7 @@ mod tests {
             duration_ms: 10,
             stdout: String::new(),
             stderr: String::new(),
+            input: None,
         }
     }
 
@@ -286,6 +292,39 @@ mod tests {
         let strategy = FuzzStrategy::new(oracle);
         let result = make_result_with_branches(vec![]);
         assert!(strategy.observe(&result).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn observe_adds_input_to_corpus_on_new_coverage() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let strategy = FuzzStrategy::new(oracle);
+        // Corpus starts empty
+        assert_eq!(strategy.corpus.lock().unwrap().len(), 0);
+
+        let branch = apex_core::types::BranchId::new(1, 10, 0, 0);
+        let result = ExecutionResult {
+            seed_id: apex_core::types::SeedId::new(),
+            status: apex_core::types::ExecutionStatus::Pass,
+            new_branches: vec![branch],
+            trace: None,
+            duration_ms: 5,
+            stdout: String::new(),
+            stderr: String::new(),
+            input: Some(b"interesting_input".to_vec()),
+        };
+        strategy.observe(&result).await.unwrap();
+        assert_eq!(strategy.corpus.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn observe_does_not_add_without_input() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let strategy = FuzzStrategy::new(oracle);
+        let branch = apex_core::types::BranchId::new(1, 10, 0, 0);
+        let result = make_result_with_branches(vec![branch]);
+        // input is None — should not add to corpus
+        strategy.observe(&result).await.unwrap();
+        assert_eq!(strategy.corpus.lock().unwrap().len(), 0);
     }
 
     #[tokio::test]

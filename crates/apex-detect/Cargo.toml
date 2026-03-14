@@ -9,6 +9,7 @@ description = "Bug detection and security analysis pipeline for APEX"
 
 [dependencies]
 apex-core = { path = "../apex-core" }
+apex-cpg = { path = "../apex-cpg" }
 apex-coverage = { path = "../apex-coverage" }
 async-trait = "0.1"
 futures = "0.3"

@@ -160,6 +160,7 @@ impl Sandbox for PythonTestSandbox {
                     duration_ms,
                     stdout: String::new(),
                     stderr: String::new(),
+                    input: None,
                 });
             }
             Ok(Err(e)) => return Err(ApexError::Sandbox(format!("spawn pytest: {e}"))),
@@ -222,6 +223,7 @@ impl Sandbox for PythonTestSandbox {
             duration_ms,
             stdout,
             stderr,
+            input: None,
         })
     }
 

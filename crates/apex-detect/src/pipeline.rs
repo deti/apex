@@ -58,6 +58,9 @@ impl DetectorPipeline {
         if cfg.enabled.contains(&"timeout".to_string()) {
             detectors.push(Box::new(MissingTimeoutDetector));
         }
+        if cfg.enabled.contains(&"session-security".to_string()) {
+            detectors.push(Box::new(SessionSecurityDetector));
+        }
 
         Self { detectors }
     }
@@ -86,6 +89,9 @@ impl DetectorPipeline {
                 }
                 if cfg.enabled.contains(&"timeout".to_string()) {
                     detectors.push(Box::new(MissingTimeoutDetector));
+                }
+                if cfg.enabled.contains(&"session-security".to_string()) {
+                    detectors.push(Box::new(SessionSecurityDetector));
                 }
 
                 Self { detectors }
@@ -244,6 +250,7 @@ mod tests {
             fuzz_corpus: None,
             config: crate::config::DetectConfig::default(),
             runner: Arc::new(apex_core::command::RealCommandRunner),
+            cpg: None,
         }
     }
 
@@ -350,7 +357,7 @@ mod tests {
     fn from_config_enables_all_by_default() {
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
-        assert_eq!(pipeline.detectors.len(), 8);
+        assert_eq!(pipeline.detectors.len(), 9);
     }
 
     #[test]
@@ -669,8 +676,8 @@ mod tests {
         let cfg = DetectConfig::default();
         let pipeline =
             DetectorPipeline::from_config_with_mode(&cfg, Language::Rust, DetectMode::Fast);
-        // panic, security, secrets, path-normalize, timeout = 5 detectors
-        assert_eq!(pipeline.detectors.len(), 5);
+        // panic, security, secrets, path-normalize, timeout, session-security = 6 detectors
+        assert_eq!(pipeline.detectors.len(), 6);
     }
 
     #[tokio::test]

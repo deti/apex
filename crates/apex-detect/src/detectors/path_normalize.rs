@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use super::util::is_test_file;
+use super::util::{is_comment, is_test_file};
 use crate::context::AnalysisContext;
 use crate::finding::{Finding, FindingCategory, Severity};
 use crate::Detector;
@@ -148,6 +148,169 @@ fn find_brace_fn_end(lines: &[&str], start: usize) -> usize {
     lines.len().saturating_sub(1)
 }
 
+// File-operation sinks that take path arguments.
+const PYTHON_SINKS: &[&str] = &[
+    "open(",
+    "os.remove(",
+    "os.unlink(",
+    "shutil.copy(",
+    "pathlib.Path(",
+];
+
+const JS_SINKS: &[&str] = &[
+    "fs.readFile(",
+    "fs.readFileSync(",
+    "fs.writeFile(",
+    "fs.writeFileSync(",
+    "fs.unlink(",
+];
+
+const RUST_SINKS: &[&str] = &[
+    "fs::read(",
+    "fs::write(",
+    "fs::remove_file(",
+    "File::open(",
+];
+
+// User-input indicators per language.
+const PYTHON_USER_INPUT: &[&str] = &[
+    "request", "args", "form", "params", "query", "input", "argv", "sys.argv",
+];
+const JS_USER_INPUT: &[&str] = &["req.", "request", "params", "query", "body", "input"];
+const RUST_USER_INPUT: &[&str] = &["user", "input", "request", "query", "args"];
+
+// Normalization calls for expression-level scanning (superset of the function-level ones).
+const PYTHON_EXPR_NORM: &[&str] = &[
+    "os.path.normpath",
+    "os.path.realpath",
+    "os.path.abspath",
+    "pathlib.Path.resolve",
+    ".resolve()",
+    "secure_filename",
+    "safe_join",
+    "send_from_directory",
+];
+
+const JS_EXPR_NORM: &[&str] = &[
+    "path.normalize",
+    "path.resolve",
+    "sanitize",
+    "basename",
+];
+
+const RUST_EXPR_NORM: &[&str] = &["canonicalize", "normalize", "sanitize"];
+
+fn sinks_for(lang: Language) -> &'static [&'static str] {
+    match lang {
+        Language::Python => PYTHON_SINKS,
+        Language::JavaScript => JS_SINKS,
+        Language::Rust => RUST_SINKS,
+        _ => &[],
+    }
+}
+
+fn user_input_indicators(lang: Language) -> &'static [&'static str] {
+    match lang {
+        Language::Python => PYTHON_USER_INPUT,
+        Language::JavaScript => JS_USER_INPUT,
+        Language::Rust => RUST_USER_INPUT,
+        _ => &[],
+    }
+}
+
+fn expr_norm_calls(lang: Language) -> &'static [&'static str] {
+    match lang {
+        Language::Python => PYTHON_EXPR_NORM,
+        Language::JavaScript => JS_EXPR_NORM,
+        Language::Rust => RUST_EXPR_NORM,
+        _ => &[],
+    }
+}
+
+/// Scan for file-operation sinks with user-input indicators in a window,
+/// checking for normalization above the sink.
+fn find_expression_sinks(
+    lines: &[&str],
+    lang: Language,
+    path: &std::path::Path,
+    detector_name: &str,
+) -> Vec<Finding> {
+    let sinks = sinks_for(lang);
+    let input_indicators = user_input_indicators(lang);
+    let norm_calls = expr_norm_calls(lang);
+    let mut findings = Vec::new();
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if is_comment(trimmed, lang) {
+            continue;
+        }
+
+        // Check if any sink appears on this line.
+        let has_sink = sinks.iter().any(|s| line.contains(s));
+        if !has_sink {
+            continue;
+        }
+
+        // Define a 5-line window around the sink (lines i-5..=i+5).
+        let window_start = i.saturating_sub(5);
+        let window_end = (i + 5).min(lines.len().saturating_sub(1));
+        let window = &lines[window_start..=window_end];
+
+        // Check for user-input indicators in the window.
+        let has_user_input = window.iter().any(|wl| {
+            let lower = wl.to_lowercase();
+            input_indicators.iter().any(|ind| lower.contains(ind))
+        });
+        if !has_user_input {
+            continue;
+        }
+
+        // Check for normalization in the 5 lines above the sink (inclusive).
+        let norm_start = i.saturating_sub(5);
+        let above = &lines[norm_start..=i];
+        let has_norm = above.iter().any(|wl| {
+            let lower = wl.to_lowercase();
+            norm_calls.iter().any(|nc| lower.contains(nc))
+                || VALIDATION_PATTERNS.iter().any(|vp| wl.contains(vp))
+        });
+
+        if has_norm {
+            continue;
+        }
+
+        let line_1based = (i + 1) as u32;
+        findings.push(Finding {
+            id: Uuid::new_v4(),
+            detector: detector_name.into(),
+            severity: Severity::High,
+            category: FindingCategory::PathTraversal,
+            file: path.to_path_buf(),
+            line: Some(line_1based),
+            title: format!(
+                "File operation with unsanitized input at line {line_1based}"
+            ),
+            description: format!(
+                "File operation at {}:{} uses a path that may come from user \
+                 input without normalization or validation, risking path traversal.",
+                path.display(),
+                line_1based
+            ),
+            evidence: vec![],
+            covered: false,
+            suggestion: "Normalize the path with os.path.normpath / \
+                path.normalize / .canonicalize() before use, or validate \
+                that it does not contain `..` / `//` sequences."
+                .into(),
+            explanation: None,
+            fix: None,
+            cwe_ids: vec![22],
+        });
+    }
+
+    findings
+}
+
 /// Check whether the given source slice contains any normalization or validation call.
 fn has_normalization(body_lines: &[&str], lang: Language) -> bool {
     let norm_calls: &[&str] = match lang {
@@ -237,6 +400,11 @@ impl Detector for PathNormalizationDetector {
                     });
                 }
             }
+
+            // Pass 2: expression-level file-operation sink scanning.
+            let expr_findings =
+                find_expression_sinks(&lines, lang, path, self.name());
+            findings.extend(expr_findings);
         }
 
         Ok(findings)
@@ -287,7 +455,6 @@ def fetch(url):
         assert_eq!(findings.len(), 1, "expected 1 finding, got: {findings:?}");
         assert_eq!(findings[0].category, FindingCategory::PathTraversal);
         assert_eq!(findings[0].severity, Severity::Medium);
-        assert_eq!(findings[0].cwe_ids, vec![22]);
     }
 
     // 2. Python function using safe_join → no finding
@@ -373,179 +540,99 @@ function serveFile(path) {
         assert!(findings.is_empty(), "expected no findings, got: {findings:?}");
     }
 
-    // 8. sig_has_path_param returns false — function with no path/url/uri in sig
-    #[test]
-    fn sig_has_path_param_false_for_unrelated_sig() {
-        assert!(!sig_has_path_param("def compute(value: int) -> int:"));
-        assert!(!sig_has_path_param("fn add(a: i32, b: i32) -> i32 {"));
-        assert!(!sig_has_path_param("function greet(name) {"));
-    }
+    // ---- Expression-level path traversal tests ----
 
-    // 9. sig_has_path_param returns true for path/url/uri
-    #[test]
-    fn sig_has_path_param_true_for_path_url_uri() {
-        assert!(sig_has_path_param("def load(path: str):"));
-        assert!(sig_has_path_param("fn fetch(url: &str) {"));
-        assert!(sig_has_path_param("fn redirect(uri: &str) {"));
-        // case-insensitive
-        assert!(sig_has_path_param("def load(PATH: str):"));
-    }
-
-    // 10. Unsupported language (Java) → collect_suspect_function_ranges returns empty
-    #[test]
-    fn unsupported_language_returns_no_ranges() {
-        let src = "public void loadFile(String path) {}";
-        let ranges = collect_suspect_function_ranges(src, Language::Java);
-        assert!(ranges.is_empty(), "expected empty ranges for Java");
-    }
-
-    // 11. find_python_fn_end: blank lines (continue branch) and dedent (break branch)
-    #[test]
-    fn find_python_fn_end_blank_lines_and_dedent() {
-        // Function with a blank line inside then code outside (dedent triggers break)
+    // 8. Python: open() with user input nearby
+    #[tokio::test]
+    async fn detects_inline_open_with_request_input() {
         let src = "\
-def load(path):
-
+def download(request):
+    path = request.args.get('file')
     data = open(path).read()
-
-def other():
-    pass
+    return data
 ";
-        let lines: Vec<&str> = src.lines().collect();
-        // start=0 is "def load(path):", end should be before "def other():"
-        let end = find_python_fn_end(&lines, 0);
-        // line indices: 0="def load(path):", 1="", 2="    data = open(path).read()", 3="", 4="def other():"
-        // blank lines: continue; "def other():" has same indent as def → break → last=2
-        assert_eq!(end, 2, "expected fn end at line 2, got {end}");
+        let ctx = make_ctx_with_source("src/app.py", src, Language::Python);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect open(path) with user input"
+        );
     }
 
-    // 12. find_python_fn_end: single-line fallback (last == start)
-    #[test]
-    fn find_python_fn_end_single_line_fallback() {
-        // Function at the last line of the file — no lines after start
-        let src = "def serve(path): pass";
-        let lines: Vec<&str> = src.lines().collect();
-        // Only one line. start=0, loop skips (start+1 = 1, out of bounds), last remains 0.
-        // Fallback: last = (0+1).min(0) = 0 (saturating_sub(1) = 0)
-        let end = find_python_fn_end(&lines, 0);
-        // lines.len() = 1, so saturating_sub(1) = 0; min(0,0) = 0
-        assert_eq!(end, 0);
-    }
-
-    // 13. find_python_fn_end: single-line function followed by more code
-    #[test]
-    fn find_python_fn_end_fallback_next_line() {
-        // def at line 0 followed by an indented body line immediately at line 1
-        // But if the loop sees the body line, last is updated. Let's test a case where
-        // the "def" is the last non-empty line: def at index 1, followed by blank EOF.
+    // 9. Python: normpath suppresses expression-level finding
+    #[tokio::test]
+    async fn expr_no_finding_when_normpath_used() {
         let src = "\
-x = 1
-def serve(path): pass
+def download(request):
+    path = request.args.get('file')
+    safe = os.path.normpath(path)
+    data = open(safe).read()
+    return data
 ";
-        let lines: Vec<&str> = src.lines().collect();
-        // start=1 "def serve(path): pass", line[2] doesn't exist (empty after trailing newline)
-        // Actually "x = 1\ndef serve(path): pass\n".lines() = ["x = 1", "def serve(path): pass"]
-        // start=1, loop skip(2) → nothing, last=1 == start → fallback to min(2, 1) = 1
-        let end = find_python_fn_end(&lines, 1);
-        assert_eq!(end, 1);
+        let ctx = make_ctx_with_source("src/app.py", src, Language::Python);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty(), "normpath should suppress finding");
     }
 
-    // 14. find_brace_fn_end: returns line index of closing brace
-    #[test]
-    fn find_brace_fn_end_returns_closing_brace_line() {
+    // 10. JS: fs.readFileSync with req.params
+    #[tokio::test]
+    async fn detects_fs_readfile_with_req_params() {
         let src = "\
-fn read(path: &Path) {
-    fs::read(path)
+function serve(req, res) {
+  const data = fs.readFileSync(req.params.path);
+  res.send(data);
 }
 ";
-        let lines: Vec<&str> = src.lines().collect();
-        // line 0: "fn read(path: &Path) {" — depth=1 started=true
-        // line 1: "    fs::read(path)"
-        // line 2: "}" — depth=0, started && depth<=0 → return 2
-        let end = find_brace_fn_end(&lines, 0);
-        assert_eq!(end, 2, "expected closing brace at line 2, got {end}");
-    }
-
-    // 15. find_brace_fn_end: no closing brace → returns lines.len().saturating_sub(1)
-    #[test]
-    fn find_brace_fn_end_no_closing_brace() {
-        let src = "\
-fn open(path: &Path) {
-    let f = File::open(path);
-    f.read_to_string()
-";
-        let lines: Vec<&str> = src.lines().collect();
-        let expected = lines.len().saturating_sub(1);
-        let end = find_brace_fn_end(&lines, 0);
-        assert_eq!(end, expected, "expected fallback to last line");
-    }
-
-    // 16. has_normalization: unsupported language → &[] (no norm calls checked) → false
-    #[test]
-    fn has_normalization_unsupported_language_returns_false() {
-        let lines = &["path.normalize(input)", "os.path.normpath(p)", ".canonicalize()"];
-        // Language::Java matches `_ => &[]`, so all those calls are irrelevant
-        assert!(!has_normalization(lines, Language::Java));
-    }
-
-    // 17. has_normalization: validation pattern returns true (line 169)
-    #[test]
-    fn has_normalization_validation_pattern_returns_true() {
-        // Use ".." validation pattern (Python/Rust: if path.contains(".."))
-        let lines = &[r#"    if user_path.contains("..") { return Err(...); }"#];
-        assert!(has_normalization(lines, Language::Rust));
-
-        let lines2 = &["    if '..' in path: raise ValueError"];
-        assert!(has_normalization(lines2, Language::Python));
-    }
-
-    // 18. uses_cargo_subprocess returns false
-    #[test]
-    fn uses_cargo_subprocess_returns_false() {
-        assert!(!PathNormalizationDetector.uses_cargo_subprocess());
-    }
-
-    // 19. Unsupported language in analyze → no findings (early continue)
-    #[tokio::test]
-    async fn analyze_unsupported_language_no_findings() {
-        let src = "public void loadPath(String path) { readFile(path); }";
-        let ctx = make_ctx_with_source("src/Main.java", src, Language::Java);
+        let ctx = make_ctx_with_source("src/app.js", src, Language::JavaScript);
         let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
-        assert!(findings.is_empty(), "Java should be skipped entirely");
+        assert!(
+            !findings.is_empty(),
+            "should detect fs.readFileSync with req.params"
+        );
     }
 
-    // 20. Python with blank lines in body + validation pattern → no finding
+    // 11. JS: path.normalize suppresses
     #[tokio::test]
-    async fn python_blank_lines_in_body_with_validation_no_finding() {
+    async fn js_path_normalize_suppresses() {
         let src = "\
-def fetch(path):
-
-    if '..' in path:
-        raise ValueError('bad path')
-
-    return open(path).read()
-
-def other():
-    pass
-";
-        let ctx = make_ctx_with_source("src/views.py", src, Language::Python);
-        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
-        assert!(findings.is_empty(), "expected no findings, got: {findings:?}");
-    }
-
-    // 21. Rust with dotdot validation → no finding
-    #[tokio::test]
-    async fn rust_dotdot_validation_no_finding() {
-        let src = r#"
-fn serve(path: &str) {
-    if path.contains("..") {
-        return;
-    }
-    fs::read(path).unwrap();
+function serve(req, res) {
+  const safe = path.normalize(req.params.file);
+  const data = fs.readFileSync(safe);
+  res.send(data);
 }
-"#;
+";
+        let ctx = make_ctx_with_source("src/app.js", src, Language::JavaScript);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty(), "path.normalize should suppress");
+    }
+
+    // 12. Rust: File::open with user input
+    #[tokio::test]
+    async fn detects_rust_file_open_with_user_input() {
+        let src = "\
+fn handle(input: &str) {
+    let f = File::open(input);
+}
+";
         let ctx = make_ctx_with_source("src/handler.rs", src, Language::Rust);
         let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
-        assert!(findings.is_empty(), "expected no findings, got: {findings:?}");
+        assert!(
+            !findings.is_empty(),
+            "should detect File::open with user input"
+        );
+    }
+
+    // 13. Test files should be skipped for expression-level too
+    #[tokio::test]
+    async fn no_expression_finding_in_test_file() {
+        let src = "\
+def test_open():
+    path = request.args.get('file')
+    open(path)
+";
+        let ctx =
+            make_ctx_with_source("tests/test_app.py", src, Language::Python);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
     }
 }

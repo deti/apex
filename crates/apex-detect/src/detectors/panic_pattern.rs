@@ -154,7 +154,7 @@ impl Detector for PanicPatternDetector {
                             suggestion: "Handle error explicitly or add test for panic path".into(),
                             explanation: None,
                             fix: None,
-                            cwe_ids: vec![],
+                            cwe_ids: vec![248],
                         });
                         break; // One finding per line max
                     }
@@ -189,6 +189,7 @@ mod tests {
             fuzz_corpus: None,
             config: DetectConfig::default(),
             runner: Arc::new(apex_core::command::RealCommandRunner),
+            cpg: None,
         }
     }
 
@@ -446,6 +447,7 @@ mod tests {
             fuzz_corpus: None,
             config: DetectConfig::default(),
             runner: Arc::new(apex_core::command::RealCommandRunner),
+            cpg: None,
         }
     }
 

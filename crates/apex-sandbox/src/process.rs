@@ -169,6 +169,7 @@ impl<R: CommandRunner> Sandbox for ProcessSandbox<R> {
                 duration_ms,
                 stdout: String::new(),
                 stderr: String::new(),
+                input: None,
             }),
             Err(e) => Err(ApexError::Sandbox(format!("run_command: {e}"))),
             Ok(output) => {
@@ -198,6 +199,7 @@ impl<R: CommandRunner> Sandbox for ProcessSandbox<R> {
                     duration_ms,
                     stdout: String::from_utf8_lossy(&output.stdout).to_string(),
                     stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                    input: None,
                 })
             }
         }

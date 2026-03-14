@@ -226,6 +226,7 @@ fn oracle_merge_result_pipeline() {
         duration_ms: 10,
         stdout: String::new(),
         stderr: String::new(),
+        input: None,
     };
     let d1 = oracle.merge_from_result(&r1);
     assert_eq!(d1.newly_covered.len(), 1);
@@ -240,6 +241,7 @@ fn oracle_merge_result_pipeline() {
         duration_ms: 5,
         stdout: String::new(),
         stderr: String::new(),
+        input: None,
     };
     let d2 = oracle.merge_from_result(&r2);
     assert_eq!(d2.newly_covered.len(), 2);

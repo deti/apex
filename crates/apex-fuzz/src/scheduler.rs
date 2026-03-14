@@ -109,6 +109,162 @@ impl MOptScheduler {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PSO-based MOpt Adaptive Mutation Scheduler
+// ---------------------------------------------------------------------------
+
+/// Particle-swarm-optimization-based adaptive mutation scheduler.
+///
+/// Tracks per-operator efficiency (coverage finds / attempts) and uses PSO
+/// velocity updates to shift probability mass toward productive operators.
+pub struct PsoMOptScheduler {
+    /// Current probability for each operator.
+    pub operator_probs: Vec<f64>,
+    /// Coverage gains attributed to each operator in this epoch.
+    pub operator_finds: Vec<u64>,
+    /// Total applications of each operator in this epoch.
+    pub operator_attempts: Vec<u64>,
+    /// PSO velocity per operator.
+    velocities: Vec<f64>,
+    /// Best local probabilities seen per operator.
+    local_best: Vec<f64>,
+    /// Global best probability distribution.
+    global_best: Vec<f64>,
+    /// Best efficiency achieved per operator (for local best tracking).
+    local_best_score: Vec<f64>,
+    /// Best overall efficiency sum (for global best tracking).
+    global_best_score: f64,
+}
+
+impl PsoMOptScheduler {
+    /// PSO inertia weight.
+    const W: f64 = 0.7;
+    /// PSO cognitive coefficient (local best attraction).
+    const C1: f64 = 1.5;
+    /// PSO social coefficient (global best attraction).
+    const C2: f64 = 1.5;
+    /// Minimum probability floor to prevent operator starvation.
+    const PROB_MIN: f64 = 0.01;
+
+    /// Create a new scheduler with `num_operators` operators at uniform probability.
+    pub fn new(num_operators: usize) -> Self {
+        let n = num_operators.max(1);
+        let uniform = 1.0 / n as f64;
+        PsoMOptScheduler {
+            operator_probs: vec![uniform; n],
+            operator_finds: vec![0; n],
+            operator_attempts: vec![0; n],
+            velocities: vec![0.0; n],
+            local_best: vec![uniform; n],
+            global_best: vec![uniform; n],
+            local_best_score: vec![0.0; n],
+            global_best_score: 0.0,
+        }
+    }
+
+    /// Update probabilities using PSO velocity equations.
+    ///
+    /// For each operator:
+    ///   efficiency = finds / (attempts + 1)
+    ///   velocity = w * velocity + c1 * r1 * (local_best - current) + c2 * r2 * (global_best - current)
+    ///   new_prob = current + velocity, clamped to [0.01, 1.0], then normalized
+    pub fn update_probabilities(&mut self) {
+        self.update_probabilities_with_rng(&mut rand::thread_rng());
+    }
+
+    /// Deterministic variant for testing — accepts an explicit RNG.
+    pub fn update_probabilities_with_rng(&mut self, rng: &mut impl rand::Rng) {
+        let n = self.operator_probs.len();
+
+        // Compute efficiency for each operator.
+        let efficiencies: Vec<f64> = (0..n)
+            .map(|i| self.operator_finds[i] as f64 / (self.operator_attempts[i] as f64 + 1.0))
+            .collect();
+
+        // Compute an efficiency-proportional target distribution for PSO to
+        // pull toward.  This is normalized so it sums to 1.
+        let eff_total: f64 = efficiencies.iter().sum();
+        let eff_target: Vec<f64> = if eff_total > 0.0 {
+            efficiencies.iter().map(|e| e / eff_total).collect()
+        } else {
+            vec![1.0 / n as f64; n]
+        };
+
+        // Update local bests per operator.
+        for i in 0..n {
+            if efficiencies[i] > self.local_best_score[i] {
+                self.local_best_score[i] = efficiencies[i];
+                self.local_best[i] = eff_target[i];
+            }
+        }
+
+        // Update global best.
+        let total_efficiency: f64 = efficiencies.iter().sum();
+        if total_efficiency > self.global_best_score {
+            self.global_best_score = total_efficiency;
+            self.global_best = eff_target;
+        }
+
+        // PSO velocity update and position update.
+        for i in 0..n {
+            let r1: f64 = rng.gen();
+            let r2: f64 = rng.gen();
+            self.velocities[i] = Self::W * self.velocities[i]
+                + Self::C1 * r1 * (self.local_best[i] - self.operator_probs[i])
+                + Self::C2 * r2 * (self.global_best[i] - self.operator_probs[i]);
+            self.operator_probs[i] =
+                (self.operator_probs[i] + self.velocities[i]).clamp(Self::PROB_MIN, 1.0);
+        }
+
+        // Normalize so probabilities sum to 1.
+        let total: f64 = self.operator_probs.iter().sum();
+        if total > 0.0 {
+            for p in &mut self.operator_probs {
+                *p /= total;
+            }
+        }
+    }
+
+    /// Select an operator via weighted random sampling.
+    pub fn select_operator(&self, rng: &mut impl rand::Rng) -> usize {
+        let total: f64 = self.operator_probs.iter().sum();
+        let mut pick = rng.gen::<f64>() * total;
+        for (i, &w) in self.operator_probs.iter().enumerate() {
+            pick -= w;
+            if pick <= 0.0 {
+                return i;
+            }
+        }
+        self.operator_probs.len() - 1
+    }
+
+    /// Record the result of applying operator `op_id`.
+    pub fn record(&mut self, op_id: usize, found_new: bool) {
+        if op_id >= self.operator_attempts.len() {
+            return;
+        }
+        self.operator_attempts[op_id] += 1;
+        if found_new {
+            self.operator_finds[op_id] += 1;
+        }
+    }
+
+    /// Read current probabilities.
+    pub fn probabilities(&self) -> &[f64] {
+        &self.operator_probs
+    }
+
+    /// Reset finds and attempts for a new epoch.
+    pub fn reset_counts(&mut self) {
+        for v in &mut self.operator_finds {
+            *v = 0;
+        }
+        for v in &mut self.operator_attempts {
+            *v = 0;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,5 +556,133 @@ mod tests {
         }
         // After all hits ema should be close to 1.0 (not below 0.5)
         assert!(scheduler.stats[0].ema_yield > 0.5);
+    }
+
+    // ==================================================================
+    // PsoMOptScheduler tests
+    // ==================================================================
+
+    #[test]
+    fn mopt_uniform_initial_probabilities() {
+        let s = PsoMOptScheduler::new(4);
+        let expected = 1.0 / 4.0;
+        for &p in s.probabilities() {
+            assert!((p - expected).abs() < 1e-9, "expected {expected}, got {p}");
+        }
+    }
+
+    #[test]
+    fn mopt_probabilities_sum_to_one() {
+        let mut s = PsoMOptScheduler::new(5);
+        let mut rng = StdRng::seed_from_u64(77);
+        // Record some activity and update.
+        for i in 0..5 {
+            for _ in 0..(i + 1) {
+                s.record(i, i % 2 == 0);
+            }
+        }
+        s.update_probabilities_with_rng(&mut rng);
+        let sum: f64 = s.probabilities().iter().sum();
+        assert!(
+            (sum - 1.0).abs() < 1e-9,
+            "probabilities should sum to 1.0, got {sum}"
+        );
+    }
+
+    #[test]
+    fn mopt_record_increments_counts() {
+        let mut s = PsoMOptScheduler::new(3);
+        s.record(0, true);
+        s.record(0, false);
+        s.record(1, true);
+        assert_eq!(s.operator_attempts[0], 2);
+        assert_eq!(s.operator_finds[0], 1);
+        assert_eq!(s.operator_attempts[1], 1);
+        assert_eq!(s.operator_finds[1], 1);
+        assert_eq!(s.operator_attempts[2], 0);
+        assert_eq!(s.operator_finds[2], 0);
+    }
+
+    #[test]
+    fn mopt_reset_counts() {
+        let mut s = PsoMOptScheduler::new(3);
+        s.record(0, true);
+        s.record(1, false);
+        s.record(2, true);
+        s.reset_counts();
+        for i in 0..3 {
+            assert_eq!(s.operator_finds[i], 0);
+            assert_eq!(s.operator_attempts[i], 0);
+        }
+    }
+
+    #[test]
+    fn mopt_select_returns_valid_index() {
+        let s = PsoMOptScheduler::new(7);
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..200 {
+            let idx = s.select_operator(&mut rng);
+            assert!(idx < 7, "index {idx} out of range");
+        }
+    }
+
+    #[test]
+    fn mopt_boosts_successful_operators() {
+        let mut s = PsoMOptScheduler::new(3);
+        let mut rng = StdRng::seed_from_u64(123);
+        // Operator 0 is very successful, others are not.
+        for _ in 0..100 {
+            s.record(0, true);
+        }
+        for _ in 0..100 {
+            s.record(1, false);
+        }
+        for _ in 0..100 {
+            s.record(2, false);
+        }
+        // Run several PSO updates to let probabilities converge.
+        for _ in 0..20 {
+            s.update_probabilities_with_rng(&mut rng);
+        }
+        // Operator 0 should have the highest probability.
+        assert!(
+            s.operator_probs[0] > s.operator_probs[1],
+            "op0 ({}) should be > op1 ({})",
+            s.operator_probs[0],
+            s.operator_probs[1]
+        );
+        assert!(
+            s.operator_probs[0] > s.operator_probs[2],
+            "op0 ({}) should be > op2 ({})",
+            s.operator_probs[0],
+            s.operator_probs[2]
+        );
+    }
+
+    #[test]
+    fn mopt_maintains_minimum_probability() {
+        let mut s = PsoMOptScheduler::new(4);
+        let mut rng = StdRng::seed_from_u64(999);
+        // Only operator 0 finds anything; others get nothing.
+        for _ in 0..200 {
+            s.record(0, true);
+        }
+        for i in 1..4 {
+            for _ in 0..200 {
+                s.record(i, false);
+            }
+        }
+        for _ in 0..50 {
+            s.update_probabilities_with_rng(&mut rng);
+        }
+        // After normalization, check that no operator is starved.
+        // The minimum raw value is PROB_MIN (0.01), but after normalization
+        // the actual floor depends on the total. We check it stays > 0.
+        for (i, &p) in s.operator_probs.iter().enumerate() {
+            assert!(
+                p > 0.0,
+                "operator {i} probability should be > 0, got {p}"
+            );
+        }
     }
 }

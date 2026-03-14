@@ -391,6 +391,9 @@ pub struct ExecutionResult {
     pub duration_ms: u64,
     pub stdout: String,
     pub stderr: String,
+    /// The input bytes that produced this result (for corpus feedback).
+    #[serde(default)]
+    pub input: Option<Vec<u8>>,
 }
 
 // ---------------------------------------------------------------------------

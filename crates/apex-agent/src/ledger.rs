@@ -146,6 +146,7 @@ mod tests {
             duration_ms: 100,
             stdout: String::new(),
             stderr: stderr.into(),
+            input: None,
         }
     }
 

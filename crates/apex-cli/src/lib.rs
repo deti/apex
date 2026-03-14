@@ -638,6 +638,7 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
                 fuzz_corpus: None,
                 config: detect_cfg.clone(),
                 runner: Arc::new(apex_core::command::RealCommandRunner),
+                cpg: None,
             };
 
             let pipeline = apex_detect::DetectorPipeline::from_config(&detect_cfg, lang);
@@ -1169,6 +1170,7 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
         fuzz_corpus: None,
         config: detect_cfg.clone(),
         runner: Arc::new(apex_core::command::RealCommandRunner),
+        cpg: None,
     };
 
     let pipeline = DetectorPipeline::from_config(&detect_cfg, lang);
@@ -1648,6 +1650,7 @@ async fn run_lint(args: LintArgs, _cfg: &ApexConfig) -> Result<()> {
         fuzz_corpus: None,
         config: detect_cfg.clone(),
         runner: Arc::new(apex_core::command::RealCommandRunner),
+        cpg: None,
     };
 
     let pipeline = DetectorPipeline::from_config(&detect_cfg, lang);

@@ -7,6 +7,9 @@ pub mod builder;
 pub mod model_loader;
 pub mod reaching_def;
 pub mod taint;
+pub mod taint_store;
+
+pub use taint_store::TaintSpecStore;
 
 pub type NodeId = u32;
 

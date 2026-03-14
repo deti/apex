@@ -985,6 +985,7 @@ mod tests {
             duration_ms: 0,
             stdout: String::new(),
             stderr: String::new(),
+            input: None,
         };
         s.observe(&result).await.unwrap();
     }

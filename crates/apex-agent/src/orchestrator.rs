@@ -211,6 +211,7 @@ mod tests {
                 duration_ms: 0,
                 stdout: String::new(),
                 stderr: String::new(),
+                input: None,
             })
         }
         async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -696,6 +697,7 @@ mod tests {
                 duration_ms: 1,
                 stdout: String::new(),
                 stderr: String::new(),
+                input: None,
             })
         }
         async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -1150,6 +1152,7 @@ mod tests {
                     duration_ms: 5000,
                     stdout: String::new(),
                     stderr: String::new(),
+                    input: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -1228,6 +1231,7 @@ mod tests {
                 duration_ms: 1,
                 stdout: String::new(),
                 stderr: "segfault".into(),
+                input: None,
             })
         }
         async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {

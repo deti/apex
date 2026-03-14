@@ -127,6 +127,7 @@ impl Sandbox for RustTestSandbox {
             duration_ms,
             stdout,
             stderr,
+            input: None,
         })
     }
 

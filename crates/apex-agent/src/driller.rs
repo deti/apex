@@ -235,6 +235,7 @@ mod tests {
             duration_ms: 5,
             stdout: String::new(),
             stderr: String::new(),
+            input: None,
         };
         assert!(driller.observe(&result).await.is_ok());
     }
@@ -421,6 +422,7 @@ mod tests {
                 duration_ms: 1,
                 stdout: String::new(),
                 stderr: String::new(),
+                input: None,
             };
             assert!(driller.observe(&result).await.is_ok());
         }

@@ -20,6 +20,7 @@ pub struct AnalysisContext {
     pub fuzz_corpus: Option<PathBuf>,
     pub config: DetectConfig,
     pub runner: Arc<dyn CommandRunner>,
+    pub cpg: Option<Arc<apex_cpg::Cpg>>,
 }
 
 impl fmt::Debug for AnalysisContext {
@@ -31,6 +32,7 @@ impl fmt::Debug for AnalysisContext {
             .field("source_cache", &self.source_cache.len())
             .field("fuzz_corpus", &self.fuzz_corpus)
             .field("runner", &"<CommandRunner>")
+            .field("cpg", &self.cpg.as_ref().map(|c| c.node_count()))
             .finish()
     }
 }
@@ -55,6 +57,7 @@ mod tests {
             fuzz_corpus: Some(PathBuf::from("/corpus")),
             config: DetectConfig::default(),
             runner: Arc::new(apex_core::command::RealCommandRunner),
+            cpg: None,
         };
         let dbg = format!("{ctx:?}");
         assert!(dbg.contains("AnalysisContext"));
@@ -78,6 +81,7 @@ mod tests {
             fuzz_corpus: None,
             config: DetectConfig::default(),
             runner: Arc::new(apex_core::command::RealCommandRunner),
+            cpg: None,
         };
         let dbg = format!("{ctx:?}");
         assert!(dbg.contains("None"));

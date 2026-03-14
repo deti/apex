@@ -154,6 +154,7 @@ impl Sandbox for JavaScriptTestSandbox {
             duration_ms,
             stdout,
             stderr,
+            input: None,
         })
     }
 

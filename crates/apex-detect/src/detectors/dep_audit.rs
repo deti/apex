@@ -150,7 +150,7 @@ pub fn parse_cargo_audit_output(raw: &str) -> Result<Vec<Finding>> {
                 },
                 explanation: None,
                 fix,
-                cwe_ids: vec![],
+                cwe_ids: vec![1395],
             });
         }
     }
@@ -256,7 +256,7 @@ pub fn parse_pip_audit_output(raw: &str) -> Result<Vec<Finding>> {
                 },
                 explanation: None,
                 fix,
-                cwe_ids: vec![],
+                cwe_ids: vec![1395],
             });
         }
     }
@@ -342,7 +342,7 @@ pub fn parse_npm_audit_output(raw: &str) -> Result<Vec<Finding>> {
             suggestion: format!("Upgrade {pkg_name} to a version outside {range}"),
             explanation: None,
             fix,
-            cwe_ids: vec![],
+            cwe_ids: vec![1395],
         });
     }
 
@@ -372,6 +372,7 @@ mod tests {
             fuzz_corpus: None,
             config: DetectConfig::default(),
             runner: Arc::new(runner),
+            cpg: None,
         }
     }
 
@@ -386,6 +387,7 @@ mod tests {
             fuzz_corpus: None,
             config: DetectConfig::default(),
             runner: Arc::new(runner),
+            cpg: None,
         }
     }
 
