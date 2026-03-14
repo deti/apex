@@ -42,6 +42,15 @@ impl DetectorPipeline {
         if cfg.enabled.contains(&"secrets".to_string()) {
             detectors.push(Box::new(HardcodedSecretDetector));
         }
+        if cfg.enabled.contains(&"secret-scan".into()) {
+            detectors.push(Box::new(SecretScanDetector::new()));
+        }
+        if cfg.enabled.contains(&"license-scan".into()) {
+            detectors.push(Box::new(LicenseScanDetector::enterprise()));
+        }
+        if cfg.enabled.contains(&"flag-hygiene".into()) {
+            detectors.push(Box::new(FlagHygieneDetector::default_max_age()));
+        }
         if cfg.enabled.contains(&"path-normalize".to_string()) {
             detectors.push(Box::new(PathNormalizationDetector));
         }
@@ -255,6 +264,7 @@ mod tests {
             runner: Arc::new(apex_core::command::RealCommandRunner),
             cpg: None,
             threat_model: Default::default(),
+            reverse_path_engine: None,
         }
     }
 
@@ -361,7 +371,7 @@ mod tests {
     fn from_config_enables_all_by_default() {
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
-        assert_eq!(pipeline.detectors.len(), 15);
+        assert_eq!(pipeline.detectors.len(), 18);
     }
 
     #[test]
@@ -736,7 +746,7 @@ mod tests {
         // Python should get all except unsafe
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Python);
-        assert_eq!(pipeline.detectors.len(), 14);
+        assert_eq!(pipeline.detectors.len(), 17);
         assert!(pipeline
             .detectors
             .iter()
@@ -1163,5 +1173,32 @@ mod tests {
             has_subprocess,
             "full mode should include subprocess detectors"
         );
+    }
+
+    #[test]
+    fn from_config_only_secret_scan() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["secret-scan".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        assert_eq!(pipeline.detectors.len(), 1);
+        assert_eq!(pipeline.detectors[0].name(), "secret-scan");
+    }
+
+    #[test]
+    fn from_config_only_license_scan() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["license-scan".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        assert_eq!(pipeline.detectors.len(), 1);
+        assert_eq!(pipeline.detectors[0].name(), "license-scan");
+    }
+
+    #[test]
+    fn from_config_only_flag_hygiene() {
+        let mut cfg = DetectConfig::default();
+        cfg.enabled = vec!["flag-hygiene".into()];
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        assert_eq!(pipeline.detectors.len(), 1);
+        assert_eq!(pipeline.detectors[0].name(), "flag-hygiene");
     }
 }
