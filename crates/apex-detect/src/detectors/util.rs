@@ -1,69 +1,7 @@
+use crate::context::AnalysisContext;
+use crate::finding::Evidence;
 use apex_core::types::Language;
 use std::path::Path;
-
-use crate::finding::Evidence;
-
-/// Enrich a finding with reachability chains from HTTP entry points.
-/// Returns evidence entries to append to the finding's evidence vec.
-pub fn reachability_evidence(
-    ctx: &crate::context::AnalysisContext,
-    file: &Path,
-    line: u32,
-) -> Vec<Evidence> {
-    let engine = match ctx.reverse_path_engine.as_ref() {
-        Some(e) => e,
-        None => return vec![],
-    };
-
-    let target = apex_reach::TargetRegion::FileLine(file.to_path_buf(), line);
-    let paths = engine.paths_to_entry_kind(
-        &target,
-        apex_reach::EntryPointKind::HttpHandler,
-        apex_reach::Granularity::Line,
-    );
-
-    if paths.is_empty() {
-        // Also check test entry points
-        let test_paths = engine.paths_to_entry_kind(
-            &target,
-            apex_reach::EntryPointKind::Test,
-            apex_reach::Granularity::Line,
-        );
-        if test_paths.is_empty() {
-            return vec![];
-        }
-        return vec![Evidence::ReachabilityChain {
-            tool: "apex-reach".into(),
-            paths: test_paths
-                .iter()
-                .take(3)
-                .map(|p| format_reverse_path(p, engine.graph()))
-                .collect(),
-        }];
-    }
-
-    vec![Evidence::ReachabilityChain {
-        tool: "apex-reach".into(),
-        paths: paths
-            .iter()
-            .take(3)
-            .map(|p| format_reverse_path(p, engine.graph()))
-            .collect(),
-    }]
-}
-
-fn format_reverse_path(path: &apex_reach::ReversePath, graph: &apex_reach::CallGraph) -> String {
-    let mut parts = Vec::new();
-    if let Some(entry_node) = graph.node(path.entry_point) {
-        parts.push(format!("{} ({})", entry_node.name, path.entry_kind));
-    }
-    for (fn_id, line) in &path.chain {
-        if let Some(node) = graph.node(*fn_id) {
-            parts.push(format!("{} ({}:{})", node.name, node.file.display(), line));
-        }
-    }
-    parts.join(" → ")
-}
 
 /// Returns true if the file path looks like a test file.
 pub fn is_test_file(path: &Path) -> bool {
@@ -98,8 +36,12 @@ pub fn is_test_file(path: &Path) -> bool {
         || s.ends_with(".spec.js")
         || s.ends_with(".spec.ts")
         || s.ends_with(".spec.tsx")
-        || s.contains("/test_")
-        || s.contains("\\test_")
+        || s.ends_with("_test.go")
+        || {
+            // Match test_ prefix only in the filename, not in directory components
+            let fname = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+            fname.starts_with("test_")
+        }
         || file_stem_is_test_helper(path)
 }
 
@@ -119,6 +61,14 @@ fn file_stem_is_test_helper(path: &Path) -> bool {
         || stem == "conftest"
 }
 
+/// Build evidence from reachability data (coverage index) for a finding.
+/// Returns an empty vec if no coverage data is available.
+pub fn reachability_evidence(_ctx: &AnalysisContext, _path: &Path, _line: u32) -> Vec<Evidence> {
+    // TODO: once AnalysisContext carries a BranchIndex, check if the line
+    // has coverage and emit Evidence::CoverageGap for uncovered findings.
+    Vec::new()
+}
+
 /// Returns true if we're inside a `#[cfg(test)]` block.
 /// Tracks brace depth after seeing `#[cfg(test)]` or `mod tests`.
 pub fn in_test_block(source: &str, target_line: usize) -> bool {
@@ -135,7 +85,7 @@ pub fn in_test_block(source: &str, target_line: usize) -> bool {
         // Detect start of test module
         if !in_cfg_test
             && (trimmed.contains("#[cfg(test)]")
-                || (trimmed.starts_with("mod tests") && trimmed.contains('{')))
+                || ((trimmed == "mod tests {" || trimmed.starts_with("mod tests {") || trimmed == "mod tests{" || trimmed.starts_with("mod tests{")) && trimmed.contains('{')))
         {
             in_cfg_test = true;
             cfg_test_start_depth = brace_depth;
@@ -163,18 +113,18 @@ pub fn in_test_block(source: &str, target_line: usize) -> bool {
 /// Keeps the quote characters but removes everything between them.
 pub fn strip_string_literals(line: &str) -> String {
     let mut result = String::new();
-    let mut in_string = false;
+    let mut in_string: Option<char> = None;
     let mut prev_backslash = false;
     for ch in line.chars() {
-        if in_string {
-            if ch == '"' && !prev_backslash {
-                in_string = false;
-                result.push('"');
+        if let Some(quote_char) = in_string {
+            if ch == quote_char && !prev_backslash {
+                in_string = None;
+                result.push(quote_char);
             }
             prev_backslash = ch == '\\' && !prev_backslash;
         } else {
-            if ch == '"' {
-                in_string = true;
+            if ch == '"' || ch == '\'' || ch == '`' {
+                in_string = Some(ch);
             }
             result.push(ch);
         }
@@ -184,7 +134,7 @@ pub fn strip_string_literals(line: &str) -> String {
 
 /// Returns true if the trimmed line is a comment in the given language.
 pub fn is_comment(trimmed: &str, lang: Language) -> bool {
-    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+    if trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("* ") || trimmed == "*" {
         return true;
     }
     if (lang == Language::Python || lang == Language::Ruby) && trimmed.starts_with('#') {
@@ -394,5 +344,80 @@ mod tests {
         assert!(is_test_file(std::path::Path::new("src\\tests\\baz.rs")));
         assert!(is_test_file(std::path::Path::new("src\\__tests__\\qux.js")));
         assert!(is_test_file(std::path::Path::new("benches\\bench.rs")));
+    }
+
+    // ---- Bug regression tests ----
+
+    #[test]
+    fn bug_is_comment_star_deref_not_comment() {
+        // Bug 1: `*ptr`, `**kwargs`, `*x = 5` should not be comments
+        assert!(!is_comment("*ptr", Language::Rust));
+        assert!(!is_comment("**kwargs", Language::Python));
+        assert!(!is_comment("*x = 5;", Language::Rust));
+        // Block comment continuation with space is still a comment
+        assert!(is_comment("* This is a comment", Language::Rust));
+        // Lone `*` is still a comment (block comment continuation)
+        assert!(is_comment("*", Language::Rust));
+    }
+
+    #[test]
+    fn bug_is_test_file_test_data_dir_not_test() {
+        // Bug 2: test_data/ directories should not be flagged as test files
+        assert!(!is_test_file(std::path::Path::new("test_data/config.json")));
+        assert!(!is_test_file(std::path::Path::new(
+            "src/test_data/fixture.py"
+        )));
+        assert!(!is_test_file(std::path::Path::new(
+            "test_fixtures/data.json"
+        )));
+        assert!(!is_test_file(std::path::Path::new(
+            "test_resources/input.txt"
+        )));
+        // But actual test files with test_ prefix in filename should still match
+        assert!(is_test_file(std::path::Path::new("src/test_utils.py")));
+        assert!(is_test_file(std::path::Path::new("lib/test_helper.rb")));
+    }
+
+    #[test]
+    fn bug_in_test_block_mod_tests_integration_not_test() {
+        // Bug 3: `mod tests_integration` should not match as test block
+        let src = "fn real() {}\nmod tests_integration {\n    fn t() {}\n}\n";
+        assert!(!in_test_block(src, 2)); // fn t() inside tests_integration
+    }
+
+    #[test]
+    fn bug_in_test_block_mod_tests_exact() {
+        // Bug 3: exact `mod tests {` should still match
+        let src = "mod tests {\n    fn t() {}\n}\n";
+        assert!(in_test_block(src, 1));
+        let src2 = "mod tests{\n    fn t() {}\n}\n";
+        assert!(in_test_block(src2, 1));
+    }
+
+    #[test]
+    fn bug_strip_single_quotes() {
+        // Bug 4: single-quoted strings should be stripped
+        assert_eq!(strip_string_literals("let x = 'hello';"), "let x = '';");
+        assert_eq!(
+            strip_string_literals("f('a', 'b')"),
+            "f('', '')"
+        );
+    }
+
+    #[test]
+    fn bug_strip_backtick_template_literals() {
+        // Bug 5: JS template literals should be stripped
+        assert_eq!(
+            strip_string_literals("let x = `hello ${name}`;"),
+            "let x = ``;"
+        );
+    }
+
+    #[test]
+    fn bug_go_test_file_pattern() {
+        // Bug 6: Go test files use _test.go suffix
+        assert!(is_test_file(std::path::Path::new("pkg/handler_test.go")));
+        assert!(is_test_file(std::path::Path::new("main_test.go")));
+        assert!(!is_test_file(std::path::Path::new("handler.go")));
     }
 }
