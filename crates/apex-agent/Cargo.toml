@@ -21,3 +21,4 @@ rand_distr = "0.4"
 tempfile = "3"
 tokio = { workspace = true }
 mockall = { workspace = true }
+tracing-subscriber = "0.3"

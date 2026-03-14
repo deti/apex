@@ -1,7 +1,5 @@
 use crate::ledger::BugLedger;
 use crate::monitor::{CoverageMonitor, MonitorAction};
-use crate::priority::{BranchCandidate, StrategyRecommendation};
-use crate::router::S2FRouter;
 use apex_core::{
     error::Result,
     traits::{Sandbox, Strategy},
@@ -43,8 +41,6 @@ pub struct AgentCluster {
     pub ledger: Arc<BugLedger>,
     /// Sliding-window coverage growth monitor for stall detection.
     pub monitor: Mutex<CoverageMonitor>,
-    /// S2F classifier-driven strategy router.
-    pub router: S2FRouter,
 }
 
 impl AgentCluster {
@@ -62,7 +58,6 @@ impl AgentCluster {
             file_paths: HashMap::new(),
             ledger: Arc::new(BugLedger::new()),
             monitor: Mutex::new(CoverageMonitor::new(10)),
-            router: S2FRouter::new(),
         }
     }
 
@@ -79,11 +74,6 @@ impl AgentCluster {
     pub fn with_file_paths(mut self, file_paths: HashMap<u64, PathBuf>) -> Self {
         self.file_paths = file_paths;
         self
-    }
-
-    /// Route a branch candidate through the S2F classifier to get a strategy recommendation.
-    pub fn route_strategy(&self, candidate: &BranchCandidate) -> StrategyRecommendation {
-        self.router.route(candidate)
     }
 
     pub async fn run(&self) -> Result<()> {
@@ -109,34 +99,9 @@ impl AgentCluster {
                 break;
             }
 
-            // Build priority-scored candidates from uncovered branches.
-            let candidates: Vec<crate::priority::BranchCandidate> = uncovered
-                .iter()
-                .map(|branch| {
-                    let heuristic = self.oracle.best_heuristic(branch);
-                    crate::priority::BranchCandidate {
-                        id: branch.clone(),
-                        heuristic,
-                        attempts_since_progress: stall_count,
-                        depth_in_cfg: branch.col as u32, // approximate depth from col
-                        hit_count: 0, // TODO: track per-branch hit counts
-                    }
-                })
-                .collect();
-
-            // Focus on top-K most promising branches.
-            let top_k = 20.min(candidates.len());
-            let focused = crate::priority::select_top_targets(&candidates, top_k);
-
-            // Log recommended strategy for the highest-priority candidate.
-            if let Some(top) = candidates.first() {
-                let rec = crate::priority::recommend_strategy(top.heuristic, stall_count);
-                info!(?rec, branches = focused.len(), "priority selection");
-            }
-
             let ctx = ExplorationContext {
                 target: self.target.clone(),
-                uncovered_branches: focused,
+                uncovered_branches: uncovered.clone(),
                 iteration,
             };
 
@@ -1746,62 +1711,1672 @@ mod tests {
         assert_eq!(summary.reports.len(), 1);
     }
 
-    // -----------------------------------------------------------------------
-    // S2F Router integration
-    // -----------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Additional branch-coverage tests: run() loop paths
+    // ------------------------------------------------------------------
 
-    #[test]
-    fn cluster_has_router() {
+    /// Coverage target of 0.0 — exits immediately via the coverage_target check
+    /// on the very first iteration (0/0 = 100% >= 0.0).
+    #[tokio::test]
+    async fn run_zero_coverage_target_exits_immediately() {
         let oracle = Arc::new(CoverageOracle::new());
-        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target());
-        assert!((cluster.router.classifier_threshold - 0.7).abs() < 1e-9);
+        let b = apex_core::types::BranchId::new(100, 1, 0, 0);
+        oracle.register_branches([b]);
+        // 0% coverage but target is 0.0 → 0.0 >= 0.0 → exit
+        let cluster =
+            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+                OrchestratorConfig {
+                    coverage_target: 0.0,
+                    deadline_secs: None,
+                    stall_threshold: 100,
+                },
+            );
+        cluster.run().await.unwrap();
     }
 
-    #[test]
-    fn cluster_route_strategy_easy() {
-        use apex_core::types::BranchId;
+    /// Coverage target of 0.5 with 1 of 2 branches pre-covered → 50% >= 50% → exit.
+    #[tokio::test]
+    async fn run_coverage_target_boundary_exactly_met() {
         let oracle = Arc::new(CoverageOracle::new());
-        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target());
-        let candidate = BranchCandidate {
-            id: BranchId::new(1, 10, 0, 0),
-            heuristic: 0.9,
-            attempts_since_progress: 0,
-            depth_in_cfg: 2,
-            hit_count: 50,
-        };
-        let rec = cluster.route_strategy(&candidate);
-        assert_eq!(rec, StrategyRecommendation::Fuzz);
+        let b1 = apex_core::types::BranchId::new(101, 1, 0, 0);
+        let b2 = apex_core::types::BranchId::new(101, 2, 0, 0);
+        oracle.register_branches([b1.clone(), b2.clone()]);
+        oracle.mark_covered(&b1, apex_core::types::SeedId::new());
+        // 50% coverage, target 0.5 → exit immediately
+        let cluster =
+            AgentCluster::new(oracle.clone(), Arc::new(StubSandbox), test_target()).with_config(
+                OrchestratorConfig {
+                    coverage_target: 0.5,
+                    deadline_secs: None,
+                    stall_threshold: 100,
+                },
+            );
+        cluster.run().await.unwrap();
+        assert_eq!(oracle.covered_count(), 1);
     }
 
-    #[test]
-    fn cluster_route_strategy_needs_solver() {
-        use apex_core::types::BranchId;
+    /// Multiple strategies: one fails, one succeeds — tests filter_map(|r| r.ok())
+    /// on strategies producing a mix of Ok and Err results.
+    #[tokio::test]
+    async fn run_mixed_strategy_results_filtered() {
+        struct OkStrategy;
+        #[async_trait::async_trait]
+        impl Strategy for OkStrategy {
+            fn name(&self) -> &str {
+                "ok"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![InputSeed::new(
+                    b"ok".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        struct ErrStrategy;
+        #[async_trait::async_trait]
+        impl Strategy for ErrStrategy {
+            fn name(&self) -> &str {
+                "err"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Err(apex_core::error::ApexError::Other("fail".into()))
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
         let oracle = Arc::new(CoverageOracle::new());
-        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target());
-        let candidate = BranchCandidate {
-            id: BranchId::new(1, 10, 0, 0),
-            heuristic: 0.85,
-            attempts_since_progress: 0,
-            depth_in_cfg: 15,
-            hit_count: 100,
-        };
-        let rec = cluster.route_strategy(&candidate);
-        assert_eq!(rec, StrategyRecommendation::Gradient);
+        let b = apex_core::types::BranchId::new(102, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        let sandbox: Arc<dyn Sandbox> = Arc::new(CoveringSandbox::new(vec![b]));
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(ErrStrategy))
+            .with_strategy(Box::new(OkStrategy))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.9,
+                deadline_secs: Some(5),
+                stall_threshold: 100,
+            });
+        cluster.run().await.unwrap();
+        assert_eq!(oracle.coverage_percent(), 100.0);
     }
 
+    /// Multiple seeds per strategy — exercises the flatten() path where
+    /// a single strategy returns multiple InputSeeds.
+    #[tokio::test]
+    async fn run_strategy_returns_multiple_seeds() {
+        struct MultiSeedStrategy;
+        #[async_trait::async_trait]
+        impl Strategy for MultiSeedStrategy {
+            fn name(&self) -> &str {
+                "multi"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![
+                    InputSeed::new(b"seed1".to_vec(), apex_core::types::SeedOrigin::Fuzzer),
+                    InputSeed::new(b"seed2".to_vec(), apex_core::types::SeedOrigin::Fuzzer),
+                    InputSeed::new(b"seed3".to_vec(), apex_core::types::SeedOrigin::Fuzzer),
+                ])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(103, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        let sandbox: Arc<dyn Sandbox> = Arc::new(CoveringSandbox::new(vec![b]));
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(MultiSeedStrategy))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.9,
+                deadline_secs: Some(5),
+                stall_threshold: 100,
+            });
+        cluster.run().await.unwrap();
+        assert_eq!(oracle.coverage_percent(), 100.0);
+    }
+
+    /// Sandbox returns a mix of Ok and Err results — exercises filter_map on sandbox results.
+    #[tokio::test]
+    async fn run_sandbox_mix_ok_and_err_results() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct AlternatingErrorSandbox {
+            call_count: AtomicUsize,
+        }
+
+        #[async_trait::async_trait]
+        impl Sandbox for AlternatingErrorSandbox {
+            async fn run(&self, input: &InputSeed) -> apex_core::error::Result<ExecutionResult> {
+                let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+                if n % 2 == 0 {
+                    Ok(ExecutionResult {
+                        seed_id: input.id,
+                        status: ExecutionStatus::Pass,
+                        new_branches: Vec::new(),
+                        trace: None,
+                        duration_ms: 1,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        input: None,
+                    })
+                } else {
+                    Err(apex_core::error::ApexError::Other("sandbox err".into()))
+                }
+            }
+            async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
+                Ok(SnapshotId::new())
+            }
+            async fn restore(&self, _id: SnapshotId) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+            fn language(&self) -> Language {
+                Language::Python
+            }
+        }
+
+        struct TwoSeedStrategy;
+        #[async_trait::async_trait]
+        impl Strategy for TwoSeedStrategy {
+            fn name(&self) -> &str {
+                "two"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![
+                    InputSeed::new(b"a".to_vec(), apex_core::types::SeedOrigin::Fuzzer),
+                    InputSeed::new(b"b".to_vec(), apex_core::types::SeedOrigin::Fuzzer),
+                ])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(104, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(AlternatingErrorSandbox {
+            call_count: AtomicUsize::new(0),
+        });
+        let cluster = AgentCluster::new(oracle, sandbox, test_target())
+            .with_strategy(Box::new(TwoSeedStrategy))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: Some(5),
+                stall_threshold: 3,
+            });
+        cluster.run().await.unwrap();
+    }
+
+    /// Sandbox returns results with Fail status (AssertionFailure bug class) —
+    /// exercises the `BugClass::from_status` → `map_or` path with AssertionFailure.
+    #[tokio::test]
+    async fn run_records_assertion_failure_bug() {
+        struct FailSandbox;
+        #[async_trait::async_trait]
+        impl Sandbox for FailSandbox {
+            async fn run(&self, input: &InputSeed) -> apex_core::error::Result<ExecutionResult> {
+                Ok(ExecutionResult {
+                    seed_id: input.id,
+                    status: ExecutionStatus::Fail,
+                    new_branches: Vec::new(),
+                    trace: None,
+                    duration_ms: 10,
+                    stdout: String::new(),
+                    stderr: "assertion failed at src/lib.rs:42".into(),
+                    input: None,
+                })
+            }
+            async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
+                Ok(SnapshotId::new())
+            }
+            async fn restore(&self, _id: SnapshotId) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+            fn language(&self) -> Language {
+                Language::Python
+            }
+        }
+
+        struct OnceSeeder {
+            done: std::sync::Mutex<bool>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for OnceSeeder {
+            fn name(&self) -> &str {
+                "once-fail"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                let mut d = self.done.lock().unwrap();
+                if *d {
+                    Ok(Vec::new())
+                } else {
+                    *d = true;
+                    Ok(vec![InputSeed::new(
+                        b"fail".to_vec(),
+                        apex_core::types::SeedOrigin::Fuzzer,
+                    )])
+                }
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(105, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(FailSandbox), test_target())
+            .with_strategy(Box::new(OnceSeeder {
+                done: std::sync::Mutex::new(false),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: Some(5),
+                stall_threshold: 2,
+            });
+        cluster.run().await.unwrap();
+        let summary = cluster.bug_summary();
+        assert!(summary.total > 0);
+        assert!(summary.by_class.contains_key("assertion_failure"));
+    }
+
+    /// Sandbox returns OomKill status — exercises the OomKill bug class branch.
+    #[tokio::test]
+    async fn run_records_oom_bug() {
+        struct OomSandbox;
+        #[async_trait::async_trait]
+        impl Sandbox for OomSandbox {
+            async fn run(&self, input: &InputSeed) -> apex_core::error::Result<ExecutionResult> {
+                Ok(ExecutionResult {
+                    seed_id: input.id,
+                    status: ExecutionStatus::OomKill,
+                    new_branches: Vec::new(),
+                    trace: None,
+                    duration_ms: 10,
+                    stdout: String::new(),
+                    stderr: "killed by oom at src/alloc.rs:99".into(),
+                    input: None,
+                })
+            }
+            async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
+                Ok(SnapshotId::new())
+            }
+            async fn restore(&self, _id: SnapshotId) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+            fn language(&self) -> Language {
+                Language::Python
+            }
+        }
+
+        struct OnceOomSeeder {
+            done: std::sync::Mutex<bool>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for OnceOomSeeder {
+            fn name(&self) -> &str {
+                "once-oom"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                let mut d = self.done.lock().unwrap();
+                if *d {
+                    Ok(Vec::new())
+                } else {
+                    *d = true;
+                    Ok(vec![InputSeed::new(
+                        b"oom".to_vec(),
+                        apex_core::types::SeedOrigin::Fuzzer,
+                    )])
+                }
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(106, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(OomSandbox), test_target())
+            .with_strategy(Box::new(OnceOomSeeder {
+                done: std::sync::Mutex::new(false),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: Some(5),
+                stall_threshold: 2,
+            });
+        cluster.run().await.unwrap();
+        let summary = cluster.bug_summary();
+        assert!(summary.total > 0);
+        assert!(summary.by_class.contains_key("oom_kill"));
+    }
+
+    /// Sandbox returns Pass status — no bug recorded, exercises the
+    /// `record_from_result` returning false branch.
+    #[tokio::test]
+    async fn run_pass_status_no_bug_recorded() {
+        struct PassOnlySeeder;
+        #[async_trait::async_trait]
+        impl Strategy for PassOnlySeeder {
+            fn name(&self) -> &str {
+                "pass-only"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![InputSeed::new(
+                    b"pass".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(107, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        // StubSandbox returns Pass → no bug
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target())
+            .with_strategy(Box::new(PassOnlySeeder))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 2,
+            });
+        cluster.run().await.unwrap();
+        assert_eq!(cluster.bug_summary().total, 0);
+    }
+
+    /// Run with tracing subscriber installed so log branches are actually exercised.
+    #[tokio::test]
+    async fn run_with_tracing_exercises_info_branches() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b1 = apex_core::types::BranchId::new(108, 1, 0, 0);
+        let b2 = apex_core::types::BranchId::new(108, 2, 0, 0);
+        oracle.register_branches([b1.clone(), b2.clone()]);
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(CoveringSandbox::new(vec![b1, b2]));
+
+        struct ConstSeeder;
+        #[async_trait::async_trait]
+        impl Strategy for ConstSeeder {
+            fn name(&self) -> &str {
+                "const-trace"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![InputSeed::new(
+                    b"t".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(ConstSeeder))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.9,
+                deadline_secs: Some(5),
+                stall_threshold: 100,
+            });
+        cluster.run().await.unwrap();
+        assert_eq!(oracle.coverage_percent(), 100.0);
+    }
+
+    /// Run with tracing: exercises the "coverage target reached" info! branch.
+    #[tokio::test]
+    async fn run_with_tracing_coverage_target_reached_log() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let oracle = Arc::new(CoverageOracle::new());
+        // No branches → 100% coverage → "coverage target reached" log
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target());
+        cluster.run().await.unwrap();
+    }
+
+    /// Run with tracing: exercises the "all branches covered" info! branch.
+    #[tokio::test]
+    async fn run_with_tracing_all_branches_covered_log() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(109, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        oracle.mark_covered(&b, apex_core::types::SeedId::new());
+        // 100% coverage but coverage_target is 1.0 → passes first check
+        // uncovered.is_empty() → "all branches covered"
+        let cluster =
+            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+                OrchestratorConfig {
+                    coverage_target: 1.1, // above 100% to skip coverage_target check
+                    deadline_secs: None,
+                    stall_threshold: 100,
+                },
+            );
+        cluster.run().await.unwrap();
+    }
+
+    /// Run with tracing: exercises the "deadline reached" warn! branch.
+    #[tokio::test]
+    async fn run_with_tracing_deadline_reached_log() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(110, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster =
+            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+                OrchestratorConfig {
+                    coverage_target: 1.0,
+                    deadline_secs: Some(0),
+                    stall_threshold: 100,
+                },
+            );
+        cluster.run().await.unwrap();
+    }
+
+    /// Run with tracing: exercises the "coverage stalled" warn! branch.
+    #[tokio::test]
+    async fn run_with_tracing_stall_log() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(111, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster =
+            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+                OrchestratorConfig {
+                    coverage_target: 1.0,
+                    deadline_secs: None,
+                    stall_threshold: 1,
+                },
+            );
+        cluster.run().await.unwrap();
+    }
+
+    /// Run with tracing: exercises the "new coverage" info! branch.
+    #[tokio::test]
+    async fn run_with_tracing_new_coverage_log() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(112, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(CoveringSandbox::new(vec![b]));
+
+        struct LogSeeder;
+        #[async_trait::async_trait]
+        impl Strategy for LogSeeder {
+            fn name(&self) -> &str {
+                "log-seeder"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![InputSeed::new(
+                    b"log".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(LogSeeder))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.9,
+                deadline_secs: Some(5),
+                stall_threshold: 100,
+            });
+        cluster.run().await.unwrap();
+    }
+
+    /// Run with tracing: exercises the "bug found" info! branch with a Crash.
+    #[tokio::test]
+    async fn run_with_tracing_bug_found_crash_log() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        struct CrashOnceSeeder {
+            done: std::sync::Mutex<bool>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for CrashOnceSeeder {
+            fn name(&self) -> &str {
+                "crash-once-log"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                let mut d = self.done.lock().unwrap();
+                if *d {
+                    Ok(Vec::new())
+                } else {
+                    *d = true;
+                    Ok(vec![InputSeed::new(
+                        b"crash".to_vec(),
+                        apex_core::types::SeedOrigin::Fuzzer,
+                    )])
+                }
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(113, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(CrashSandbox), test_target())
+            .with_strategy(Box::new(CrashOnceSeeder {
+                done: std::sync::Mutex::new(false),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: Some(5),
+                stall_threshold: 2,
+            });
+        cluster.run().await.unwrap();
+    }
+
+    /// Run with tracing: exercises the "bug found" info! with Timeout class.
+    #[tokio::test]
+    async fn run_with_tracing_bug_found_timeout_log() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        struct TimeoutSandboxLog;
+        #[async_trait::async_trait]
+        impl Sandbox for TimeoutSandboxLog {
+            async fn run(&self, input: &InputSeed) -> apex_core::error::Result<ExecutionResult> {
+                Ok(ExecutionResult {
+                    seed_id: input.id,
+                    status: ExecutionStatus::Timeout,
+                    new_branches: Vec::new(),
+                    trace: None,
+                    duration_ms: 5000,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    input: None,
+                })
+            }
+            async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
+                Ok(SnapshotId::new())
+            }
+            async fn restore(&self, _id: SnapshotId) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+            fn language(&self) -> Language {
+                Language::Python
+            }
+        }
+
+        struct OnceTimeoutSeeder {
+            done: std::sync::Mutex<bool>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for OnceTimeoutSeeder {
+            fn name(&self) -> &str {
+                "once-timeout-log"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                let mut d = self.done.lock().unwrap();
+                if *d {
+                    Ok(Vec::new())
+                } else {
+                    *d = true;
+                    Ok(vec![InputSeed::new(
+                        b"to".to_vec(),
+                        apex_core::types::SeedOrigin::Fuzzer,
+                    )])
+                }
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(114, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(TimeoutSandboxLog), test_target())
+            .with_strategy(Box::new(OnceTimeoutSeeder {
+                done: std::sync::Mutex::new(false),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: Some(5),
+                stall_threshold: 2,
+            });
+        cluster.run().await.unwrap();
+    }
+
+    /// Run with tracing: exercises "exploration complete" info! log with non-zero
+    /// iteration count, coverage, and bug count.
+    #[tokio::test]
+    async fn run_with_tracing_exploration_complete_with_bugs() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        struct CrashOnce2 {
+            done: std::sync::Mutex<bool>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for CrashOnce2 {
+            fn name(&self) -> &str {
+                "crash-once2"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                let mut d = self.done.lock().unwrap();
+                if *d {
+                    Ok(Vec::new())
+                } else {
+                    *d = true;
+                    Ok(vec![InputSeed::new(
+                        b"c".to_vec(),
+                        apex_core::types::SeedOrigin::Fuzzer,
+                    )])
+                }
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(115, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(CrashSandbox), test_target())
+            .with_strategy(Box::new(CrashOnce2 {
+                done: std::sync::Mutex::new(false),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: Some(5),
+                stall_threshold: 2,
+            });
+        cluster.run().await.unwrap();
+        assert!(cluster.bug_summary().total > 0);
+    }
+
+    /// Stall counter transitions: coverage found (reset to 0) then stalls again.
+    /// Exercises the `stall_count = if new_coverage { 0 } else { stall_count + 1 }`
+    /// branch in both directions within the same run.
+    #[tokio::test]
+    async fn run_stall_count_reset_then_increment_again() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// Strategy that produces seeds on every call.
+        struct AlwaysSeed;
+        #[async_trait::async_trait]
+        impl Strategy for AlwaysSeed {
+            fn name(&self) -> &str {
+                "always-seed"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![InputSeed::new(
+                    b"s".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        /// Sandbox that covers b1 on 1st call and b2 on 4th call, nothing otherwise.
+        struct StagedCoveringSandbox {
+            call_count: AtomicUsize,
+            b1: apex_core::types::BranchId,
+            b2: apex_core::types::BranchId,
+        }
+        #[async_trait::async_trait]
+        impl Sandbox for StagedCoveringSandbox {
+            async fn run(&self, input: &InputSeed) -> apex_core::error::Result<ExecutionResult> {
+                let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+                let new_branches = match n {
+                    0 => vec![self.b1.clone()],
+                    3 => vec![self.b2.clone()],
+                    _ => vec![],
+                };
+                Ok(ExecutionResult {
+                    seed_id: input.id,
+                    status: ExecutionStatus::Pass,
+                    new_branches,
+                    trace: None,
+                    duration_ms: 1,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    input: None,
+                })
+            }
+            async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
+                Ok(SnapshotId::new())
+            }
+            async fn restore(&self, _id: SnapshotId) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+            fn language(&self) -> Language {
+                Language::Python
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b1 = apex_core::types::BranchId::new(116, 1, 0, 0);
+        let b2 = apex_core::types::BranchId::new(116, 2, 0, 0);
+        oracle.register_branches([b1.clone(), b2.clone()]);
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(StagedCoveringSandbox {
+            call_count: AtomicUsize::new(0),
+            b1,
+            b2,
+        });
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(AlwaysSeed))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.9,
+                deadline_secs: Some(10),
+                stall_threshold: 100,
+            });
+        cluster.run().await.unwrap();
+        assert_eq!(oracle.covered_count(), 2);
+    }
+
+    /// Sandbox returns a result with new_branches covering a branch — exercises
+    /// the `!delta.newly_covered.is_empty()` → true branch within the for loop,
+    /// while another result in the same iteration has no new branches (false branch).
+    #[tokio::test]
+    async fn run_mixed_coverage_in_single_iteration() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct TwoSeedStrat;
+        #[async_trait::async_trait]
+        impl Strategy for TwoSeedStrat {
+            fn name(&self) -> &str {
+                "two-seed-mix"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![
+                    InputSeed::new(b"a".to_vec(), apex_core::types::SeedOrigin::Fuzzer),
+                    InputSeed::new(b"b".to_vec(), apex_core::types::SeedOrigin::Fuzzer),
+                ])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        /// First call returns branches, second returns nothing.
+        struct FirstOnlySandbox {
+            call_count: AtomicUsize,
+            branch: apex_core::types::BranchId,
+        }
+        #[async_trait::async_trait]
+        impl Sandbox for FirstOnlySandbox {
+            async fn run(&self, input: &InputSeed) -> apex_core::error::Result<ExecutionResult> {
+                let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+                let new_branches = if n == 0 {
+                    vec![self.branch.clone()]
+                } else {
+                    vec![]
+                };
+                Ok(ExecutionResult {
+                    seed_id: input.id,
+                    status: ExecutionStatus::Pass,
+                    new_branches,
+                    trace: None,
+                    duration_ms: 1,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    input: None,
+                })
+            }
+            async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
+                Ok(SnapshotId::new())
+            }
+            async fn restore(&self, _id: SnapshotId) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+            fn language(&self) -> Language {
+                Language::Python
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(117, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(FirstOnlySandbox {
+            call_count: AtomicUsize::new(0),
+            branch: b,
+        });
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(TwoSeedStrat))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.9,
+                deadline_secs: Some(5),
+                stall_threshold: 100,
+            });
+        cluster.run().await.unwrap();
+        assert_eq!(oracle.covered_count(), 1);
+    }
+
+    /// Multiple observe calls per iteration — multiple strategies each get
+    /// observe() called for each result.
+    #[tokio::test]
+    async fn run_multiple_strategies_each_observe() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountObserver {
+            name: &'static str,
+            count: Arc<AtomicUsize>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for CountObserver {
+            fn name(&self) -> &str {
+                self.name
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![InputSeed::new(
+                    b"m".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                self.count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let c1 = Arc::new(AtomicUsize::new(0));
+        let c2 = Arc::new(AtomicUsize::new(0));
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(118, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        let sandbox: Arc<dyn Sandbox> = Arc::new(CoveringSandbox::new(vec![b]));
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(CountObserver {
+                name: "obs1",
+                count: c1.clone(),
+            }))
+            .with_strategy(Box::new(CountObserver {
+                name: "obs2",
+                count: c2.clone(),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.9,
+                deadline_secs: Some(5),
+                stall_threshold: 100,
+            });
+        cluster.run().await.unwrap();
+        // Both strategies should have been called at least once.
+        // With 2 strategies, each suggests a seed → 2 seeds run → 2 results.
+        // Each result triggers observe() on both strategies → at least 2 calls each.
+        assert!(c1.load(Ordering::SeqCst) > 0);
+        assert!(c2.load(Ordering::SeqCst) > 0);
+    }
+
+    /// Crash sandbox with new_branches — exercises both the `newly_covered` and
+    /// `record_from_result` branches in the same result.
+    #[tokio::test]
+    async fn run_crash_with_new_coverage_both_branches() {
+        struct CrashWithCoverageSandbox {
+            branches: std::sync::Mutex<Vec<apex_core::types::BranchId>>,
+        }
+        #[async_trait::async_trait]
+        impl Sandbox for CrashWithCoverageSandbox {
+            async fn run(&self, input: &InputSeed) -> apex_core::error::Result<ExecutionResult> {
+                let new_branches = {
+                    let mut guard = self.branches.lock().unwrap();
+                    std::mem::take(&mut *guard)
+                };
+                Ok(ExecutionResult {
+                    seed_id: input.id,
+                    status: ExecutionStatus::Crash,
+                    new_branches,
+                    trace: None,
+                    duration_ms: 1,
+                    stdout: String::new(),
+                    stderr: "crash at src/x.rs:1".into(),
+                    input: None,
+                })
+            }
+            async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
+                Ok(SnapshotId::new())
+            }
+            async fn restore(&self, _id: SnapshotId) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+            fn language(&self) -> Language {
+                Language::Python
+            }
+        }
+
+        struct OneShotSeed3 {
+            done: std::sync::Mutex<bool>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for OneShotSeed3 {
+            fn name(&self) -> &str {
+                "one-shot3"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                let mut d = self.done.lock().unwrap();
+                if *d {
+                    Ok(Vec::new())
+                } else {
+                    *d = true;
+                    Ok(vec![InputSeed::new(
+                        b"cc".to_vec(),
+                        apex_core::types::SeedOrigin::Fuzzer,
+                    )])
+                }
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(119, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(CrashWithCoverageSandbox {
+            branches: std::sync::Mutex::new(vec![b]),
+        });
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(OneShotSeed3 {
+                done: std::sync::Mutex::new(false),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.9,
+                deadline_secs: Some(5),
+                stall_threshold: 3,
+            });
+        cluster.run().await.unwrap();
+        assert_eq!(oracle.covered_count(), 1);
+        assert!(cluster.bug_summary().total > 0);
+    }
+
+    /// Stall threshold of 1 with no strategies — immediately stalls and exits.
+    #[tokio::test]
+    async fn run_stall_threshold_one_no_strategies() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(120, 1, 0, 0);
+        oracle.register_branches([b]);
+        let cluster =
+            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+                OrchestratorConfig {
+                    coverage_target: 1.0,
+                    deadline_secs: None,
+                    stall_threshold: 1,
+                },
+            );
+        cluster.run().await.unwrap();
+    }
+
+    /// Many branches, partial coverage target — exercises iteration > 0.
+    #[tokio::test]
+    async fn run_multiple_iterations_before_target() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// Sandbox that covers one branch per call.
+        struct OnePerCallSandbox {
+            branches: Vec<apex_core::types::BranchId>,
+            idx: AtomicUsize,
+        }
+        #[async_trait::async_trait]
+        impl Sandbox for OnePerCallSandbox {
+            async fn run(&self, input: &InputSeed) -> apex_core::error::Result<ExecutionResult> {
+                let i = self.idx.fetch_add(1, Ordering::SeqCst);
+                let new_branches = if i < self.branches.len() {
+                    vec![self.branches[i].clone()]
+                } else {
+                    vec![]
+                };
+                Ok(ExecutionResult {
+                    seed_id: input.id,
+                    status: ExecutionStatus::Pass,
+                    new_branches,
+                    trace: None,
+                    duration_ms: 1,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    input: None,
+                })
+            }
+            async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
+                Ok(SnapshotId::new())
+            }
+            async fn restore(&self, _id: SnapshotId) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+            fn language(&self) -> Language {
+                Language::Python
+            }
+        }
+
+        struct AlwaysOneSeed;
+        #[async_trait::async_trait]
+        impl Strategy for AlwaysOneSeed {
+            fn name(&self) -> &str {
+                "always-one"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![InputSeed::new(
+                    b"i".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let branches: Vec<_> = (0..5)
+            .map(|i| apex_core::types::BranchId::new(121, i, 0, 0))
+            .collect();
+        oracle.register_branches(branches.clone());
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(OnePerCallSandbox {
+            branches: branches.clone(),
+            idx: AtomicUsize::new(0),
+        });
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(AlwaysOneSeed))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.6, // 3 of 5 = 60%
+                deadline_secs: Some(10),
+                stall_threshold: 100,
+            });
+        cluster.run().await.unwrap();
+        assert!(oracle.covered_count() >= 3);
+    }
+
+    /// Run with all strategies returning Err — all filtered out → suggestions empty
+    /// → stall path.
+    #[tokio::test]
+    async fn run_all_strategies_fail_stalls() {
+        struct AlwaysErr;
+        #[async_trait::async_trait]
+        impl Strategy for AlwaysErr {
+            fn name(&self) -> &str {
+                "always-err"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Err(apex_core::error::ApexError::Other("boom".into()))
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(122, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target())
+            .with_strategy(Box::new(AlwaysErr))
+            .with_strategy(Box::new(AlwaysErr))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 2,
+            });
+        cluster.run().await.unwrap();
+    }
+
+    /// All strategies return Ok(Vec::new()) — empty seeds → stall path.
+    #[tokio::test]
+    async fn run_all_strategies_empty_seeds_stalls() {
+        struct EmptyOk;
+        #[async_trait::async_trait]
+        impl Strategy for EmptyOk {
+            fn name(&self) -> &str {
+                "empty-ok"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(Vec::new())
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(123, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target())
+            .with_strategy(Box::new(EmptyOk))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 2,
+            });
+        cluster.run().await.unwrap();
+    }
+
+    /// Exercises iteration incrementing: with strategy that checks iteration.
+    #[tokio::test]
+    async fn run_iteration_increments_across_loops() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct IterTracker {
+            max_iteration: Arc<AtomicU64>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for IterTracker {
+            fn name(&self) -> &str {
+                "iter-tracker"
+            }
+            async fn suggest_inputs(
+                &self,
+                ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                self.max_iteration
+                    .fetch_max(ctx.iteration, Ordering::SeqCst);
+                Ok(vec![InputSeed::new(
+                    b"it".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let max_iter = Arc::new(AtomicU64::new(0));
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(124, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target())
+            .with_strategy(Box::new(IterTracker {
+                max_iteration: max_iter.clone(),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 5,
+            });
+        cluster.run().await.unwrap();
+        // With stall_threshold=5, sandbox produces no coverage, so stall increments
+        // each iteration. We should see iteration go up to at least 4.
+        assert!(max_iter.load(Ordering::SeqCst) >= 4);
+    }
+
+    /// Exercises the `for result in &results` loop with empty results vec
+    /// (all sandbox calls fail → results is empty → for loop body never entered,
+    /// new_coverage stays false → stall_count increments).
+    #[tokio::test]
+    async fn run_all_sandbox_results_fail_empty_results_vec() {
+        struct SeedProvider;
+        #[async_trait::async_trait]
+        impl Strategy for SeedProvider {
+            fn name(&self) -> &str {
+                "seed-provider"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![
+                    InputSeed::new(b"x".to_vec(), apex_core::types::SeedOrigin::Fuzzer),
+                    InputSeed::new(b"y".to_vec(), apex_core::types::SeedOrigin::Fuzzer),
+                ])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(125, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        // ErrorSandbox always returns Err → filter_map drops all → results is empty
+        let cluster = AgentCluster::new(oracle, Arc::new(ErrorSandbox), test_target())
+            .with_strategy(Box::new(SeedProvider))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 2,
+            });
+        cluster.run().await.unwrap();
+    }
+
+    /// Exercises `with_file_paths` with an empty map.
     #[test]
-    fn cluster_route_strategy_needs_synth() {
-        use apex_core::types::BranchId;
+    fn with_file_paths_empty_map() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target())
+            .with_file_paths(HashMap::new());
+        assert!(cluster.file_paths.is_empty());
+    }
+
+    /// Exercises `with_file_paths` with a single entry.
+    #[test]
+    fn with_file_paths_single_entry() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let mut paths = HashMap::new();
+        paths.insert(1u64, PathBuf::from("single.py"));
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target())
+            .with_file_paths(paths);
+        assert_eq!(cluster.file_paths.len(), 1);
+        assert_eq!(
+            cluster.file_paths.get(&1),
+            Some(&PathBuf::from("single.py"))
+        );
+    }
+
+    /// Ledger count is accessible through Arc after run.
+    #[tokio::test]
+    async fn run_ledger_count_accessible() {
         let oracle = Arc::new(CoverageOracle::new());
         let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target());
-        let candidate = BranchCandidate {
-            id: BranchId::new(1, 10, 0, 0),
-            heuristic: 0.05,
-            attempts_since_progress: 20,
-            depth_in_cfg: 5,
-            hit_count: 10,
+        cluster.run().await.unwrap();
+        assert_eq!(cluster.ledger.count(), 0);
+    }
+
+    /// Multiple bugs of same class at different locations are both recorded.
+    #[tokio::test]
+    async fn run_multiple_distinct_crashes_recorded() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct VariedCrashSandbox {
+            call_count: AtomicUsize,
+        }
+        #[async_trait::async_trait]
+        impl Sandbox for VariedCrashSandbox {
+            async fn run(&self, input: &InputSeed) -> apex_core::error::Result<ExecutionResult> {
+                let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+                Ok(ExecutionResult {
+                    seed_id: input.id,
+                    status: ExecutionStatus::Crash,
+                    new_branches: Vec::new(),
+                    trace: None,
+                    duration_ms: 1,
+                    stdout: String::new(),
+                    stderr: format!("crash at src/f{}.rs:{}", n, n + 1),
+                    input: None,
+                })
+            }
+            async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
+                Ok(SnapshotId::new())
+            }
+            async fn restore(&self, _id: SnapshotId) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+            fn language(&self) -> Language {
+                Language::Python
+            }
+        }
+
+        struct AlwaysSeedBugs;
+        #[async_trait::async_trait]
+        impl Strategy for AlwaysSeedBugs {
+            fn name(&self) -> &str {
+                "always-seed-bugs"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![InputSeed::new(
+                    b"bug".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(126, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(VariedCrashSandbox {
+            call_count: AtomicUsize::new(0),
+        });
+        let cluster = AgentCluster::new(oracle, sandbox, test_target())
+            .with_strategy(Box::new(AlwaysSeedBugs))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 3,
+            });
+        cluster.run().await.unwrap();
+        // Multiple distinct crashes should each be recorded (different locations).
+        assert!(cluster.bug_summary().total >= 2);
+    }
+
+    /// Duplicate bug in same iteration — exercises `record_from_result` returning
+    /// false (bug already seen) vs true (new bug).
+    #[tokio::test]
+    async fn run_duplicate_bug_not_double_counted() {
+        struct DupCrashSandbox;
+        #[async_trait::async_trait]
+        impl Sandbox for DupCrashSandbox {
+            async fn run(&self, input: &InputSeed) -> apex_core::error::Result<ExecutionResult> {
+                Ok(ExecutionResult {
+                    seed_id: input.id,
+                    status: ExecutionStatus::Crash,
+                    new_branches: Vec::new(),
+                    trace: None,
+                    duration_ms: 1,
+                    stdout: String::new(),
+                    stderr: "crash at src/same.rs:1".into(),
+                    input: None,
+                })
+            }
+            async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
+                Ok(SnapshotId::new())
+            }
+            async fn restore(&self, _id: SnapshotId) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+            fn language(&self) -> Language {
+                Language::Python
+            }
+        }
+
+        struct MultiSeedDup;
+        #[async_trait::async_trait]
+        impl Strategy for MultiSeedDup {
+            fn name(&self) -> &str {
+                "multi-dup"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![
+                    InputSeed::new(b"d1".to_vec(), apex_core::types::SeedOrigin::Fuzzer),
+                    InputSeed::new(b"d2".to_vec(), apex_core::types::SeedOrigin::Fuzzer),
+                ])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(127, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(DupCrashSandbox), test_target())
+            .with_strategy(Box::new(MultiSeedDup))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 2,
+            });
+        cluster.run().await.unwrap();
+        // Same crash location → deduped to 1 bug even with multiple results.
+        assert_eq!(cluster.bug_summary().total, 1);
+    }
+
+    /// Run with Rust language target.
+    #[tokio::test]
+    async fn run_with_rust_target() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let target = Target {
+            root: PathBuf::from("/tmp/rust-proj"),
+            language: Language::Rust,
+            test_command: vec!["cargo".into(), "test".into()],
         };
-        let rec = cluster.route_strategy(&candidate);
-        assert_eq!(rec, StrategyRecommendation::LlmSynth);
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), target);
+        cluster.run().await.unwrap();
+    }
+
+    /// Exercises the `monitor_action` method on a cluster that has just been
+    /// constructed with a custom config.
+    #[test]
+    fn monitor_action_on_cluster_with_custom_config() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let cluster =
+            AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+                OrchestratorConfig {
+                    coverage_target: 0.5,
+                    deadline_secs: Some(60),
+                    stall_threshold: 5,
+                },
+            );
+        assert_eq!(cluster.monitor_action(), MonitorAction::Normal);
+    }
+
+    /// OrchestratorConfig with very large stall_threshold.
+    #[test]
+    fn config_large_stall_threshold() {
+        let cfg = OrchestratorConfig {
+            coverage_target: 1.0,
+            deadline_secs: None,
+            stall_threshold: u64::MAX,
+        };
+        assert_eq!(cfg.stall_threshold, u64::MAX);
+    }
+
+    /// OrchestratorConfig with very large deadline.
+    #[test]
+    fn config_large_deadline() {
+        let cfg = OrchestratorConfig {
+            coverage_target: 1.0,
+            deadline_secs: Some(u64::MAX),
+            stall_threshold: 10,
+        };
+        assert_eq!(cfg.deadline_secs, Some(u64::MAX));
+    }
+
+    /// Run with tracing and combined new-coverage + bug in same result.
+    #[tokio::test]
+    async fn run_with_tracing_coverage_and_bug_same_result() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        struct CrashCoverSandbox {
+            branches: std::sync::Mutex<Vec<apex_core::types::BranchId>>,
+        }
+        #[async_trait::async_trait]
+        impl Sandbox for CrashCoverSandbox {
+            async fn run(&self, input: &InputSeed) -> apex_core::error::Result<ExecutionResult> {
+                let new_branches = {
+                    let mut g = self.branches.lock().unwrap();
+                    std::mem::take(&mut *g)
+                };
+                Ok(ExecutionResult {
+                    seed_id: input.id,
+                    status: ExecutionStatus::Crash,
+                    new_branches,
+                    trace: None,
+                    duration_ms: 1,
+                    stdout: String::new(),
+                    stderr: "crash at src/combined.rs:10".into(),
+                    input: None,
+                })
+            }
+            async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
+                Ok(SnapshotId::new())
+            }
+            async fn restore(&self, _id: SnapshotId) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+            fn language(&self) -> Language {
+                Language::Python
+            }
+        }
+
+        struct OnceSeed4 {
+            done: std::sync::Mutex<bool>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for OnceSeed4 {
+            fn name(&self) -> &str {
+                "once4"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                let mut d = self.done.lock().unwrap();
+                if *d {
+                    Ok(Vec::new())
+                } else {
+                    *d = true;
+                    Ok(vec![InputSeed::new(
+                        b"cb".to_vec(),
+                        apex_core::types::SeedOrigin::Fuzzer,
+                    )])
+                }
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(128, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(CrashCoverSandbox {
+            branches: std::sync::Mutex::new(vec![b]),
+        });
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(OnceSeed4 {
+                done: std::sync::Mutex::new(false),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.9,
+                deadline_secs: Some(5),
+                stall_threshold: 3,
+            });
+        cluster.run().await.unwrap();
+        assert_eq!(oracle.covered_count(), 1);
+        assert!(cluster.bug_summary().total > 0);
     }
 }

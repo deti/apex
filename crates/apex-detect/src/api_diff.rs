@@ -969,4 +969,1108 @@ mod tests {
         assert!(!breaking.is_empty());
         assert!(breaking.iter().any(|c| c.description.contains("email")));
     }
+
+    // ---- Additional tests for branch coverage ----
+
+    #[test]
+    fn invalid_new_spec_returns_error() {
+        // Exercises the error path on line 44 (new spec parse failure)
+        let old = make_spec(r#"{}"#);
+        let result = ApiDiffer::diff(&old, "not json");
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("new spec"));
+    }
+
+    #[test]
+    fn specs_without_paths_key() {
+        // Exercises the None branch of old_paths/new_paths (lines 48-53)
+        let old = r#"{ "openapi": "3.0.0", "info": { "title": "T", "version": "1" } }"#;
+        let new = r#"{ "openapi": "3.0.0", "info": { "title": "T", "version": "1" } }"#;
+        let report = ApiDiffer::diff(old, new).unwrap();
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn old_has_no_paths_new_has_paths() {
+        // old_paths is None (unwrap_or empty), new_paths has entries
+        let old = r#"{ "openapi": "3.0.0", "info": { "title": "T", "version": "1" } }"#;
+        let new = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let report = ApiDiffer::diff(old, &new).unwrap();
+        assert_eq!(report.non_breaking_count, 1);
+        assert!(report.changes[0].description.contains("new endpoint"));
+    }
+
+    #[test]
+    fn old_has_paths_new_has_no_paths() {
+        // new_paths is None (unwrap_or empty) — all old endpoints are removed
+        let old = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let new = r#"{ "openapi": "3.0.0", "info": { "title": "T", "version": "1" } }"#;
+        let report = ApiDiffer::diff(&old, new).unwrap();
+        assert_eq!(report.breaking_count, 1);
+        assert!(report.changes[0].description.contains("removed"));
+    }
+
+    #[test]
+    fn removed_path_with_multiple_methods() {
+        // Exercises the inner loop at line 62-71: path removed, multiple methods present
+        let old = make_spec(
+            r#"{ "/users": { "get": { "summary": "list" }, "post": { "summary": "create" }, "delete": { "summary": "clear" } } }"#,
+        );
+        let new = make_spec(r#"{}"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.breaking_count, 3);
+        let methods: Vec<&str> = report.changes.iter().map(|c| c.method.as_str()).collect();
+        assert!(methods.contains(&"GET"));
+        assert!(methods.contains(&"POST"));
+        assert!(methods.contains(&"DELETE"));
+    }
+
+    #[test]
+    fn removed_path_only_counts_existing_methods() {
+        // Path removed but only "get" method exists — other HTTP methods (post, put, etc.) should NOT produce changes
+        let old = make_spec(r#"{ "/items": { "get": { "summary": "list" } } }"#);
+        let new = make_spec(r#"{}"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        // Only 1 breaking change for "get", not 7 for all HTTP methods
+        assert_eq!(report.breaking_count, 1);
+        assert_eq!(report.changes.len(), 1);
+    }
+
+    #[test]
+    fn new_method_on_existing_path() {
+        // Exercises (None, Some(_)) branch at line 98-106
+        let old = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let new = make_spec(
+            r#"{ "/users": { "get": { "summary": "list" }, "post": { "summary": "create" } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.non_breaking_count, 1);
+        assert_eq!(report.changes[0].method, "POST");
+        assert!(report.changes[0].description.contains("new endpoint"));
+    }
+
+    #[test]
+    fn both_methods_none_no_change() {
+        // Exercises (None, None) branch at line 107 — method doesn't exist in either
+        // Using "put" which exists in neither
+        let old = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let new = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn already_deprecated_no_change() {
+        // old_deprecated=true, new_deprecated=true — should NOT add deprecation change
+        let old = make_spec(
+            r#"{ "/users": { "get": { "summary": "list", "deprecated": true } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "get": { "summary": "list", "deprecated": true } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.deprecation_count, 0);
+    }
+
+    #[test]
+    fn undeprecated_no_deprecation_change() {
+        // old_deprecated=true, new_deprecated=false — not treated as a change by current logic
+        let old = make_spec(
+            r#"{ "/users": { "get": { "summary": "list", "deprecated": true } } }"#,
+        );
+        let new = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.deprecation_count, 0);
+    }
+
+    #[test]
+    fn removed_optional_param_not_breaking() {
+        // Exercises lines 204-217: parameter removed but required=false
+        let old = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "page", "in": "query", "required": false,
+                  "schema": { "type": "integer" } }
+            ] } } }"#,
+        );
+        let new = make_spec(r#"{ "/users": { "get": { "parameters": [] } } }"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        // Removing an optional parameter is not breaking
+        assert_eq!(report.breaking_count, 0);
+    }
+
+    #[test]
+    fn removed_param_no_required_field_not_breaking() {
+        // Parameter without "required" field — defaults to false
+        let old = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "page", "in": "query",
+                  "schema": { "type": "integer" } }
+            ] } } }"#,
+        );
+        let new = make_spec(r#"{ "/users": { "get": { "parameters": [] } } }"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.breaking_count, 0);
+    }
+
+    #[test]
+    fn added_required_param_is_breaking() {
+        // Exercises lines 226-231: new required parameter added
+        let old = make_spec(r#"{ "/users": { "get": { "parameters": [] } } }"#);
+        let new = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "token", "in": "header", "required": true,
+                  "schema": { "type": "string" } }
+            ] } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.breaking_count, 1);
+        assert!(report.changes[0].description.contains("new required parameter"));
+    }
+
+    #[test]
+    fn param_same_type_no_change() {
+        // Exercises lines 253-264: both params have same type — no breaking change
+        let old = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "id", "in": "query",
+                  "schema": { "type": "string" } }
+            ] } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "id", "in": "query",
+                  "schema": { "type": "string" } }
+            ] } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.breaking_count, 0);
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn param_no_schema_no_crash() {
+        // Parameters without schema — exercises unwrap_or(&Value::Null) at line 248
+        let old = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "id", "in": "query" }
+            ] } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "id", "in": "query" }
+            ] } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn param_one_has_type_other_doesnt() {
+        // One param has type, other doesn't — (Some, None) in the type check
+        let old = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "id", "in": "query", "schema": { "type": "string" } }
+            ] } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "id", "in": "query", "schema": {} }
+            ] } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        // No type-change breaking change since new_type is None
+        let type_changes: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.description.contains("type changed"))
+            .collect();
+        assert!(type_changes.is_empty());
+    }
+
+    #[test]
+    fn request_body_removed_not_breaking() {
+        // Exercises (Some(_), None) branch at line 351
+        let old = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": { "type": "object", "properties": { "name": { "type": "string" } } }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let new = make_spec(r#"{ "/users": { "post": { "summary": "create" } } }"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        // Request body removal is non-breaking per the code comment
+        assert_eq!(report.breaking_count, 0);
+    }
+
+    #[test]
+    fn request_body_added_required_is_breaking() {
+        // Exercises (None, Some(_)) branch at lines 335-349 with required=true
+        let old = make_spec(r#"{ "/users": { "post": { "summary": "create" } } }"#);
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": { "type": "object", "properties": { "name": { "type": "string" } } }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.breaking_count, 1);
+        assert!(report.changes[0]
+            .description
+            .contains("required request body added"));
+    }
+
+    #[test]
+    fn request_body_added_optional_not_breaking() {
+        // Exercises (None, Some(_)) branch with required=false
+        let old = make_spec(r#"{ "/users": { "post": { "summary": "create" } } }"#);
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "required": false,
+                    "content": {
+                        "application/json": {
+                            "schema": { "type": "object", "properties": { "name": { "type": "string" } } }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.breaking_count, 0);
+    }
+
+    #[test]
+    fn request_body_added_no_required_field() {
+        // Exercises line 341: "required" field missing — defaults to false
+        let old = make_spec(r#"{ "/users": { "post": { "summary": "create" } } }"#);
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": { "type": "object" }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.breaking_count, 0);
+    }
+
+    #[test]
+    fn request_body_both_none() {
+        // Exercises the early return at line 307-309
+        let old = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let new = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn schema_optional_field_added() {
+        // Exercises line 413-420: new property that's NOT in required list
+        let old = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": { "name": { "type": "string" } },
+                                "required": ["name"]
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "nickname": { "type": "string" }
+                                },
+                                "required": ["name"]
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let non_breaking: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.kind == ChangeKind::NonBreaking)
+            .collect();
+        assert!(!non_breaking.is_empty());
+        assert!(non_breaking
+            .iter()
+            .any(|c| c.description.contains("optional field 'nickname'")));
+    }
+
+    #[test]
+    fn field_became_required() {
+        // Exercises lines 424-435: existing optional field becomes required
+        let old = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "email": { "type": "string" }
+                                },
+                                "required": ["name"]
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "email": { "type": "string" }
+                                },
+                                "required": ["name", "email"]
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let breaking: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.kind == ChangeKind::Breaking)
+            .collect();
+        assert!(!breaking.is_empty());
+        assert!(breaking
+            .iter()
+            .any(|c| c.description.contains("optional to required")));
+    }
+
+    #[test]
+    fn schema_property_type_changed() {
+        // Exercises lines 438-455: property type changes in request body schema
+        let old = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": { "age": { "type": "string" } }
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": { "age": { "type": "integer" } }
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let breaking: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.kind == ChangeKind::Breaking)
+            .collect();
+        assert!(!breaking.is_empty());
+        assert!(breaking[0].description.contains("type changed"));
+        assert!(breaking[0].description.contains("age"));
+    }
+
+    #[test]
+    fn schema_property_type_unchanged() {
+        // Exercises lines 444-455 when types match
+        let old = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": { "name": { "type": "string" } }
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": { "name": { "type": "string" } }
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn enum_on_schema_property() {
+        // Exercises diff_enum called from diff_schema_properties (lines 457-464)
+        let old = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "role": { "type": "string", "enum": ["admin", "user"] }
+                                }
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "role": { "type": "string", "enum": ["admin", "user", "moderator"] }
+                                }
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let non_breaking: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.kind == ChangeKind::NonBreaking)
+            .collect();
+        assert!(!non_breaking.is_empty());
+        assert!(non_breaking[0].description.contains("moderator"));
+    }
+
+    #[test]
+    fn security_changed_is_breaking() {
+        // Exercises (Some, Some) where old_sec != new_sec (line 535)
+        let old = make_spec(
+            r#"{ "/users": { "get": {
+                "summary": "list",
+                "security": [{ "basicAuth": [] }]
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "get": {
+                "summary": "list",
+                "security": [{ "bearerAuth": [] }]
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let breaking: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.description.contains("authentication"))
+            .collect();
+        assert!(!breaking.is_empty());
+        assert!(breaking[0].description.contains("changed"));
+    }
+
+    #[test]
+    fn security_same_no_change() {
+        // Exercises (Some, Some) where old_sec == new_sec — falls through to _
+        let old = make_spec(
+            r#"{ "/users": { "get": {
+                "summary": "list",
+                "security": [{ "bearerAuth": [] }]
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "get": {
+                "summary": "list",
+                "security": [{ "bearerAuth": [] }]
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let auth_changes: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.description.contains("authentication"))
+            .collect();
+        assert!(auth_changes.is_empty());
+    }
+
+    #[test]
+    fn security_removed_no_breaking() {
+        // Exercises (Some(_), None) which falls through to _ catch-all
+        let old = make_spec(
+            r#"{ "/users": { "get": {
+                "summary": "list",
+                "security": [{ "bearerAuth": [] }]
+            } } }"#,
+        );
+        let new = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let auth_changes: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.description.contains("authentication"))
+            .collect();
+        assert!(auth_changes.is_empty());
+    }
+
+    #[test]
+    fn security_added_empty_array_not_breaking() {
+        // Exercises is_empty_security with empty array (line 584)
+        let old = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let new = make_spec(
+            r#"{ "/users": { "get": {
+                "summary": "list",
+                "security": []
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let auth_changes: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.description.contains("authentication"))
+            .collect();
+        assert!(auth_changes.is_empty());
+    }
+
+    #[test]
+    fn security_added_empty_objects_not_breaking() {
+        // Exercises is_empty_security with array of empty objects (line 586-587)
+        let old = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let new = make_spec(
+            r#"{ "/users": { "get": {
+                "summary": "list",
+                "security": [{}]
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let auth_changes: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.description.contains("authentication"))
+            .collect();
+        assert!(auth_changes.is_empty());
+    }
+
+    #[test]
+    fn is_empty_security_non_array() {
+        // Exercises is_empty_security None branch (line 589) — security is not an array
+        let old = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let new = make_spec(
+            r#"{ "/users": { "get": {
+                "summary": "list",
+                "security": "invalid"
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        // Non-array security is treated as non-empty, so it's breaking
+        let auth_changes: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.description.contains("authentication"))
+            .collect();
+        assert!(!auth_changes.is_empty());
+    }
+
+    #[test]
+    fn val_to_string_non_string_value() {
+        // Exercises the `other` branch of val_to_string (line 577)
+        // Use integer enum values to trigger this
+        let old = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "level", "in": "query",
+                  "schema": { "type": "integer", "enum": [1, 2, 3] } }
+            ] } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "level", "in": "query",
+                  "schema": { "type": "integer", "enum": [1, 2] } }
+            ] } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let breaking: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.kind == ChangeKind::Breaking)
+            .collect();
+        assert!(!breaking.is_empty());
+        assert!(breaking[0].description.contains("3"));
+    }
+
+    #[test]
+    fn follow_ref_invalid_format() {
+        // Exercises follow_ref returning None when ref doesn't start with "#/"
+        // Using a parameter with an invalid $ref
+        let old = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "$ref": "invalid-ref" }
+            ] } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "$ref": "invalid-ref" }
+            ] } } }"#,
+        );
+        // Should not crash — the ref won't resolve, parameter will be used as-is
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn follow_ref_dangling_ref() {
+        // Exercises follow_ref returning None when path doesn't exist in root
+        let old = make_spec(
+            r##"{ "/users": { "get": { "parameters": [
+                { "$ref": "#/components/parameters/DoesNotExist" }
+            ] } } }"##,
+        );
+        let new = make_spec(
+            r##"{ "/users": { "get": { "parameters": [
+                { "$ref": "#/components/parameters/DoesNotExist" }
+            ] } } }"##,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn json_pointer_escaping() {
+        // Exercises line 567: JSON pointer escaping with ~1 (/) and ~0 (~)
+        let old = make_spec_with_components(
+            r##"{ "/users": { "get": { "parameters": [
+                { "$ref": "#/components/parameters/my~1param~0name" }
+            ] } } }"##,
+            r##"{ "parameters": {
+                "my/param~name": {
+                    "name": "test", "in": "query", "required": true,
+                    "schema": { "type": "string" }
+                }
+            } }"##,
+        );
+        let new = make_spec(r#"{ "/users": { "get": { "parameters": [] } } }"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        // The resolved parameter is required, so removing it is breaking
+        assert_eq!(report.breaking_count, 1);
+        assert!(report.changes[0].description.contains("removed"));
+    }
+
+    #[test]
+    fn recursive_ref_resolution() {
+        // Exercises line 552-554: a $ref pointing to another $ref
+        let old = make_spec_with_components(
+            r##"{ "/users/{id}": { "get": {
+                "parameters": [
+                    { "$ref": "#/components/parameters/UserIdAlias" }
+                ]
+            } } }"##,
+            r##"{
+                "parameters": {
+                    "UserIdAlias": { "$ref": "#/components/parameters/UserId" },
+                    "UserId": {
+                        "name": "id", "in": "path", "required": true,
+                        "schema": { "type": "integer" }
+                    }
+                }
+            }"##,
+        );
+        let new = make_spec_with_components(
+            r##"{ "/users/{id}": { "get": {
+                "parameters": [
+                    { "$ref": "#/components/parameters/UserIdAlias" }
+                ]
+            } } }"##,
+            r##"{
+                "parameters": {
+                    "UserIdAlias": { "$ref": "#/components/parameters/UserId" },
+                    "UserId": {
+                        "name": "id", "in": "path", "required": true,
+                        "schema": { "type": "string" }
+                    }
+                }
+            }"##,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.breaking_count, 1);
+        assert!(report.changes[0].description.contains("type changed"));
+    }
+
+    #[test]
+    fn collect_parameters_without_name_or_in() {
+        // Exercises line 285-286: parameters missing "name" or "in" fields
+        let old = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "schema": { "type": "string" } }
+            ] } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "schema": { "type": "string" } }
+            ] } } }"#,
+        );
+        // Should not crash — name="" and in="" will be used as defaults
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.breaking_count, 0);
+    }
+
+    #[test]
+    fn no_parameters_key() {
+        // Exercises line 282: op without "parameters" key
+        let old = make_spec(r#"{ "/users": { "get": { "summary": "list" } } }"#);
+        let new = make_spec(r#"{ "/users": { "get": { "summary": "updated list" } } }"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn request_body_ref_resolution() {
+        // Exercises line 312-313: requestBody itself is a $ref
+        let old = make_spec_with_components(
+            r##"{ "/users": { "post": {
+                "requestBody": { "$ref": "#/components/requestBodies/CreateUser" }
+            } } }"##,
+            r##"{
+                "requestBodies": {
+                    "CreateUser": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": { "name": { "type": "string" } },
+                                    "required": ["name"]
+                                }
+                            }
+                        }
+                    }
+                }
+            }"##,
+        );
+        let new = make_spec_with_components(
+            r##"{ "/users": { "post": {
+                "requestBody": { "$ref": "#/components/requestBodies/CreateUser" }
+            } } }"##,
+            r##"{
+                "requestBodies": {
+                    "CreateUser": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": { "type": "string" },
+                                        "email": { "type": "string" }
+                                    },
+                                    "required": ["name", "email"]
+                                }
+                            }
+                        }
+                    }
+                }
+            }"##,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        let breaking: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.kind == ChangeKind::Breaking)
+            .collect();
+        assert!(!breaking.is_empty());
+        assert!(breaking.iter().any(|c| c.description.contains("email")));
+    }
+
+    #[test]
+    fn multiple_new_paths_all_non_breaking() {
+        // Exercises the new paths loop (lines 115-129) with multiple new paths
+        let old = make_spec(r#"{}"#);
+        let new = make_spec(
+            r#"{
+                "/users": { "get": { "summary": "list users" } },
+                "/posts": { "post": { "summary": "create post" } }
+            }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.breaking_count, 0);
+        assert_eq!(report.non_breaking_count, 2);
+    }
+
+    #[test]
+    fn new_path_only_counts_existing_methods() {
+        // New path but only one method defined — shouldn't count other HTTP methods
+        let old = make_spec(r#"{}"#);
+        let new = make_spec(r#"{ "/items": { "patch": { "summary": "update" } } }"#);
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.non_breaking_count, 1);
+        assert_eq!(report.changes[0].method, "PATCH");
+    }
+
+    #[test]
+    fn all_http_methods_covered() {
+        // Tests all 7 HTTP methods: get, post, put, delete, patch, head, options
+        let old = make_spec(r#"{}"#);
+        let new = make_spec(
+            r#"{ "/all": {
+                "get": { "summary": "g" },
+                "post": { "summary": "p" },
+                "put": { "summary": "pu" },
+                "delete": { "summary": "d" },
+                "patch": { "summary": "pa" },
+                "head": { "summary": "h" },
+                "options": { "summary": "o" }
+            } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert_eq!(report.non_breaking_count, 7);
+        let methods: Vec<&str> = report.changes.iter().map(|c| c.method.as_str()).collect();
+        assert!(methods.contains(&"GET"));
+        assert!(methods.contains(&"POST"));
+        assert!(methods.contains(&"PUT"));
+        assert!(methods.contains(&"DELETE"));
+        assert!(methods.contains(&"PATCH"));
+        assert!(methods.contains(&"HEAD"));
+        assert!(methods.contains(&"OPTIONS"));
+    }
+
+    #[test]
+    fn schema_no_properties() {
+        // Exercises lines 385-386, 401-402: schemas without "properties" key
+        let old = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": { "type": "object" }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": { "type": "object" }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn schema_no_required_array() {
+        // Exercises lines 388-392, 394-398: schemas without "required" key
+        let old = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": { "name": { "type": "string" } }
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "bio": { "type": "string" }
+                                }
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        // bio added as optional (no required list)
+        let non_breaking: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.kind == ChangeKind::NonBreaking)
+            .collect();
+        assert!(!non_breaking.is_empty());
+        assert!(non_breaking.iter().any(|c| c.description.contains("bio")));
+    }
+
+    #[test]
+    fn enum_only_on_old_or_new_no_diff() {
+        // Exercises lines 485: (Some, None) and (None, Some) — enum appears/disappears
+        // When only one side has enum, diff_enum does nothing (both must have enum)
+        let old = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "status", "in": "query",
+                  "schema": { "type": "string", "enum": ["a", "b"] } }
+            ] } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "get": { "parameters": [
+                { "name": "status", "in": "query",
+                  "schema": { "type": "string" } }
+            ] } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        // No enum-related changes since new has no enum
+        let enum_changes: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.description.contains("enum"))
+            .collect();
+        assert!(enum_changes.is_empty());
+    }
+
+    #[test]
+    fn request_body_no_json_content() {
+        // Exercises get_json_schema returning None — no "application/json" key
+        let old = make_spec(
+            r#"{ "/upload": { "post": {
+                "requestBody": {
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": { "type": "object" }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/upload": { "post": {
+                "requestBody": {
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": { "type": "object" }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        // (None, None) in the schema match — no changes
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn request_body_no_content_key() {
+        // Exercises get_json_schema returning None — no "content" key at all
+        let old = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": { "description": "data" }
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": { "description": "updated data" }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        assert!(report.changes.is_empty());
+    }
+
+    #[test]
+    fn schema_property_without_type() {
+        // Exercises lines 442-443: property in schema has no "type" key
+        let old = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": { "data": {} }
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let new = make_spec(
+            r#"{ "/users": { "post": {
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": { "data": { "type": "string" } }
+                            }
+                        }
+                    }
+                }
+            } } }"#,
+        );
+        let report = ApiDiffer::diff(&old, &new).unwrap();
+        // Old has no type, so (None, Some) — no type-change reported
+        let type_changes: Vec<_> = report
+            .changes
+            .iter()
+            .filter(|c| c.description.contains("type changed"))
+            .collect();
+        assert!(type_changes.is_empty());
+    }
 }

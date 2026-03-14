@@ -590,4 +590,371 @@ mod tests {
         // max_constraints = 1 → at most 1 input.
         assert!(inputs.len() <= 1);
     }
+
+    // ------------------------------------------------------------------
+    // Poisoned-mutex and additional edge-case branch coverage tests
+    // ------------------------------------------------------------------
+
+    /// record_constraints recovers from a poisoned constraints mutex
+    /// via `unwrap_or_else(|e| e.into_inner())`.
+    #[test]
+    fn record_constraints_recovers_from_poisoned_mutex() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = Arc::new(DrillerStrategy::new(solver, 10));
+
+        // Poison the constraints mutex by panicking while holding the lock.
+        let driller_clone = Arc::clone(&driller);
+        let _ = std::thread::spawn(move || {
+            let _guard = driller_clone.constraints.lock().unwrap();
+            panic!("intentional panic to poison mutex");
+        })
+        .join();
+
+        // The mutex is now poisoned. record_constraints should recover.
+        driller.record_constraints(vec![PathConstraint {
+            branch: BranchId::new(9, 1, 0, 0),
+            smtlib2: "(assert true)".into(),
+            direction_taken: true,
+        }]);
+
+        // Verify the constraint was recorded despite the poisoned mutex.
+        let cs = driller
+            .constraints
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        assert_eq!(cs.len(), 1);
+    }
+
+    /// suggest_inputs returns an error when the constraints mutex is poisoned.
+    #[tokio::test]
+    async fn suggest_inputs_errors_on_poisoned_constraints_mutex() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = Arc::new(DrillerStrategy::new(solver, 10));
+
+        // First record a constraint so we have data.
+        driller.record_constraints(vec![PathConstraint {
+            branch: BranchId::new(9, 2, 0, 0),
+            smtlib2: "(assert true)".into(),
+            direction_taken: true,
+        }]);
+
+        // Poison the constraints mutex.
+        let driller_clone = Arc::clone(&driller);
+        let _ = std::thread::spawn(move || {
+            let _guard = driller_clone.constraints.lock().unwrap();
+            panic!("intentional panic to poison mutex");
+        })
+        .join();
+
+        let ctx = make_ctx(vec![BranchId::new(9, 2, 0, 0)]);
+        let result = driller.suggest_inputs(&ctx).await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("mutex poisoned"), "got: {err_msg}");
+    }
+
+    /// suggest_inputs returns an error when the solver mutex is poisoned.
+    #[tokio::test]
+    async fn suggest_inputs_errors_on_poisoned_solver_mutex() {
+        let solver: Arc<Mutex<dyn Solver>> = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(Arc::clone(&solver), 10);
+
+        let branch = BranchId::new(9, 3, 0, 0);
+        driller.record_constraints(vec![PathConstraint {
+            branch: branch.clone(),
+            smtlib2: "(assert true)".into(),
+            direction_taken: true,
+        }]);
+
+        // Poison the solver mutex.
+        let solver_clone = Arc::clone(&solver);
+        let _ = std::thread::spawn(move || {
+            let _guard = solver_clone.lock().unwrap();
+            panic!("intentional panic to poison solver mutex");
+        })
+        .join();
+
+        let ctx = make_ctx(vec![branch]);
+        let result = driller.suggest_inputs(&ctx).await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("solver mutex poisoned"),
+            "got: {err_msg}"
+        );
+    }
+
+    /// Solver that alternates between returning a result and returning None,
+    /// exercising the Ok(Some) / Ok(None) branches within the same loop.
+    #[tokio::test]
+    async fn suggest_inputs_mixed_solvable_unsolvable() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct AlternatingSolver {
+            call_count: AtomicUsize,
+        }
+        impl Solver for AlternatingSolver {
+            fn solve(
+                &self,
+                _constraints: &[String],
+                _negate_last: bool,
+            ) -> Result<Option<InputSeed>> {
+                let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+                if n % 2 == 0 {
+                    Ok(Some(InputSeed::new(
+                        b"even".to_vec(),
+                        SeedOrigin::Symbolic,
+                    )))
+                } else {
+                    Ok(None)
+                }
+            }
+            fn set_logic(&mut self, _logic: apex_symbolic::traits::SolverLogic) {}
+            fn name(&self) -> &str {
+                "alternating"
+            }
+        }
+
+        let solver = Arc::new(Mutex::new(AlternatingSolver {
+            call_count: AtomicUsize::new(0),
+        }));
+        let driller = DrillerStrategy::new(solver, 10);
+
+        let branches: Vec<BranchId> = (0..4).map(|i| BranchId::new(5, i, 0, 0)).collect();
+        driller.record_constraints(
+            branches
+                .iter()
+                .map(|b| PathConstraint {
+                    branch: b.clone(),
+                    smtlib2: "(assert true)".into(),
+                    direction_taken: true,
+                })
+                .collect(),
+        );
+
+        let ctx = make_ctx(branches);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        // Even calls (0, 2) produce seeds; odd calls (1, 3) return None.
+        assert_eq!(inputs.len(), 2);
+    }
+
+    /// Solver alternates between Ok(Some), Err, and Ok(None) to exercise
+    /// all three arms of `if let Ok(Some(seed))` in the same loop.
+    #[tokio::test]
+    async fn suggest_inputs_all_three_solve_outcomes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct TriStateSolver {
+            call_count: AtomicUsize,
+        }
+        impl Solver for TriStateSolver {
+            fn solve(
+                &self,
+                _constraints: &[String],
+                _negate_last: bool,
+            ) -> Result<Option<InputSeed>> {
+                let n = self.call_count.fetch_add(1, Ordering::SeqCst);
+                match n % 3 {
+                    0 => Ok(Some(InputSeed::new(
+                        b"found".to_vec(),
+                        SeedOrigin::Symbolic,
+                    ))),
+                    1 => Err(apex_core::error::ApexError::Agent("nope".into())),
+                    _ => Ok(None),
+                }
+            }
+            fn set_logic(&mut self, _logic: apex_symbolic::traits::SolverLogic) {}
+            fn name(&self) -> &str {
+                "tristate"
+            }
+        }
+
+        let solver = Arc::new(Mutex::new(TriStateSolver {
+            call_count: AtomicUsize::new(0),
+        }));
+        let driller = DrillerStrategy::new(solver, 10);
+
+        let branches: Vec<BranchId> = (0..6).map(|i| BranchId::new(6, i, 0, 0)).collect();
+        driller.record_constraints(
+            branches
+                .iter()
+                .map(|b| PathConstraint {
+                    branch: b.clone(),
+                    smtlib2: "(assert true)".into(),
+                    direction_taken: true,
+                })
+                .collect(),
+        );
+
+        let ctx = make_ctx(branches);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        // Calls 0, 3 → Ok(Some) → 2 seeds; calls 1,4 → Err; calls 2,5 → Ok(None).
+        assert_eq!(inputs.len(), 2);
+    }
+
+    /// When the target branch is the very first constraint,
+    /// `take_while(|c| c.branch != pc.branch)` yields an empty prefix,
+    /// and the chain only includes the target's smtlib2.
+    #[tokio::test]
+    async fn suggest_inputs_target_is_first_constraint() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct PrefixCheckSolver {
+            call_count: AtomicUsize,
+        }
+        impl Solver for PrefixCheckSolver {
+            fn solve(
+                &self,
+                constraints: &[String],
+                _negate_last: bool,
+            ) -> Result<Option<InputSeed>> {
+                self.call_count.fetch_add(1, Ordering::SeqCst);
+                // When target is first, prefix should contain just 1 element.
+                Ok(Some(InputSeed::new(
+                    format!("len={}", constraints.len()).into_bytes(),
+                    SeedOrigin::Symbolic,
+                )))
+            }
+            fn set_logic(&mut self, _logic: apex_symbolic::traits::SolverLogic) {}
+            fn name(&self) -> &str {
+                "prefix-check"
+            }
+        }
+
+        let solver = Arc::new(Mutex::new(PrefixCheckSolver {
+            call_count: AtomicUsize::new(0),
+        }));
+        let driller = DrillerStrategy::new(solver, 10);
+
+        let b1 = BranchId::new(7, 1, 0, 0);
+        let b2 = BranchId::new(7, 2, 0, 0);
+        driller.record_constraints(vec![
+            PathConstraint {
+                branch: b1.clone(),
+                smtlib2: "(assert (> x 0))".into(),
+                direction_taken: true,
+            },
+            PathConstraint {
+                branch: b2.clone(),
+                smtlib2: "(assert (< x 10))".into(),
+                direction_taken: true,
+            },
+        ]);
+
+        // Only b1 is uncovered (it's the first constraint).
+        let ctx = make_ctx(vec![b1]);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        assert_eq!(inputs.len(), 1);
+        // Prefix should be just the target constraint itself (take_while yields nothing).
+        assert_eq!(std::str::from_utf8(&inputs[0].data).unwrap(), "len=1");
+    }
+
+    /// When a later branch is the target, the prefix should include
+    /// all constraints before it plus itself.
+    #[tokio::test]
+    async fn suggest_inputs_prefix_includes_prior_constraints() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct PrefixLenSolver {
+            call_count: AtomicUsize,
+        }
+        impl Solver for PrefixLenSolver {
+            fn solve(
+                &self,
+                constraints: &[String],
+                _negate_last: bool,
+            ) -> Result<Option<InputSeed>> {
+                self.call_count.fetch_add(1, Ordering::SeqCst);
+                Ok(Some(InputSeed::new(
+                    format!("len={}", constraints.len()).into_bytes(),
+                    SeedOrigin::Symbolic,
+                )))
+            }
+            fn set_logic(&mut self, _logic: apex_symbolic::traits::SolverLogic) {}
+            fn name(&self) -> &str {
+                "prefix-len"
+            }
+        }
+
+        let solver = Arc::new(Mutex::new(PrefixLenSolver {
+            call_count: AtomicUsize::new(0),
+        }));
+        let driller = DrillerStrategy::new(solver, 10);
+
+        let b1 = BranchId::new(8, 1, 0, 0);
+        let b2 = BranchId::new(8, 2, 0, 0);
+        let b3 = BranchId::new(8, 3, 0, 0);
+        driller.record_constraints(vec![
+            PathConstraint {
+                branch: b1.clone(),
+                smtlib2: "c1".into(),
+                direction_taken: true,
+            },
+            PathConstraint {
+                branch: b2.clone(),
+                smtlib2: "c2".into(),
+                direction_taken: true,
+            },
+            PathConstraint {
+                branch: b3.clone(),
+                smtlib2: "c3".into(),
+                direction_taken: true,
+            },
+        ]);
+
+        // Only b3 uncovered → prefix = [c1, c2, c3] (2 from take_while + 1 chain).
+        let ctx = make_ctx(vec![b3]);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(std::str::from_utf8(&inputs[0].data).unwrap(), "len=3");
+    }
+
+    /// Exercise `new()` with max_constraints = usize::MAX (boundary value).
+    #[test]
+    fn new_with_max_constraints_max_value() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, usize::MAX);
+        assert_eq!(driller.max_constraints, usize::MAX);
+        assert_eq!(driller.name(), "driller");
+    }
+
+    /// Multiple frontier branches where only some match uncovered set.
+    #[tokio::test]
+    async fn suggest_inputs_partial_frontier_overlap() {
+        let solver = Arc::new(Mutex::new(StubSolver::solvable()));
+        let driller = DrillerStrategy::new(solver, 10);
+
+        let b1 = BranchId::new(10, 1, 0, 0);
+        let b2 = BranchId::new(10, 2, 0, 0);
+        let b3 = BranchId::new(10, 3, 0, 0);
+        let b4 = BranchId::new(10, 4, 0, 0);
+
+        driller.record_constraints(vec![
+            PathConstraint {
+                branch: b1.clone(),
+                smtlib2: "c1".into(),
+                direction_taken: true,
+            },
+            PathConstraint {
+                branch: b2.clone(),
+                smtlib2: "c2".into(),
+                direction_taken: false,
+            },
+            PathConstraint {
+                branch: b3.clone(),
+                smtlib2: "c3".into(),
+                direction_taken: true,
+            },
+            PathConstraint {
+                branch: b4.clone(),
+                smtlib2: "c4".into(),
+                direction_taken: false,
+            },
+        ]);
+
+        // Only b2 and b4 are uncovered (alternating).
+        let ctx = make_ctx(vec![b2, b4]);
+        let inputs = driller.suggest_inputs(&ctx).await.unwrap();
+        assert_eq!(inputs.len(), 2);
+    }
 }
