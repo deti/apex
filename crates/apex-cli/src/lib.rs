@@ -620,17 +620,33 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         let detect_cfg = apex_detect::DetectConfig::default();
         let file_source_cache = build_source_cache(&target_path, lang);
 
+        // Build CPG for Python projects (other languages: TODO)
+        let cpg = if lang == Language::Python {
+            let mut combined_cpg = apex_cpg::Cpg::new();
+            for (path, source) in &file_source_cache {
+                let file_cpg = apex_cpg::builder::build_python_cpg(source, &path.display().to_string());
+                combined_cpg.merge(file_cpg);
+            }
+            if combined_cpg.node_count() > 0 {
+                Some(Arc::new(combined_cpg))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let detect_ctx = apex_detect::AnalysisContext {
             target_root: target_path.clone(),
             language: lang,
-            oracle: Arc::new(CoverageOracle::new()),
-            file_paths: std::collections::HashMap::new(),
+            oracle: Arc::clone(&oracle),
+            file_paths: instrumented.file_paths.clone(),
             known_bugs: vec![],
             source_cache: file_source_cache,
             fuzz_corpus: None,
             config: detect_cfg.clone(),
             runner: Arc::new(apex_core::command::RealCommandRunner),
-            cpg: None,
+            cpg,
             threat_model: cfg.threat_model.clone(),
         };
 
@@ -1269,6 +1285,22 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
     // Build source cache
     let source_cache = build_source_cache(&target_path, lang);
 
+    // Build CPG for Python projects (other languages: TODO)
+    let cpg = if lang == Language::Python {
+        let mut combined_cpg = apex_cpg::Cpg::new();
+        for (path, source) in &source_cache {
+            let file_cpg = apex_cpg::builder::build_python_cpg(source, &path.display().to_string());
+            combined_cpg.merge(file_cpg);
+        }
+        if combined_cpg.node_count() > 0 {
+            Some(Arc::new(combined_cpg))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let ctx = AnalysisContext {
         target_root: target_path.clone(),
         language: lang,
@@ -1279,7 +1311,7 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
         fuzz_corpus: None,
         config: detect_cfg.clone(),
         runner: Arc::new(apex_core::command::RealCommandRunner),
-        cpg: None,
+        cpg,
         threat_model: cfg.threat_model.clone(),
     };
 
@@ -1750,6 +1782,22 @@ async fn run_lint(args: LintArgs, _cfg: &ApexConfig) -> Result<()> {
     let detect_cfg = DetectConfig::default();
     let source_cache = build_source_cache(&target_path, lang);
 
+    // Build CPG for Python projects (other languages: TODO)
+    let cpg = if lang == Language::Python {
+        let mut combined_cpg = apex_cpg::Cpg::new();
+        for (path, source) in &source_cache {
+            let file_cpg = apex_cpg::builder::build_python_cpg(source, &path.display().to_string());
+            combined_cpg.merge(file_cpg);
+        }
+        if combined_cpg.node_count() > 0 {
+            Some(Arc::new(combined_cpg))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let ctx = AnalysisContext {
         target_root: target_path.clone(),
         language: lang,
@@ -1760,7 +1808,7 @@ async fn run_lint(args: LintArgs, _cfg: &ApexConfig) -> Result<()> {
         fuzz_corpus: None,
         config: detect_cfg.clone(),
         runner: Arc::new(apex_core::command::RealCommandRunner),
-        cpg: None,
+        cpg,
         threat_model: apex_core::config::ThreatModelConfig::default(),
     };
 
