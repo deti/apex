@@ -46,6 +46,32 @@ impl DetectorPipeline {
             detectors.push(Box::new(PathNormalizationDetector));
         }
 
+        // Rust self-analysis detectors
+        if cfg.enabled.contains(&"discarded-async-result".into()) {
+            detectors.push(Box::new(DiscardedAsyncResultDetector));
+        }
+        if cfg.enabled.contains(&"mixed-bool-ops".into()) {
+            detectors.push(Box::new(MixedBoolOpsDetector));
+        }
+        if cfg.enabled.contains(&"partial-cmp-unwrap".into()) {
+            detectors.push(Box::new(PartialCmpUnwrapDetector));
+        }
+        if cfg.enabled.contains(&"substring-security".into()) {
+            detectors.push(Box::new(SubstringSecurityDetector));
+        }
+        if cfg.enabled.contains(&"vecdeque-partial".into()) {
+            detectors.push(Box::new(VecDequePartialDetector));
+        }
+        if cfg.enabled.contains(&"process-exit-in-lib".into()) {
+            detectors.push(Box::new(ProcessExitInLibDetector));
+        }
+        if cfg.enabled.contains(&"unsafe-send-sync".into()) {
+            detectors.push(Box::new(UnsafeSendSyncDetector));
+        }
+        if cfg.enabled.contains(&"duplicated-fn".into()) {
+            detectors.push(Box::new(DuplicatedFnDetector));
+        }
+
         if cfg.detect_mode == DetectMode::Fast {
             detectors.retain(|d| !d.uses_cargo_subprocess());
         }
