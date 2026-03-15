@@ -44,7 +44,11 @@ rm -f python/apex_cli/__init__.py.bak
 sed -i.bak "s/version \"$OLD_VERSION\"/version \"$NEW_VERSION\"/" HomebrewFormula/apex.rb
 rm -f HomebrewFormula/apex.rb.bak
 
-# 6. Stamp CHANGELOG.md — replace [Unreleased] with version + date
+# 6. flake.nix
+sed -i.bak "s/version = \"$OLD_VERSION\"/version = \"$NEW_VERSION\"/" flake.nix
+rm -f flake.nix.bak
+
+# 7. Stamp CHANGELOG.md — replace [Unreleased] with version + date
 TODAY=$(date +%Y-%m-%d)
 sed -i.bak "s/^## \[Unreleased\]/## [Unreleased]\n\n## [$NEW_VERSION] — $TODAY/" CHANGELOG.md
 rm -f CHANGELOG.md.bak
@@ -57,6 +61,7 @@ echo "  npm/package.json:        $(grep '"version"' npm/package.json | head -1 |
 echo "  python/pyproject.toml:   $(grep '^version = ' python/pyproject.toml | head -1)"
 echo "  python/__init__.py:      $(grep '__version__' python/apex_cli/__init__.py)"
 echo "  HomebrewFormula/apex.rb:  $(grep 'version "' HomebrewFormula/apex.rb | head -1 | xargs)"
+echo "  flake.nix:               $(grep 'version = "' flake.nix | head -1 | xargs)"
 echo "  CHANGELOG.md:            $(grep "## \[$NEW_VERSION\]" CHANGELOG.md)"
 
 echo ""

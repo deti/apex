@@ -295,25 +295,18 @@ impl CallGraphExtractor for PythonExtractor {
                 let mut decorator_line: Option<&str> = None;
                 if f.start_line >= 2 {
                     let mut line_idx = (f.start_line - 2) as usize;
-                    loop {
-                        if let Some(line) = lines_vec.get(line_idx) {
-                            let trimmed = line.trim();
-                            if trimmed.starts_with('@') {
-                                decorator_line = Some(line);
-                                // Check if this is an HTTP decorator — if so, stop
-                                if trimmed.starts_with("@app.route")
-                                    || trimmed.starts_with("@router.")
-                                {
-                                    break;
-                                }
-                                // Keep scanning upward
-                                if line_idx == 0 {
-                                    break;
-                                }
-                                line_idx -= 1;
-                            } else {
+                    while let Some(line) = lines_vec.get(line_idx) {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with('@') {
+                            decorator_line = Some(line);
+                            if trimmed.starts_with("@app.route") || trimmed.starts_with("@router.")
+                            {
                                 break;
                             }
+                            if line_idx == 0 {
+                                break;
+                            }
+                            line_idx -= 1;
                         } else {
                             break;
                         }

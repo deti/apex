@@ -10,16 +10,14 @@ async fn main() -> Result<()> {
     let cfg = match &cli.config {
         Some(path) => apex_core::config::ApexConfig::from_file(path)
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?,
-        None => {
-            apex_core::config::ApexConfig::discover(&match std::env::current_dir() {
-                Ok(d) => d,
-                Err(e) => {
-                    eprintln!("error: cannot access current directory: {e}");
-                    std::process::exit(1);
-                }
-            })
-                .map_err(|e| color_eyre::eyre::eyre!("{e}"))?
-        }
+        None => apex_core::config::ApexConfig::discover(&match std::env::current_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("error: cannot access current directory: {e}");
+                std::process::exit(1);
+            }
+        })
+        .map_err(|e| color_eyre::eyre::eyre!("{e}"))?,
     };
 
     // Init tracing (only here, never in lib — it panics if called twice).
