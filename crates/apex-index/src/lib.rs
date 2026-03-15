@@ -7,6 +7,7 @@ pub mod go;
 pub mod impact;
 pub mod prioritize;
 pub mod python;
+pub mod ruby;
 pub mod rust;
 pub mod spec_mining;
 pub mod types;

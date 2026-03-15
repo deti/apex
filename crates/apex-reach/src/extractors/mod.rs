@@ -1,5 +1,6 @@
 pub mod c_cpp;
 pub mod go;
+pub mod ruby;
 pub mod java;
 pub mod javascript;
 pub mod python;
@@ -25,6 +26,7 @@ pub fn build_call_graph(sources: &HashMap<PathBuf, String>, lang: Language) -> C
         Language::Java | Language::Kotlin => java::JavaExtractor.extract(sources),
         Language::Go => go::GoExtractor.extract(sources),
         Language::C | Language::Cpp => c_cpp::CCppExtractor.extract(sources),
+        Language::Ruby => ruby::RubyExtractor.extract(sources),
         _ => CallGraph::default(),
     }
 }

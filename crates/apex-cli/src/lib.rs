@@ -1097,7 +1097,8 @@ async fn install_deps(lang: Language, target: &std::path::Path) -> Result<()> {
             runner.install_deps(target).await?;
         }
         Language::Ruby => {
-            // Ruby dep install not yet implemented.
+            let runner = apex_lang::ruby::RubyRunner::new();
+            runner.install_deps(target).await?;
         }
         Language::Kotlin => {
             let runner = KotlinRunner::new();
@@ -1151,14 +1152,7 @@ async fn instrument(
         }
         Language::Wasm => WasmInstrumentor::new().instrument(&target).await?,
         Language::Ruby => {
-            // Ruby instrumentation not yet implemented -- return empty target.
-            apex_core::types::InstrumentedTarget {
-                target: target.clone(),
-                branch_ids: Vec::new(),
-                executed_branch_ids: Vec::new(),
-                file_paths: std::collections::HashMap::new(),
-                work_dir: target_path.to_path_buf(),
-            }
+            apex_instrument::ruby::RubyInstrumentor::new().instrument(&target).await?
         }
         Language::Kotlin => {
             // Kotlin reuses Java instrumentor (JaCoCo)
