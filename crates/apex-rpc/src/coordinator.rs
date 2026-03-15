@@ -1349,6 +1349,7 @@ mod tests {
     #[tokio::test]
     async fn test_start_with_service_returns_service_and_handle() {
         // Try to bind; skip if sandboxed
+        // TODO: TOCTOU race — port may be grabbed between drop and re-bind.
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
             Ok(l) => l,
             Err(_) => return,

@@ -116,18 +116,18 @@ pub fn summarize_function(cpg: &Cpg, method_node: NodeId) -> Option<TaintSummary
     let mut flows = Vec::new();
 
     for &(param_id, param_idx) in &params {
-        // BFS forward from param through ReachingDef and Cfg edges
+        // BFS forward from param through ReachingDef and Cfg edges.
+        // Each queue entry carries (node, sanitized_on_this_path).
         let mut visited = std::collections::HashSet::new();
         let mut queue = std::collections::VecDeque::new();
-        let mut found_sanitizer = false;
-        queue.push_back(param_id);
+        queue.push_back((param_id, false));
         visited.insert(param_id);
 
-        while let Some(current) = queue.pop_front() {
+        while let Some((current, mut path_sanitized)) = queue.pop_front() {
             // Check if current is a sanitizer call
             if let Some(NodeKind::Call { name, .. }) = cpg.node(current) {
                 if SANITIZERS.iter().any(|s| name.to_lowercase().contains(s)) {
-                    found_sanitizer = true;
+                    path_sanitized = true;
                 }
             }
 
@@ -136,7 +136,7 @@ pub fn summarize_function(cpg: &Cpg, method_node: NodeId) -> Option<TaintSummary
                 flows.push(TaintFlow {
                     source: FlowEndpoint::Parameter(param_idx),
                     sink: FlowEndpoint::Return,
-                    sanitized: found_sanitizer,
+                    sanitized: path_sanitized,
                 });
             }
 
@@ -145,7 +145,7 @@ pub fn summarize_function(cpg: &Cpg, method_node: NodeId) -> Option<TaintSummary
                 if matches!(kind, EdgeKind::ReachingDef { .. } | EdgeKind::Cfg)
                     && visited.insert(to)
                 {
-                    queue.push_back(to);
+                    queue.push_back((to, path_sanitized));
                 }
             }
         }

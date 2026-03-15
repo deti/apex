@@ -1029,7 +1029,7 @@ async fn run_agent_cluster(
     // Configure from ApexConfig.
     let orch_config = OrchestratorConfig {
         coverage_target,
-        deadline_secs: Some(cfg.sandbox.process_timeout_ms / 1000 * fuzz_iters as u64),
+        deadline_secs: Some(cfg.sandbox.process_timeout_ms * fuzz_iters as u64 / 1000),
         stall_threshold: cfg.fuzz.stall_iterations as u64,
     };
     cluster = cluster.with_config(orch_config);

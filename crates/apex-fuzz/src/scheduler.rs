@@ -60,6 +60,9 @@ impl MOptScheduler {
     }
 
     pub fn mutate(&mut self, input: &[u8], rng: &mut dyn RngCore) -> Vec<u8> {
+        if self.mutators.is_empty() {
+            return input.to_vec();
+        }
         let idx = self.select(rng);
         self.stats[idx].applications += 1;
         self.mutators[idx].mutate(input, rng)
@@ -83,7 +86,9 @@ impl MOptScheduler {
         let s = &mut self.stats[mutator_idx];
         s.coverage_hits += 1;
         let yield_now = if s.applications > 0 {
-            s.coverage_hits as f64 / s.applications as f64
+            (s.coverage_hits as f64 / s.applications as f64).min(1.0)
+        } else if s.coverage_hits > 0 {
+            1.0
         } else {
             0.0
         };
@@ -453,12 +458,12 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn report_hit_zero_applications_yields_zero_now() {
+    fn report_hit_zero_applications_yields_one() {
         let mut scheduler = make_scheduler(1);
-        // applications == 0 → yield_now = 0.0
-        // ema = 0.1*0.0 + 0.9*1.0 = 0.9
+        // applications == 0, coverage_hits > 0 → yield_now = 1.0
+        // ema = 0.1*1.0 + 0.9*1.0 = 1.0
         scheduler.report_hit(0);
-        let expected = 0.1_f64 * 0.0 + 0.9 * 1.0;
+        let expected = 0.1_f64 * 1.0 + 0.9 * 1.0;
         let delta = (scheduler.stats[0].ema_yield - expected).abs();
         assert!(delta < 1e-9);
     }
@@ -595,59 +600,43 @@ mod tests {
     // ==================================================================
 
     /// BUG: mutate() on an empty scheduler panics.
-    /// select() returns 0 for empty, but then mutate() indexes stats[0]
-    /// and mutators[0] on empty vecs => index out of bounds.
+    /// Empty scheduler returns input unchanged (no panic).
     #[test]
-    #[should_panic]
-    fn bug_mutate_empty_scheduler_panics() {
+    fn mutate_empty_scheduler_returns_input() {
         let mut scheduler = make_scheduler(0);
         let mut rng = StdRng::seed_from_u64(0);
-        // This should ideally not panic, but it does because select()
-        // returns 0 and then stats[0] is accessed on an empty vec.
-        let _ = scheduler.mutate(b"data", &mut rng);
+        let result = scheduler.mutate(b"data", &mut rng);
+        assert_eq!(result, b"data");
     }
 
-    /// BUG: report_hit increments coverage_hits but yield_now uses the
-    /// OLD coverage_hits/applications ratio. When applications==0,
-    /// yield_now is 0.0 even though we just recorded a hit (coverage_hits=1).
-    /// The hit is "lost" in the EMA calculation.
+    /// report_hit with zero applications treats the hit as full success (yield=1.0).
     #[test]
-    fn bug_report_hit_with_zero_applications_ignores_hit() {
+    fn report_hit_with_zero_applications_uses_full_yield() {
         let mut scheduler = make_scheduler(1);
         assert_eq!(scheduler.stats[0].applications, 0);
-        assert_eq!(scheduler.stats[0].coverage_hits, 0);
         scheduler.report_hit(0);
-        // coverage_hits was incremented to 1
         assert_eq!(scheduler.stats[0].coverage_hits, 1);
-        // But yield_now = coverage_hits/applications = 1/0 => takes the else branch => 0.0
-        // So EMA = 0.1*0.0 + 0.9*1.0 = 0.9
-        // The hit didn't increase ema_yield at all -- it actually DECREASED it from 1.0 to 0.9.
-        // This is a bug: recording a successful hit should not decrease the yield estimate.
+        // With zero applications but a hit, yield_now = 1.0
+        // EMA = 0.1*1.0 + 0.9*1.0 = 1.0 (stays at 1.0)
         assert!(
-            scheduler.stats[0].ema_yield < 1.0,
-            "BUG CONFIRMED: report_hit with 0 applications decreased ema from 1.0 to {}",
+            (scheduler.stats[0].ema_yield - 1.0).abs() < 0.01,
+            "ema_yield should stay at 1.0, got {}",
             scheduler.stats[0].ema_yield
         );
     }
 
-    /// BUG: report_hit doesn't increment applications, so the yield
-    /// ratio (coverage_hits / applications) grows unboundedly after
-    /// repeated hits without calls to mutate().
-    /// After 10 hits with applications=1, yield = 10/1 = 10.0 (>1.0).
+    /// Yield is clamped at 1.0 even with more hits than applications.
     #[test]
-    fn bug_report_hit_yield_exceeds_one() {
+    fn report_hit_yield_clamped_at_one() {
         let mut scheduler = make_scheduler(1);
         scheduler.stats[0].applications = 1;
-        // Call report_hit 10 times without incrementing applications
         for _ in 0..10 {
             scheduler.report_hit(0);
         }
-        // coverage_hits = 10, applications = 1, yield = 10.0
-        // EMA should be close to 10.0 after many updates with yield=10.0
-        // A yield > 1.0 makes no probabilistic sense (>100% success rate)
+        // yield is clamped to 1.0 despite 10 hits / 1 application
         assert!(
-            scheduler.stats[0].ema_yield > 1.0,
-            "BUG CONFIRMED: ema_yield exceeded 1.0: {}",
+            scheduler.stats[0].ema_yield <= 1.0,
+            "ema_yield should be clamped at 1.0, got {}",
             scheduler.stats[0].ema_yield
         );
     }

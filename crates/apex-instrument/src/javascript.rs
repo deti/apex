@@ -88,7 +88,8 @@ fn select_coverage_tool(env: &JsEnvironment, target: &Path) -> CoverageToolConfi
                                 "npx".into(),
                                 "c8".into(),
                                 "--reporter=json".into(),
-                                format!("--reports-dir={}", report_dir.display()),
+                                "--reports-dir".into(),
+                                report_dir.display().to_string(),
                                 bin,
                             ];
                             cmd.extend(args);
@@ -112,7 +113,8 @@ fn select_coverage_tool(env: &JsEnvironment, target: &Path) -> CoverageToolConfi
                                     "npx".into(),
                                     "nyc".into(),
                                     "--reporter=json".into(),
-                                    format!("--report-dir={}", report_dir.display()),
+                                    "--report-dir".into(),
+                                    report_dir.display().to_string(),
                                     "--temp-dir=.nyc_output".into(),
                                     "--include=**/*.js".into(),
                                     "--exclude=node_modules/**".into(),
@@ -136,7 +138,8 @@ fn select_coverage_tool(env: &JsEnvironment, target: &Path) -> CoverageToolConfi
                                     "npx".into(),
                                     "c8".into(),
                                     "--reporter=json".into(),
-                                    format!("--reports-dir={}", report_dir.display()),
+                                    "--reports-dir".into(),
+                                    report_dir.display().to_string(),
                                     bin,
                                 ];
                                 cmd.extend(args);
@@ -352,7 +355,8 @@ impl Instrumentor for JavaScriptInstrumentor {
                         "npx".into(),
                         "nyc".into(),
                         "--reporter=json".into(),
-                        format!("--report-dir={}", report_dir.display()),
+                        "--report-dir".into(),
+                        report_dir.display().to_string(),
                         "--temp-dir=.nyc_output".into(),
                         "--include=**/*.js".into(),
                         "--exclude=node_modules/**".into(),
@@ -366,7 +370,8 @@ impl Instrumentor for JavaScriptInstrumentor {
                         "npx".into(),
                         "c8".into(),
                         "--reporter=json".into(),
-                        format!("--reports-dir={}", report_dir.display()),
+                        "--reports-dir".into(),
+                        report_dir.display().to_string(),
                     ];
                     cmd.extend(target.test_command.clone());
                     cmd
@@ -1378,7 +1383,9 @@ mod tests {
         assert_eq!(config.command[0], "npx");
         assert_eq!(config.command[1], "c8");
         assert_eq!(config.command[2], "--reporter=json");
-        assert!(config.command[3].starts_with("--reports-dir="));
+        assert_eq!(config.command[3], "--reports-dir");
+        // Path is now a separate element (safe for paths with spaces)
+        assert!(!config.command[4].is_empty());
         match &config.output_path {
             CoverageOutput::FilePath(p) => {
                 assert!(p.to_string_lossy().contains("coverage-final.json"));
@@ -1409,10 +1416,7 @@ mod tests {
         assert!(config.command.contains(&"npx".to_string()));
         assert!(config.command.contains(&"nyc".to_string()));
         assert!(config.command.contains(&"--reporter=json".to_string()));
-        assert!(config
-            .command
-            .iter()
-            .any(|c| c.starts_with("--report-dir=")));
+        assert!(config.command.contains(&"--report-dir".to_string()));
         assert!(config
             .command
             .contains(&"--temp-dir=.nyc_output".to_string()));

@@ -206,7 +206,10 @@ mod tests {
         }
 
         // Bind a TCP listener to get a free port, then release it.
-        // This may fail in sandboxed environments -- return None to skip.
+        // This may fail in sandboxed environments — return None to skip.
+        // TODO: TOCTOU race — port may be grabbed between drop and re-bind.
+        // The `start_with_service` API takes a SocketAddr so we cannot pass the
+        // listener directly. If this becomes flaky, add a retry loop here.
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
             Ok(l) => l,
             Err(_) => return None,
@@ -540,6 +543,7 @@ mod tests {
     async fn setup_rejecting_worker() -> Option<WorkerClient> {
         use crate::proto::apex_coordinator_server::ApexCoordinatorServer;
 
+        // TODO: TOCTOU race — port may be grabbed between drop and re-bind.
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
             Ok(l) => l,
             Err(_) => return None,
@@ -815,6 +819,7 @@ mod tests {
     async fn setup_error_worker() -> Option<WorkerClient> {
         use crate::proto::apex_coordinator_server::ApexCoordinatorServer;
 
+        // TODO: TOCTOU race — port may be grabbed between drop and re-bind.
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
             Ok(l) => l,
             Err(_) => return None,
@@ -962,6 +967,7 @@ mod tests {
     async fn setup_submit_error_worker() -> Option<WorkerClient> {
         use crate::proto::apex_coordinator_server::ApexCoordinatorServer;
 
+        // TODO: TOCTOU race — port may be grabbed between drop and re-bind.
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
             Ok(l) => l,
             Err(_) => return None,

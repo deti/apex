@@ -88,7 +88,12 @@ impl ShmBitmap {
     }
 
     /// Read the full bitmap into a `Vec<u8>`.
+    ///
+    /// An acquire fence ensures visibility of child process writes. Process exit
+    /// is a sufficient memory barrier on x86, but ARM requires an explicit
+    /// acquire fence.
     pub fn read(&self) -> Vec<u8> {
+        std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
         unsafe { std::slice::from_raw_parts(self.ptr, MAP_SIZE).to_vec() }
     }
 

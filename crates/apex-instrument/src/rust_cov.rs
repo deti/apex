@@ -164,7 +164,7 @@ pub fn parse_llvm_json(
                     continue;
                 }
                 let line = arr[0].as_u64().unwrap_or(0) as u32;
-                let col = arr[1].as_u64().unwrap_or(0) as u16;
+                let col = arr[1].as_u64().unwrap_or(0).min(u16::MAX as u64) as u16;
                 let count = arr[2].as_u64().unwrap_or(0);
                 let has_count = arr[3].as_bool().unwrap_or(false);
                 let is_entry = arr[4].as_bool().unwrap_or(false);
@@ -247,7 +247,8 @@ pub async fn has_llvm_cov() -> bool {
 
 /// Check if `cargo-llvm-cov` is available (using a custom runner).
 pub async fn has_llvm_cov_with_runner(runner: &dyn CommandRunner) -> bool {
-    let spec = CommandSpec::new("cargo", "/tmp").args(["llvm-cov", "--version"]);
+    let spec = CommandSpec::new("cargo", &std::env::temp_dir().display().to_string())
+        .args(["llvm-cov", "--version"]);
     runner
         .run_command(&spec)
         .await
@@ -1105,8 +1106,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_llvm_json_col_truncated_above_u16_max() {
-        // BUG: Column values > 65535 are silently truncated by `as u16`.
+    fn test_parse_llvm_json_col_clamped_to_u16_max() {
+        // Column values > 65535 are clamped to u16::MAX (65535).
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let json = format!(
@@ -1124,10 +1125,9 @@ mod tests {
         );
         let (all, _, _) = parse_llvm_json(json.as_bytes(), root).unwrap();
         assert_eq!(all.len(), 1);
-        // 70000 as u16 = 70000 % 65536 = 4464
         assert_eq!(
-            all[0].col, 4464,
-            "BUG CONFIRMED: col 70000 truncated to {} instead of being rejected",
+            all[0].col, 65535,
+            "col 70000 should be clamped to u16::MAX, got {}",
             all[0].col
         );
     }

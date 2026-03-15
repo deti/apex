@@ -317,14 +317,33 @@ fn reachable_nodes(successors: &HashMap<NodeId, Vec<NodeId>>, entry: NodeId) -> 
     result
 }
 
-fn find_assignments(cpg: &Cpg, _method_node: NodeId) -> Vec<(NodeId, String)> {
+fn find_assignments(cpg: &Cpg, method_node: NodeId) -> Vec<(NodeId, String)> {
+    let method_nodes = collect_ast_descendants(cpg, method_node);
     let mut assignments = Vec::new();
     for (id, kind) in cpg.nodes() {
-        if let NodeKind::Assignment { lhs, .. } = kind {
-            assignments.push((id, lhs.clone()));
+        if method_nodes.contains(&id) {
+            if let NodeKind::Assignment { lhs, .. } = kind {
+                assignments.push((id, lhs.clone()));
+            }
         }
     }
     assignments
+}
+
+/// Recursively collect all AST descendants of a node (including the node itself).
+fn collect_ast_descendants(cpg: &Cpg, root: NodeId) -> HashSet<NodeId> {
+    let mut result = HashSet::new();
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        if result.insert(node) {
+            for &(_, to, ref kind) in cpg.edges_from(node) {
+                if matches!(kind, EdgeKind::Ast) {
+                    stack.push(to);
+                }
+            }
+        }
+    }
+    result
 }
 
 fn compute_phi_locations(
@@ -509,6 +528,7 @@ mod tests {
         let r = cpg.add_node(NodeKind::Return { line: 3 });
 
         cpg.add_edge(m, p, EdgeKind::Ast);
+        cpg.add_edge(m, a, EdgeKind::Ast);
         cpg.add_edge(m, a, EdgeKind::Cfg);
         cpg.add_edge(a, r, EdgeKind::Cfg);
 
@@ -553,6 +573,9 @@ mod tests {
             line: 5,
         });
 
+        cpg.add_edge(m, ctrl, EdgeKind::Ast);
+        cpg.add_edge(m, a1, EdgeKind::Ast);
+        cpg.add_edge(m, a2, EdgeKind::Ast);
         cpg.add_edge(m, ctrl, EdgeKind::Cfg);
         cpg.add_edge(ctrl, a1, EdgeKind::Cfg);
         cpg.add_edge(ctrl, a2, EdgeKind::Cfg);
@@ -613,6 +636,7 @@ mod tests {
             line: 2,
         });
         cpg.add_edge(m, p, EdgeKind::Ast);
+        cpg.add_edge(m, a, EdgeKind::Ast);
         cpg.add_edge(m, a, EdgeKind::Cfg);
 
         let ssa = convert_to_ssa(&cpg, m);
@@ -669,6 +693,8 @@ mod tests {
             line: 4,
         });
 
+        cpg.add_edge(m, a1, EdgeKind::Ast);
+        cpg.add_edge(m, a2, EdgeKind::Ast);
         cpg.add_edge(m, a1, EdgeKind::Cfg);
         cpg.add_edge(m, a2, EdgeKind::Cfg);
         cpg.add_edge(a1, join, EdgeKind::Cfg);

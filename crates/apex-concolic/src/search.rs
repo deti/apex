@@ -179,6 +179,9 @@ impl SearchStrategy for InterleavedSearch {
     }
 
     fn select(&mut self, states: &[SymState]) -> usize {
+        if self.strategies.is_empty() {
+            return 0;
+        }
         let result = self.strategies[self.current].select(states);
         self.rounds_remaining -= 1;
         if self.rounds_remaining == 0 {

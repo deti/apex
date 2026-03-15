@@ -113,31 +113,38 @@ pub fn scan_broken_access(source: &str, file_path: &str) -> Vec<Finding> {
             ));
         }
 
-        // Check for missing CSRF protection in forms.
+        // Check for missing CSRF protection in forms (only state-changing methods).
         if trimmed.contains("<form") && trimmed.contains("method") {
-            // Look ahead for csrf token.
-            let end = (line_num + 10).min(lines.len().saturating_sub(1));
-            let form_context: String = lines[line_num..=end]
+            // Only flag POST, PUT, DELETE, PATCH — GET forms don't need CSRF.
+            let lower = trimmed.to_lowercase();
+            let is_state_changing = ["post", "put", "delete", "patch"]
                 .iter()
-                .map(|l| l.trim())
-                .collect::<Vec<_>>()
-                .join("\n");
+                .any(|m| lower.contains(&format!("method=\"{m}\"")) || lower.contains(&format!("method='{m}'")));
+            if is_state_changing {
+                // Look ahead for csrf token.
+                let end = (line_num + 10).min(lines.len().saturating_sub(1));
+                let form_context: String = lines[line_num..=end]
+                    .iter()
+                    .map(|l| l.trim())
+                    .collect::<Vec<_>>()
+                    .join("\n");
 
-            if !form_context.contains("csrf")
-                && !form_context.contains("_token")
-                && !form_context.contains("antiforgery")
-            {
-                findings.push(make_finding(
-                    file_path,
-                    line_1based,
-                    "Form without CSRF protection",
-                    &format!(
-                        "Form at line {line_1based} appears to lack CSRF token. \
-                         This may allow cross-site request forgery."
-                    ),
-                    "Add {% csrf_token %} or equivalent CSRF protection to forms.",
-                    352,
-                ));
+                if !form_context.contains("csrf")
+                    && !form_context.contains("_token")
+                    && !form_context.contains("antiforgery")
+                {
+                    findings.push(make_finding(
+                        file_path,
+                        line_1based,
+                        "Form without CSRF protection",
+                        &format!(
+                            "Form at line {line_1based} appears to lack CSRF token. \
+                             This may allow cross-site request forgery."
+                        ),
+                        "Add {% csrf_token %} or equivalent CSRF protection to forms.",
+                        352,
+                    ));
+                }
             }
         }
 
@@ -266,5 +273,21 @@ mod tests {
         let source = "@app.get(\"/users\")\ndef list_users():\n    return jsonify(users)\n";
         let findings = scan_broken_access(source, "routes.py");
         assert!(!findings.is_empty());
+    }
+
+    #[test]
+    fn no_csrf_flag_on_get_form() {
+        let source = "<form method=\"get\" action=\"/search\">\n<input name=\"q\">\n</form>\n";
+        let findings = scan_broken_access(source, "search.html");
+        let csrf_findings: Vec<_> = findings.iter().filter(|f| f.cwe_ids.contains(&352)).collect();
+        assert!(csrf_findings.is_empty(), "GET form should not trigger CSRF warning");
+    }
+
+    #[test]
+    fn csrf_flag_on_post_form() {
+        let source = "<form method=\"POST\" action=\"/update\">\n<input name=\"val\">\n</form>\n";
+        let findings = scan_broken_access(source, "update.html");
+        let csrf_findings: Vec<_> = findings.iter().filter(|f| f.cwe_ids.contains(&352)).collect();
+        assert!(!csrf_findings.is_empty(), "POST form without CSRF should be flagged");
     }
 }

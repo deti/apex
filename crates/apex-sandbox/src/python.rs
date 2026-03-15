@@ -117,6 +117,24 @@ impl Sandbox for PythonTestSandbox {
         let cov_data = tmp_dir.path().join("cov.data");
         let cov_json = tmp_dir.path().join("cov.json");
 
+        // TODO(security): Replace direct tokio::process::Command with CommandRunner
+        // to enable sandboxing, auditing, and test mocking. Requires adding a
+        // `runner: Arc<dyn CommandRunner>` field and updating the Sandbox trait or
+        // this struct's constructor.
+
+        // Validate python3 is available before spawning.
+        let python_check = tokio::process::Command::new("python3")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+        if python_check.map(|s| !s.success()).unwrap_or(true) {
+            return Err(ApexError::Sandbox(
+                "python3 not found in PATH".into(),
+            ));
+        }
+
         // Step 1: run pytest under coverage.py
         let run_output = tokio::time::timeout(
             std::time::Duration::from_millis(self.timeout_ms),

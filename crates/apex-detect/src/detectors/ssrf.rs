@@ -45,11 +45,9 @@ const SANITIZATION_INDICATORS: &[&str] = &[
 /// Scan source code for SSRF vulnerabilities.
 pub fn scan_ssrf(source: &str, file_path: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
+    let lines: Vec<&str> = source.lines().collect();
 
-    // Check if file has any sanitization imports/usage globally.
-    let has_sanitization = SANITIZATION_INDICATORS.iter().any(|s| source.contains(s));
-
-    for (line_num, line) in source.lines().enumerate() {
+    for (line_num, line) in lines.iter().enumerate() {
         let line_1based = (line_num + 1) as u32;
         let trimmed = line.trim();
 
@@ -76,7 +74,12 @@ pub fn scan_ssrf(source: &str, file_path: &str) -> Vec<Finding> {
             continue;
         }
 
-        // Skip if sanitization is present.
+        // Skip if sanitization is present within 5 lines before or after.
+        let ctx_start = line_num.saturating_sub(5);
+        let ctx_end = (line_num + 5).min(lines.len().saturating_sub(1));
+        let has_sanitization = SANITIZATION_INDICATORS.iter().any(|s| {
+            lines[ctx_start..=ctx_end].iter().any(|l| l.contains(s))
+        });
         if has_sanitization {
             continue;
         }
@@ -85,7 +88,7 @@ pub fn scan_ssrf(source: &str, file_path: &str) -> Vec<Finding> {
             id: Uuid::new_v4(),
             detector: "ssrf".into(),
             severity: Severity::High,
-            category: FindingCategory::SecuritySmell,
+            category: FindingCategory::Injection,
             file: PathBuf::from(file_path),
             line: Some(line_1based),
             title: "Potential server-side request forgery (SSRF)".into(),
@@ -162,6 +165,14 @@ mod tests {
     }
 
     #[test]
+    fn bug_ssrf_categorized_as_injection() {
+        let source = "resp = requests.get(request.args['url'])\n";
+        let findings = scan_ssrf(source, "api.py");
+        assert!(!findings.is_empty());
+        assert_eq!(findings[0].category, FindingCategory::Injection);
+    }
+
+    #[test]
     fn detect_in_multiple_files() {
         let s1 = "requests.post(request.args['u'])\n";
         let s2 = "http.get(params['target'])\n";
@@ -169,5 +180,18 @@ mod tests {
         let f2 = scan_ssrf(s2, "b.js");
         assert!(!f1.is_empty());
         assert!(!f2.is_empty());
+    }
+
+    #[test]
+    fn distant_sanitization_does_not_suppress() {
+        // urlparse import at line 1, vulnerable call at line 22 (>5 lines apart).
+        let mut lines = vec!["from urllib.parse import urlparse"];
+        for _ in 0..20 {
+            lines.push("# filler line");
+        }
+        lines.push("requests.get(request.args['url'])");
+        let source = lines.join("\n");
+        let findings = scan_ssrf(&source, "app.py");
+        assert!(!findings.is_empty(), "distant urlparse should not suppress SSRF finding");
     }
 }

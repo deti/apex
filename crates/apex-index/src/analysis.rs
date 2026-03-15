@@ -82,10 +82,38 @@ pub fn detect_flaky_tests(
                 })
                 .collect();
 
+            // Count divergent runs: total minus the largest group of identical branch sets.
+            let max_agreement = {
+                // HashSet doesn't implement Hash, so we sort elements into a
+                // BTreeSet for comparison via a Vec key.
+                let mut sorted_sets: Vec<Vec<&String>> = branch_sets
+                    .iter()
+                    .map(|s| {
+                        let mut v: Vec<&String> = s.iter().collect();
+                        v.sort();
+                        v
+                    })
+                    .collect();
+                sorted_sets.sort();
+                let mut max_count = 1usize;
+                let mut cur_count = 1usize;
+                for w in sorted_sets.windows(2) {
+                    if w[0] == w[1] {
+                        cur_count += 1;
+                        if cur_count > max_count {
+                            max_count = cur_count;
+                        }
+                    } else {
+                        cur_count = 1;
+                    }
+                }
+                max_count
+            };
+
             flaky.push(FlakyTest {
                 test_name: test_name.to_string(),
                 divergent_branches,
-                divergent_runs: total_runs,
+                divergent_runs: total_runs - max_agreement,
                 total_runs,
             });
         }
@@ -4059,7 +4087,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn flaky_detect_divergent_runs_equals_total_runs() {
+    fn flaky_detect_divergent_runs_computed_correctly() {
         let run1 = vec![TestTrace {
             test_name: "test_f".into(),
             branches: vec![br(1, 10, 0)],
@@ -4082,7 +4110,8 @@ mod tests {
         let flaky = detect_flaky_tests(&[run1, run2, run3], &HashMap::new());
         assert_eq!(flaky.len(), 1);
         assert_eq!(flaky[0].total_runs, 3);
-        assert_eq!(flaky[0].divergent_runs, 3);
+        // 2 runs agree (br(1,10,0)), 1 diverges (br(1,10,1)) → divergent_runs = 1
+        assert_eq!(flaky[0].divergent_runs, 1);
     }
 
     // -----------------------------------------------------------------------

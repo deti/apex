@@ -9,7 +9,7 @@ use regex::Regex;
 use crate::taint::reachable_by;
 
 thread_local! {
-    static REGEX_CACHE: RefCell<HashMap<String, Regex>> = RefCell::new(HashMap::new());
+    static REGEX_CACHE: RefCell<HashMap<String, Option<Regex>>> = RefCell::new(HashMap::new());
 }
 use crate::taint_rules::TaintRuleSet;
 use crate::{Cpg, NodeId};
@@ -133,7 +133,8 @@ fn compute_matching_rows(
         return Ok(Vec::new());
     }
 
-    // Build the cartesian product of all bindings.
+    // Build the cartesian product of all bindings (bounded to prevent OOM).
+    const MAX_ROWS: usize = 100_000;
     let vars: Vec<String> = bindings.keys().cloned().collect();
     let mut rows: Vec<Vec<(String, NodeId)>> = vec![vec![]];
 
@@ -145,6 +146,12 @@ fn compute_matching_rows(
                 let mut new_row = row.clone();
                 new_row.push((var.clone(), nid));
                 new_rows.push(new_row);
+                if new_rows.len() > MAX_ROWS {
+                    break;
+                }
+            }
+            if new_rows.len() > MAX_ROWS {
+                break;
             }
         }
         rows = new_rows;
@@ -220,8 +227,8 @@ fn evaluate_condition(
                 let mut cache = cache.borrow_mut();
                 let re = cache
                     .entry(pattern.to_string())
-                    .or_insert_with(|| Regex::new(pattern).unwrap());
-                re.is_match(name)
+                    .or_insert_with(|| Regex::new(pattern).ok());
+                re.as_ref().map_or(false, |r| r.is_match(name))
             })
         }
         Condition::And(left, right) => {

@@ -11,7 +11,13 @@ async fn main() -> Result<()> {
         Some(path) => apex_core::config::ApexConfig::from_file(path)
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?,
         None => {
-            apex_core::config::ApexConfig::discover(&std::env::current_dir().unwrap_or_default())
+            apex_core::config::ApexConfig::discover(&match std::env::current_dir() {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("error: cannot access current directory: {e}");
+                    std::process::exit(1);
+                }
+            })
                 .map_err(|e| color_eyre::eyre::eyre!("{e}"))?
         }
     };

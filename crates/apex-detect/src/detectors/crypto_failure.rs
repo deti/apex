@@ -44,6 +44,29 @@ const SAFE_PATTERNS: &[&str] = &[
     "scrypt",
 ];
 
+/// Check if a pattern match is at a word boundary — the characters immediately
+/// before and after the match must not be alphanumeric/underscore.
+fn is_word_boundary_match(haystack: &str, pattern: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(pattern) {
+        let abs_pos = start + pos;
+        let before_ok = abs_pos == 0
+            || !haystack.as_bytes()[abs_pos - 1]
+                .is_ascii_alphanumeric();
+        let after_pos = abs_pos + pattern.len();
+        let after_ok = after_pos >= haystack.len()
+            || !haystack.as_bytes()[after_pos].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs_pos + 1;
+        if start >= haystack.len() {
+            break;
+        }
+    }
+    false
+}
+
 /// Scan source code for cryptographic failure vulnerabilities.
 pub fn scan_crypto_failure(source: &str, file_path: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -62,9 +85,14 @@ pub fn scan_crypto_failure(source: &str, file_path: &str) -> Vec<Finding> {
             continue;
         }
 
-        // Check weak hashes.
+        // Check weak hashes — patterns that contain '(' are substring-safe already.
         for pattern in WEAK_HASHES {
-            if trimmed.contains(pattern) {
+            let matched = if pattern.contains('(') {
+                trimmed.contains(pattern)
+            } else {
+                is_word_boundary_match(trimmed, pattern)
+            };
+            if matched {
                 findings.push(make_finding(
                     file_path,
                     line_1based,
@@ -81,9 +109,10 @@ pub fn scan_crypto_failure(source: &str, file_path: &str) -> Vec<Finding> {
             }
         }
 
-        // Check weak ciphers.
+        // Check weak ciphers — all short uppercase tokens need word-boundary check.
         for pattern in WEAK_CIPHERS {
-            if trimmed.contains(pattern) {
+            let matched = is_word_boundary_match(trimmed, pattern);
+            if matched {
                 findings.push(make_finding(
                     file_path,
                     line_1based,
@@ -256,5 +285,27 @@ mod tests {
         let source = "# MD5 is insecure\n// Don't use DES\n";
         let findings = scan_crypto_failure(source, "notes.py");
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn no_false_positive_on_describes_or_nodes() {
+        let source = "DESCRIBES the algorithm\nreturn NODES\n";
+        let findings = scan_crypto_failure(source, "doc.py");
+        let cipher_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.title.contains("cipher"))
+            .collect();
+        assert!(cipher_findings.is_empty(), "DESCRIBES/NODES should not match DES");
+    }
+
+    #[test]
+    fn detect_des_standalone_and_dotted() {
+        let source = "cipher = DES.new(key)\n";
+        let findings = scan_crypto_failure(source, "enc.py");
+        assert!(!findings.is_empty(), "DES.new should be flagged");
+
+        let source2 = "algo = DES\n";
+        let findings2 = scan_crypto_failure(source2, "enc2.py");
+        assert!(!findings2.is_empty(), "standalone DES should be flagged");
     }
 }

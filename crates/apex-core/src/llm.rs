@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -25,13 +26,13 @@ pub trait LlmClient: Send + Sync {
 
 /// A mock LLM client for testing. Returns pre-queued responses in FIFO order.
 pub struct MockLlmClient {
-    responses: Mutex<Vec<String>>,
+    responses: Mutex<VecDeque<String>>,
 }
 
 impl MockLlmClient {
     pub fn new(responses: Vec<String>) -> Self {
         Self {
-            responses: Mutex::new(responses),
+            responses: Mutex::new(VecDeque::from(responses)),
         }
     }
 }
@@ -48,7 +49,7 @@ impl LlmClient for MockLlmClient {
                 "MockLlmClient: no more queued responses".into(),
             ));
         }
-        let content = queue.remove(0);
+        let content = queue.pop_front().unwrap();
         Ok(LlmResponse {
             content,
             input_tokens: 0,
