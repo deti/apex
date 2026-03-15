@@ -4,6 +4,7 @@ pub mod dead_code;
 pub mod flaky;
 pub mod flaky_repair;
 pub mod impact;
+pub mod javascript;
 pub mod prioritize;
 pub mod python;
 pub mod rust;
