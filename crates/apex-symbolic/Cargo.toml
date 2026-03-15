@@ -15,10 +15,10 @@ kani-prover = []
 
 [dependencies]
 apex-core = { path = "../apex-core" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "1"
-tracing = "0.1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 
 # Feature-gated: only enabled with --features z3-solver
 z3 = { version = "0.12", features = ["static-link-z3"], optional = true }
