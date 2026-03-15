@@ -1,9 +1,25 @@
 //! API Spec Coverage — compares OpenAPI spec against code route handlers.
 
 use apex_core::error::{ApexError, Result};
+use regex::Regex;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::LazyLock;
+
+static PYTHON_DECORATOR_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"@(?:app|router)\.(get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]\s*\)"#)
+        .unwrap()
+});
+static PYTHON_PATH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"path\(\s*['"]([^'"]+)['"]"#).unwrap());
+static JS_ROUTE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?:app|router)\.(get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]"#).unwrap()
+});
+static SPEC_PARAM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{[^}]+\}").unwrap());
+static CODE_PARAM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<[^>]+>|:\w+").unwrap());
 
 #[derive(Debug, Clone, Serialize)]
 pub enum EndpointStatus {
@@ -49,14 +65,9 @@ pub fn analyze_coverage(
     }
 
     // Extract route handlers from source code using regex patterns
-    let route_patterns: Vec<regex::Regex> = match lang {
-        apex_core::types::Language::Python => vec![
-            regex::Regex::new(r#"@(?:app|router)\.(get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap(),
-            regex::Regex::new(r#"path\(\s*['"]([^'"]+)['"]"#).unwrap(),
-        ],
-        apex_core::types::Language::JavaScript => vec![
-            regex::Regex::new(r#"(?:app|router)\.(get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]"#).unwrap(),
-        ],
+    let route_patterns: Vec<&Regex> = match lang {
+        apex_core::types::Language::Python => vec![&*PYTHON_DECORATOR_RE, &*PYTHON_PATH_RE],
+        apex_core::types::Language::JavaScript => vec![&*JS_ROUTE_RE],
         _ => vec![],
     };
 
@@ -127,10 +138,8 @@ pub fn analyze_coverage(
 }
 
 fn paths_match(code_path: &str, spec_path: &str) -> bool {
-    let param_re = regex::Regex::new(r"\{[^}]+\}").unwrap();
-    let code_param_re = regex::Regex::new(r"<[^>]+>|:\w+").unwrap();
-    let spec_norm = param_re.replace_all(spec_path, ":param").to_string();
-    let code_norm = code_param_re.replace_all(code_path, ":param").to_string();
+    let spec_norm = SPEC_PARAM_RE.replace_all(spec_path, ":param").to_string();
+    let code_norm = CODE_PARAM_RE.replace_all(code_path, ":param").to_string();
     code_norm == spec_norm
 }
 

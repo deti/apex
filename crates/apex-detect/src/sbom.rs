@@ -281,19 +281,19 @@ impl SbomGenerator {
             for pkg in packages {
                 if let Some(name) = pkg.get("name").and_then(|v| v.as_str()) {
                     if let Some(ann) = annotations.iter().find(|a| a.name == name) {
-                        let annotations_arr = pkg
-                            .as_object_mut()
-                            .unwrap()
-                            .entry("annotations")
-                            .or_insert_with(|| json!([]));
-                        if let Some(arr) = annotations_arr.as_array_mut() {
-                            arr.push(json!({
-                                "annotationType": "REVIEW",
-                                "comment": format!(
-                                    "apex:imported={}, apex:vuln-reachable={}",
-                                    ann.imported, ann.vuln_reachable
-                                )
-                            }));
+                        if let Some(obj) = pkg.as_object_mut() {
+                            let annotations_arr = obj
+                                .entry("annotations")
+                                .or_insert_with(|| json!([]));
+                            if let Some(arr) = annotations_arr.as_array_mut() {
+                                arr.push(json!({
+                                    "annotationType": "REVIEW",
+                                    "comment": format!(
+                                        "apex:imported={}, apex:vuln-reachable={}",
+                                        ann.imported, ann.vuln_reachable
+                                    )
+                                }));
+                            }
                         }
                     }
                 }
@@ -311,14 +311,14 @@ impl SbomGenerator {
             for comp in components {
                 if let Some(name) = comp.get("name").and_then(|v| v.as_str()) {
                     if let Some(ann) = annotations.iter().find(|a| a.name == name) {
-                        let props = comp
-                            .as_object_mut()
-                            .unwrap()
-                            .entry("properties")
-                            .or_insert_with(|| json!([]));
-                        if let Some(arr) = props.as_array_mut() {
-                            arr.push(json!({"name": "apex:imported", "value": ann.imported.to_string()}));
-                            arr.push(json!({"name": "apex:vuln-reachable", "value": ann.vuln_reachable.to_string()}));
+                        if let Some(obj) = comp.as_object_mut() {
+                            let props = obj
+                                .entry("properties")
+                                .or_insert_with(|| json!([]));
+                            if let Some(arr) = props.as_array_mut() {
+                                arr.push(json!({"name": "apex:imported", "value": ann.imported.to_string()}));
+                                arr.push(json!({"name": "apex:vuln-reachable", "value": ann.vuln_reachable.to_string()}));
+                            }
                         }
                     }
                 }

@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use uuid::Uuid;
 
 use apex_core::error::Result;
@@ -50,87 +51,79 @@ impl FlagHygieneDetector {
     }
 }
 
-/// Patterns for detecting feature flags in source code.
-struct FlagPatterns {
-    patterns: Vec<(Regex, &'static str)>,
-}
+/// Compiled regex patterns for detecting feature flags in source code.
+static FLAG_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    vec![
+        // Python
+        (
+            Regex::new(r#"feature_flag\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
+            "python_feature_flag",
+        ),
+        (
+            Regex::new(r#"is_enabled\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
+            "python_is_enabled",
+        ),
+        (
+            Regex::new(r#"flags\.get\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
+            "python_flags_get",
+        ),
+        (
+            Regex::new(r#"FLAGS\[["']([^"']+)["']\]"#).unwrap(),
+            "python_FLAGS",
+        ),
+        // JavaScript
+        (
+            Regex::new(r#"featureFlag\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
+            "js_featureFlag",
+        ),
+        (
+            Regex::new(r#"isEnabled\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
+            "js_isEnabled",
+        ),
+        (
+            Regex::new(r#"getFlag\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
+            "js_getFlag",
+        ),
+        // Rust
+        (
+            Regex::new(r#"feature_flag!\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
+            "rust_feature_flag_macro",
+        ),
+        (
+            Regex::new(r#"cfg!\(feature\s*=\s*"([^"]+)"\)"#).unwrap(),
+            "rust_cfg_feature",
+        ),
+    ]
+});
 
-impl FlagPatterns {
-    fn new() -> Self {
-        let patterns = vec![
-            // Python
-            (
-                Regex::new(r#"feature_flag\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
-                "python_feature_flag",
-            ),
-            (
-                Regex::new(r#"is_enabled\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
-                "python_is_enabled",
-            ),
-            (
-                Regex::new(r#"flags\.get\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
-                "python_flags_get",
-            ),
-            (
-                Regex::new(r#"FLAGS\[["']([^"']+)["']\]"#).unwrap(),
-                "python_FLAGS",
-            ),
-            // JavaScript
-            (
-                Regex::new(r#"featureFlag\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
-                "js_featureFlag",
-            ),
-            (
-                Regex::new(r#"isEnabled\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
-                "js_isEnabled",
-            ),
-            (
-                Regex::new(r#"getFlag\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
-                "js_getFlag",
-            ),
-            // Rust
-            (
-                Regex::new(r#"feature_flag!\(\s*["']([^"']+)["']\s*\)"#).unwrap(),
-                "rust_feature_flag_macro",
-            ),
-            (
-                Regex::new(r#"cfg!\(feature\s*=\s*"([^"]+)"\)"#).unwrap(),
-                "rust_cfg_feature",
-            ),
-        ];
-        Self { patterns }
-    }
+/// Extract flag references from source code.
+fn extract_flag_refs(content: &str, file: &Path) -> Vec<FlagReference> {
+    let mut refs = Vec::new();
 
-    /// Extract flag references from source code.
-    fn extract(&self, content: &str, file: &Path) -> Vec<FlagReference> {
-        let mut refs = Vec::new();
-
-        for (line_num, line) in content.lines().enumerate() {
-            for (regex, pattern_type) in &self.patterns {
-                for cap in regex.captures_iter(line) {
-                    if let Some(name_match) = cap.get(1) {
-                        refs.push(FlagReference {
-                            name: name_match.as_str().to_string(),
-                            file: file.to_path_buf(),
-                            line: (line_num + 1) as u32,
-                            pattern_type: pattern_type.to_string(),
-                        });
-                    }
+    for (line_num, line) in content.lines().enumerate() {
+        for (regex, pattern_type) in FLAG_PATTERNS.iter() {
+            for cap in regex.captures_iter(line) {
+                if let Some(name_match) = cap.get(1) {
+                    refs.push(FlagReference {
+                        name: name_match.as_str().to_string(),
+                        file: file.to_path_buf(),
+                        line: (line_num + 1) as u32,
+                        pattern_type: pattern_type.to_string(),
+                    });
                 }
             }
         }
-
-        refs
     }
+
+    refs
 }
 
 /// Extract all flag references from the source cache.
 pub fn extract_flags(source_cache: &HashMap<PathBuf, String>) -> Vec<FlagReference> {
-    let patterns = FlagPatterns::new();
     let mut all_refs = Vec::new();
 
     for (file, content) in source_cache {
-        all_refs.extend(patterns.extract(content, file));
+        all_refs.extend(extract_flag_refs(content, file));
     }
 
     all_refs
@@ -205,8 +198,7 @@ mod tests {
         let code = r#"if feature_flag("dark_mode"):
     enable_dark()
 "#;
-        let patterns = FlagPatterns::new();
-        let refs = patterns.extract(code, Path::new("app.py"));
+        let refs = extract_flag_refs(code, Path::new("app.py"));
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].name, "dark_mode");
         assert_eq!(refs[0].line, 1);
@@ -217,8 +209,7 @@ mod tests {
     fn extract_python_is_enabled() {
         let code = r#"result = is_enabled("new_checkout")
 "#;
-        let patterns = FlagPatterns::new();
-        let refs = patterns.extract(code, Path::new("checkout.py"));
+        let refs = extract_flag_refs(code, Path::new("checkout.py"));
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].name, "new_checkout");
     }
@@ -229,8 +220,7 @@ mod tests {
     do_beta()
 x = FLAGS["legacy_mode"]
 "#;
-        let patterns = FlagPatterns::new();
-        let refs = patterns.extract(code, Path::new("config.py"));
+        let refs = extract_flag_refs(code, Path::new("config.py"));
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].name, "beta_feature");
         assert_eq!(refs[1].name, "legacy_mode");
@@ -244,8 +234,7 @@ x = FLAGS["legacy_mode"]
 const enabled = isEnabled("dark_mode");
 const flag = getFlag("experiment_x");
 "#;
-        let patterns = FlagPatterns::new();
-        let refs = patterns.extract(code, Path::new("app.js"));
+        let refs = extract_flag_refs(code, Path::new("app.js"));
         assert_eq!(refs.len(), 3);
         assert_eq!(refs[0].name, "new_ui");
         assert_eq!(refs[1].name, "dark_mode");
@@ -261,8 +250,7 @@ if cfg!(feature = "nightly") {
     use_nightly();
 }
 "#;
-        let patterns = FlagPatterns::new();
-        let refs = patterns.extract(code, Path::new("lib.rs"));
+        let refs = extract_flag_refs(code, Path::new("lib.rs"));
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].name, "experimental");
         assert_eq!(refs[1].name, "nightly");
@@ -271,8 +259,7 @@ if cfg!(feature = "nightly") {
     #[test]
     fn extract_no_flags() {
         let code = "fn main() {\n    println!(\"hello\");\n}\n";
-        let patterns = FlagPatterns::new();
-        let refs = patterns.extract(code, Path::new("main.rs"));
+        let refs = extract_flag_refs(code, Path::new("main.rs"));
         assert!(refs.is_empty());
     }
 
@@ -328,8 +315,7 @@ if cfg!(feature = "nightly") {
     #[test]
     fn extract_multiple_flags_same_line() {
         let code = r#"x = feature_flag("a") and feature_flag("b")"#;
-        let patterns = FlagPatterns::new();
-        let refs = patterns.extract(code, Path::new("test.py"));
+        let refs = extract_flag_refs(code, Path::new("test.py"));
         assert_eq!(refs.len(), 2);
         assert_eq!(refs[0].name, "a");
         assert_eq!(refs[1].name, "b");
@@ -338,8 +324,7 @@ if cfg!(feature = "nightly") {
     #[test]
     fn extract_single_quotes_python() {
         let code = "feature_flag('single_quote_flag')";
-        let patterns = FlagPatterns::new();
-        let refs = patterns.extract(code, Path::new("test.py"));
+        let refs = extract_flag_refs(code, Path::new("test.py"));
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].name, "single_quote_flag");
     }

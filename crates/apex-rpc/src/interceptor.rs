@@ -52,7 +52,7 @@ impl CallLog {
     /// Record a method call. This is used internally by [`RecordService`]
     /// but is also public for unit testing the log itself.
     pub fn record(&self, method: &str) {
-        let mut calls = self.calls.lock().expect("CallLog mutex poisoned");
+        let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         calls.push(RecordedCall {
             method: method.to_owned(),
             timestamp: std::time::Instant::now(),
@@ -62,14 +62,14 @@ impl CallLog {
     /// Get all recorded method names in call order.
     #[must_use]
     pub fn methods(&self) -> Vec<String> {
-        let calls = self.calls.lock().expect("CallLog mutex poisoned");
+        let calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         calls.iter().map(|c| c.method.clone()).collect()
     }
 
     /// Count how many times a method was called.
     #[must_use]
     pub fn count(&self, method: &str) -> usize {
-        let calls = self.calls.lock().expect("CallLog mutex poisoned");
+        let calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         calls.iter().filter(|c| c.method == method).count()
     }
 
@@ -80,7 +80,7 @@ impl CallLog {
     /// method was never called.
     #[must_use]
     pub fn called_before(&self, first: &str, second: &str) -> bool {
-        let calls = self.calls.lock().expect("CallLog mutex poisoned");
+        let calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         let first_idx = calls.iter().position(|c| c.method == first);
         let second_idx = calls.iter().position(|c| c.method == second);
         match (first_idx, second_idx) {
@@ -91,14 +91,14 @@ impl CallLog {
 
     /// Clear all recorded calls.
     pub fn clear(&self) {
-        let mut calls = self.calls.lock().expect("CallLog mutex poisoned");
+        let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         calls.clear();
     }
 
     /// Get total number of recorded calls.
     #[must_use]
     pub fn len(&self) -> usize {
-        let calls = self.calls.lock().expect("CallLog mutex poisoned");
+        let calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         calls.len()
     }
 

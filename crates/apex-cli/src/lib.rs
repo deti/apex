@@ -1536,12 +1536,11 @@ async fn ratchet(args: RatchetArgs, cfg: &ApexConfig) -> Result<()> {
     );
 
     if pct < min_coverage {
-        eprintln!(
+        return Err(color_eyre::eyre::eyre!(
             "FAIL: coverage {:.1}% is below minimum {:.1}%",
             pct * 100.0,
             min_coverage * 100.0
-        );
-        std::process::exit(1);
+        ));
     }
 
     println!("PASS");
@@ -2371,11 +2370,10 @@ async fn run_diff(args: DiffArgs) -> Result<()> {
     }
 
     if args.strict && !changed_tests.is_empty() {
-        eprintln!(
-            "\nFAIL: {} tests show behavioral changes",
+        return Err(color_eyre::eyre::eyre!(
+            "FAIL: {} tests show behavioral changes",
             changed_tests.len()
-        );
-        std::process::exit(1);
+        ));
     }
 
     Ok(())
@@ -2665,7 +2663,10 @@ async fn run_verify_boundaries(args: VerifyBoundariesArgs) -> Result<()> {
     }
 
     if args.strict && report.failing_tests > 0 {
-        std::process::exit(1);
+        return Err(color_eyre::eyre::eyre!(
+            "FAIL: {} boundary tests failing",
+            report.failing_tests
+        ));
     }
 
     Ok(())
@@ -2804,7 +2805,7 @@ async fn run_regression_check(args: RegressionCheckArgs) -> Result<()> {
     }
 
     if exit_code != 0 {
-        std::process::exit(1);
+        return Err(color_eyre::eyre::eyre!("regression check failed with exit code {}", exit_code));
     }
 
     Ok(())
@@ -3338,7 +3339,10 @@ async fn run_api_diff(args: ApiDiffArgs) -> Result<()> {
     }
 
     if report.breaking_count > 0 {
-        std::process::exit(1);
+        return Err(color_eyre::eyre::eyre!(
+            "FAIL: {} breaking API changes detected",
+            report.breaking_count
+        ));
     }
 
     Ok(())
@@ -3422,11 +3426,10 @@ async fn run_blast_radius(args: BlastRadiusArgs) -> Result<()> {
     let index_path = target_path.join(".apex").join("index.json");
 
     if !index_path.exists() {
-        eprintln!(
+        return Err(color_eyre::eyre::eyre!(
             "No branch index at {}. Run `apex index` first.",
             index_path.display()
-        );
-        std::process::exit(1);
+        ));
     }
 
     let index_data = std::fs::read_to_string(&index_path)?;
@@ -3796,7 +3799,10 @@ async fn run_schema_check(args: SchemaCheckArgs) -> Result<()> {
     }
 
     if report.dangerous_count > 0 {
-        std::process::exit(1);
+        return Err(color_eyre::eyre::eyre!(
+            "FAIL: {} dangerous schema changes detected",
+            report.dangerous_count
+        ));
     }
 
     Ok(())
