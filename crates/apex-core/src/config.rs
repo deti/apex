@@ -4,7 +4,7 @@
 //! Each section maps to a domain-specific sub-struct with serde defaults.
 //! The precedence chain is: CLI args > config file > struct defaults.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Top-level APEX configuration.
@@ -21,6 +21,7 @@ pub struct ApexConfig {
     pub logging: LoggingConfig,
     pub detect: DetectConfig,
     pub threat_model: ThreatModelConfig,
+    pub analyze: AnalyzeConfig,
 }
 
 impl ApexConfig {
@@ -349,6 +350,32 @@ pub struct ThreatModelConfig {
     pub trusted_sources: Vec<String>,
     /// Additional sources the user considers untrusted (overrides defaults).
     pub untrusted_sources: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Analyze (compound analysis pipeline)
+// ---------------------------------------------------------------------------
+
+/// Configuration for the compound analysis pipeline (`[analyze]` in apex.toml).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AnalyzeConfig {
+    /// Whether compound analysis is enabled. Default: true.
+    pub enabled: bool,
+    /// Analyzer names to skip (e.g. `["iac-scan", "slo-check"]`).
+    pub skip: Vec<String>,
+    /// Per-analyzer timeout in seconds.
+    pub timeout_secs: Option<u64>,
+}
+
+impl Default for AnalyzeConfig {
+    fn default() -> Self {
+        AnalyzeConfig {
+            enabled: true,
+            skip: Vec::new(),
+            timeout_secs: None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

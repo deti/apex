@@ -3,10 +3,12 @@
 //! Detectors identify panic patterns, security vulnerabilities, and code quality issues.
 
 pub mod a11y_scan;
+pub mod analyzer_registry;
 pub mod api_coverage;
 pub mod api_diff;
 pub mod bench_diff;
 pub mod compliance;
+pub mod compound_report;
 pub mod config;
 pub mod config_drift;
 pub mod container_scan;

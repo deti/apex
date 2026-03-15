@@ -21,7 +21,7 @@ use apex_instrument::{
     JavaInstrumentor, JavaScriptInstrumentor, LlvmInstrumentor, PythonInstrumentor,
     RustCovInstrumentor, WasmInstrumentor,
 };
-use apex_lang::{CRunner, JavaRunner, JavaScriptRunner, PythonRunner, WasmRunner};
+use apex_lang::{CRunner, JavaRunner, JavaScriptRunner, KotlinRunner, PythonRunner, WasmRunner};
 use apex_sandbox::{ProcessSandbox, PythonTestSandbox};
 use clap::{Parser, Subcommand, ValueEnum};
 use color_eyre::Result;
@@ -640,6 +640,7 @@ pub enum LangArg {
     Rust,
     Wasm,
     Ruby,
+    Kotlin,
 }
 
 impl From<LangArg> for Language {
@@ -652,6 +653,7 @@ impl From<LangArg> for Language {
             LangArg::Rust => Language::Rust,
             LangArg::Wasm => Language::Wasm,
             LangArg::Ruby => Language::Ruby,
+            LangArg::Kotlin => Language::Kotlin,
         }
     }
 }
@@ -844,7 +846,45 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         };
 
         let pipeline = apex_detect::DetectorPipeline::from_config(&detect_cfg, lang);
-        Some(pipeline.run_all(&detect_ctx).await)
+        let detection_report = pipeline.run_all(&detect_ctx).await;
+
+        // Compound analysis: discover artifacts and run applicable analyzers
+        let compound = if cfg.analyze.enabled {
+            use apex_detect::analyzer_registry;
+
+            let artifacts = analyzer_registry::discover_artifacts(&target_path);
+            let mut analyzers = analyzer_registry::applicable_analyzers(&artifacts, lang);
+
+            // Filter out skipped analyzers
+            if !cfg.analyze.skip.is_empty() {
+                analyzers.retain(|a| !cfg.analyze.skip.contains(&a.name.to_string()));
+            }
+
+            info!(count = analyzers.len(), "running compound analyzers");
+
+            let analyzer_results = analyzer_registry::run_applicable_analyzers(
+                &target_path,
+                lang,
+                &detect_ctx.source_cache,
+                &artifacts,
+                &analyzers,
+            )
+            .await;
+
+            apex_detect::compound_report::CompoundReport::new(
+                detection_report,
+                analyzer_results,
+                artifacts,
+            )
+        } else {
+            apex_detect::compound_report::CompoundReport::new(
+                detection_report,
+                vec![],
+                apex_detect::analyzer_registry::Artifacts::default(),
+            )
+        };
+
+        Some(compound)
     } else {
         None
     };
@@ -854,11 +894,17 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         OutputFormat::Json if uses_agent => {
             let mut report = build_agent_report(&oracle, &instrumented.file_paths, &target_path);
 
-            if let Some(ref analysis) = analysis {
-                report.findings =
-                    Some(serde_json::to_value(&analysis.findings).unwrap_or_default());
-                report.security_summary =
-                    Some(serde_json::to_value(analysis.security_summary()).unwrap_or_default());
+            if let Some(ref compound) = analysis {
+                report.findings = Some(
+                    serde_json::to_value(&compound.detection.findings).unwrap_or_default(),
+                );
+                report.security_summary = Some(
+                    serde_json::to_value(compound.detection.security_summary())
+                        .unwrap_or_default(),
+                );
+                // Include compound analysis data
+                report.compound_analysis =
+                    Some(serde_json::to_value(compound).unwrap_or_default());
             }
 
             match serde_json::to_string_pretty(&report) {
@@ -871,11 +917,31 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         }
         OutputFormat::Text => {
             print_gap_report(&oracle, &instrumented.file_paths, &target_path);
-            if let Some(ref analysis) = analysis {
-                if !analysis.findings.is_empty() {
-                    println!("\nFindings ({}):", analysis.findings.len());
-                    for finding in &analysis.findings {
+            if let Some(ref compound) = analysis {
+                if !compound.detection.findings.is_empty() {
+                    println!("\nFindings ({}):", compound.detection.findings.len());
+                    for finding in &compound.detection.findings {
                         println!("  - [{:?}] {}", finding.severity, finding.title);
+                    }
+                }
+
+                // Print analyzer summary
+                if !compound.analyzers.is_empty() {
+                    println!("\nAnalyzers ({}):", compound.analyzers.len());
+                    for result in &compound.analyzers {
+                        let status_label = match &result.status {
+                            apex_detect::analyzer_registry::AnalyzerStatus::Ok => "OK".to_string(),
+                            apex_detect::analyzer_registry::AnalyzerStatus::Skipped(reason) => {
+                                format!("SKIP ({})", reason)
+                            }
+                            apex_detect::analyzer_registry::AnalyzerStatus::Failed(err) => {
+                                format!("FAIL ({})", err)
+                            }
+                        };
+                        println!(
+                            "  {:>4}  {} \u{2014} {} ({}ms)",
+                            status_label, result.name, result.description, result.duration_ms
+                        );
                     }
                 }
             }
@@ -1032,6 +1098,13 @@ async fn install_deps(lang: Language, target: &std::path::Path) -> Result<()> {
         Language::Ruby => {
             // Ruby dep install not yet implemented.
         }
+        Language::Kotlin => {
+            let runner = KotlinRunner::new();
+            if !runner.detect(target) {
+                warn!("no build.gradle.kts or .kt files found; proceeding anyway");
+            }
+            runner.install_deps(target).await?;
+        }
     }
     Ok(())
 }
@@ -1077,6 +1150,10 @@ async fn instrument(
                 file_paths: std::collections::HashMap::new(),
                 work_dir: target_path.to_path_buf(),
             }
+        }
+        Language::Kotlin => {
+            // Kotlin reuses Java instrumentor (JaCoCo)
+            JavaInstrumentor::new().instrument(&target).await?
         }
     };
 
@@ -1583,6 +1660,7 @@ fn build_source_cache(
         Language::C => &["c", "h"],
         Language::Wasm => &["rs", "wat"],
         Language::Ruby => &["rb"],
+        Language::Kotlin => &["kt", "kts"],
     };
 
     let mut cache = std::collections::HashMap::new();
@@ -2897,6 +2975,7 @@ fn run_features(args: FeaturesArgs) -> Result<()> {
             Language::C,
             Language::Wasm,
             Language::Ruby,
+            Language::Kotlin,
         ]
     };
 

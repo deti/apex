@@ -21,6 +21,8 @@ pub struct AgentGapReport {
     pub findings: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security_summary: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compound_analysis: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -293,6 +295,7 @@ pub fn build_agent_gap_report(
         blocked: Vec::new(),
         findings: None,
         security_summary: None,
+        compound_analysis: None,
     }
 }
 
@@ -333,6 +336,7 @@ mod tests {
             }],
             findings: None,
             security_summary: None,
+            compound_analysis: None,
         };
 
         let json = serde_json::to_string_pretty(&report).unwrap();
