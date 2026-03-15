@@ -643,6 +643,8 @@ pub enum LangArg {
     Kotlin,
     Go,
     Cpp,
+    Swift,
+    CSharp,
 }
 
 impl From<LangArg> for Language {
@@ -658,6 +660,8 @@ impl From<LangArg> for Language {
             LangArg::Kotlin => Language::Kotlin,
             LangArg::Go => Language::Go,
             LangArg::Cpp => Language::Cpp,
+            LangArg::Swift => Language::Swift,
+            LangArg::CSharp => Language::CSharp,
         }
     }
 }
@@ -1115,6 +1119,14 @@ async fn install_deps(lang: Language, target: &std::path::Path) -> Result<()> {
             let runner = apex_lang::cpp::CppRunner::new();
             runner.install_deps(target).await?;
         }
+        Language::Swift => {
+            let runner = apex_lang::swift::SwiftRunner::new();
+            runner.install_deps(target).await?;
+        }
+        Language::CSharp => {
+            let runner = apex_lang::csharp::CSharpRunner::new();
+            runner.install_deps(target).await?;
+        }
     }
     Ok(())
 }
@@ -1160,6 +1172,12 @@ async fn instrument(
         }
         Language::Go => apex_instrument::go::GoInstrumentor::new().instrument(&target).await?,
         Language::Cpp => apex_instrument::c_coverage::CCoverageInstrumentor::new().instrument(&target).await?,
+        Language::Swift => {
+            apex_instrument::swift::SwiftInstrumentor::new().instrument(&target).await?
+        }
+        Language::CSharp => {
+            apex_instrument::csharp::CSharpInstrumentor::new().instrument(&target).await?
+        }
     };
 
     oracle.register_branches(instrumented.branch_ids.iter().cloned());
@@ -1668,6 +1686,8 @@ fn build_source_cache(
         Language::Kotlin => &["kt", "kts"],
         Language::Go => &["go"],
         Language::Cpp => &["cpp", "cxx", "cc", "hpp", "hxx", "h"],
+        Language::Swift => &["swift"],
+        Language::CSharp => &["cs"],
     };
 
     let mut cache = std::collections::HashMap::new();

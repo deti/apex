@@ -724,6 +724,40 @@ fn downgrade(s: Severity) -> Severity {
     }
 }
 
+// Go security patterns
+const GO_SECURITY_PATTERNS: &[SecurityPattern] = &[
+    SecurityPattern { name: "exec.Command", pattern: "exec.Command(", cwe: "CWE-78", severity: Severity::High, description: "Command execution — verify input is not user-controlled", user_input_indicators: &["request", "param", "input", "query", "body", "form"], sanitization_indicators: &["filepath.Clean", "regexp.MustCompile"] },
+    SecurityPattern { name: "db.Query concat", pattern: "db.Query(fmt.Sprintf", cwe: "CWE-89", severity: Severity::High, description: "SQL query with format string — use parameterized queries", user_input_indicators: &["request", "param", "input", "query"], sanitization_indicators: &["Prepare", "stmt"] },
+    SecurityPattern { name: "http.Get", pattern: "http.Get(", cwe: "CWE-918", severity: Severity::High, description: "HTTP request — verify URL is not user-controlled", user_input_indicators: &["request", "param", "input", "url"], sanitization_indicators: &["url.Parse", "allowlist"] },
+    SecurityPattern { name: "template.HTML", pattern: "template.HTML(", cwe: "CWE-79", severity: Severity::Medium, description: "Unescaped HTML template — may enable XSS", user_input_indicators: &["request", "input"], sanitization_indicators: &["template.HTMLEscapeString"] },
+    SecurityPattern { name: "os.Open", pattern: "os.Open(", cwe: "CWE-22", severity: Severity::Medium, description: "File open — verify path is not user-controlled", user_input_indicators: &["request", "param", "input", "path"], sanitization_indicators: &["filepath.Clean", "filepath.Abs"] },
+    SecurityPattern { name: "md5.New", pattern: "md5.New(", cwe: "CWE-327", severity: Severity::Medium, description: "Weak hash algorithm MD5", user_input_indicators: &[], sanitization_indicators: &[] },
+    SecurityPattern { name: "sha1.New", pattern: "sha1.New(", cwe: "CWE-327", severity: Severity::Medium, description: "Weak hash algorithm SHA1", user_input_indicators: &[], sanitization_indicators: &[] },
+];
+
+// Swift security patterns
+const SWIFT_SECURITY_PATTERNS: &[SecurityPattern] = &[
+    SecurityPattern { name: "Process", pattern: "Process()", cwe: "CWE-78", severity: Severity::High, description: "Process execution — verify arguments are not user-controlled", user_input_indicators: &["request", "input", "userInput"], sanitization_indicators: &[] },
+    SecurityPattern { name: "URLSession", pattern: "URLSession.shared.dataTask(", cwe: "CWE-918", severity: Severity::High, description: "HTTP request — verify URL is not user-controlled", user_input_indicators: &["request", "input", "userInput", "url"], sanitization_indicators: &["allowlist", "validate"] },
+    SecurityPattern { name: "NSAppleScript", pattern: "NSAppleScript(source:", cwe: "CWE-94", severity: Severity::Critical, description: "AppleScript execution from string — code injection risk", user_input_indicators: &["input", "userInput"], sanitization_indicators: &[] },
+    SecurityPattern { name: "UserDefaults sensitive", pattern: "UserDefaults.standard.set(", cwe: "CWE-312", severity: Severity::Medium, description: "UserDefaults for sensitive data — use Keychain instead", user_input_indicators: &["password", "token", "secret", "key"], sanitization_indicators: &["Keychain", "SecItem"] },
+    SecurityPattern { name: "NSKeyedUnarchiver", pattern: "NSKeyedUnarchiver.unarchiveObject(", cwe: "CWE-502", severity: Severity::High, description: "Insecure deserialization — use unarchivedObject(ofClass:from:)", user_input_indicators: &[], sanitization_indicators: &["unarchivedObject", "NSSecureCoding"] },
+    SecurityPattern { name: "try!", pattern: "try!", cwe: "CWE-755", severity: Severity::Medium, description: "Force try — crashes on error, use do/catch in library code", user_input_indicators: &[], sanitization_indicators: &[] },
+    SecurityPattern { name: "fatalError", pattern: "fatalError(", cwe: "CWE-705", severity: Severity::Medium, description: "fatalError in library code — return Result/Optional instead", user_input_indicators: &[], sanitization_indicators: &[] },
+];
+
+// C# security patterns
+const CSHARP_SECURITY_PATTERNS: &[SecurityPattern] = &[
+    SecurityPattern { name: "Process.Start", pattern: "Process.Start(", cwe: "CWE-78", severity: Severity::High, description: "Process execution — verify arguments are not user-controlled", user_input_indicators: &["Request", "input", "userInput", "param"], sanitization_indicators: &["ProcessStartInfo", "ArgumentList"] },
+    SecurityPattern { name: "SqlCommand", pattern: "SqlCommand(", cwe: "CWE-89", severity: Severity::High, description: "SQL command — use parameterized queries with SqlParameter", user_input_indicators: &["Request", "input", "param", "query"], sanitization_indicators: &["Parameters.Add", "SqlParameter", "@"] },
+    SecurityPattern { name: "HttpClient.GetAsync", pattern: "HttpClient", cwe: "CWE-918", severity: Severity::Medium, description: "HTTP request — verify URL is not user-controlled", user_input_indicators: &["Request", "input", "url", "userInput"], sanitization_indicators: &["allowlist", "Uri.IsWellFormedUriString"] },
+    SecurityPattern { name: "BinaryFormatter", pattern: "BinaryFormatter", cwe: "CWE-502", severity: Severity::Critical, description: "BinaryFormatter is insecure — use System.Text.Json or protobuf", user_input_indicators: &[], sanitization_indicators: &[] },
+    SecurityPattern { name: "MD5.Create", pattern: "MD5.Create(", cwe: "CWE-327", severity: Severity::Medium, description: "Weak hash algorithm MD5", user_input_indicators: &[], sanitization_indicators: &[] },
+    SecurityPattern { name: "SHA1.Create", pattern: "SHA1.Create(", cwe: "CWE-327", severity: Severity::Medium, description: "Weak hash algorithm SHA1", user_input_indicators: &[], sanitization_indicators: &[] },
+    SecurityPattern { name: "Response.Write", pattern: "Response.Write(", cwe: "CWE-79", severity: Severity::High, description: "Direct response write — may enable XSS", user_input_indicators: &["Request", "input", "userInput"], sanitization_indicators: &["HtmlEncode", "AntiXss"] },
+    SecurityPattern { name: "File.ReadAllText", pattern: "File.ReadAllText(", cwe: "CWE-22", severity: Severity::Medium, description: "File read — verify path is not user-controlled", user_input_indicators: &["Request", "input", "path", "userInput"], sanitization_indicators: &["Path.GetFullPath", "Path.Combine"] },
+];
+
 fn patterns_for_language(lang: Language) -> &'static [SecurityPattern] {
     match lang {
         Language::Python => PYTHON_SECURITY_PATTERNS,
@@ -732,7 +766,10 @@ fn patterns_for_language(lang: Language) -> &'static [SecurityPattern] {
         Language::Ruby => RUBY_SECURITY_PATTERNS,
         Language::C => C_SECURITY_PATTERNS,
         Language::Cpp => CPP_SECURITY_PATTERNS,
-        Language::Java => JAVA_SECURITY_PATTERNS,
+        Language::Java | Language::Kotlin => JAVA_SECURITY_PATTERNS,
+        Language::Go => GO_SECURITY_PATTERNS,
+        Language::Swift => SWIFT_SECURITY_PATTERNS,
+        Language::CSharp => CSHARP_SECURITY_PATTERNS,
         _ => &[],
     }
 }

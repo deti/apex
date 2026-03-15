@@ -14,9 +14,12 @@ pub mod rust_cov;
 pub mod rustc_wrapper;
 pub mod source_map;
 pub mod v8_coverage;
+pub mod csharp;
+pub mod swift;
 pub mod wasm;
 
 pub use c_coverage::CCoverageInstrumentor;
+pub use csharp::CSharpInstrumentor;
 pub use go::GoInstrumentor;
 pub use java::JavaInstrumentor;
 pub use javascript::JavaScriptInstrumentor;
@@ -24,4 +27,5 @@ pub use llvm::LlvmInstrumentor;
 pub use python::PythonInstrumentor;
 pub use ruby::RubyInstrumentor;
 pub use rust_cov::RustCovInstrumentor;
+pub use swift::SwiftInstrumentor;
 pub use wasm::WasmInstrumentor;

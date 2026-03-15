@@ -12,9 +12,12 @@ pub mod javascript;
 pub mod js_env;
 pub mod python;
 pub mod rust_lang;
+pub mod csharp;
+pub mod swift;
 pub mod wasm;
 
 pub use c::CRunner;
+pub use csharp::CSharpRunner;
 pub use cpp::CppRunner;
 pub use go::GoRunner;
 pub use kotlin::KotlinRunner;
@@ -24,4 +27,5 @@ pub use javascript::JavaScriptRunner;
 pub use js_env::JsEnvironment;
 pub use python::PythonRunner;
 pub use rust_lang::RustRunner;
+pub use swift::SwiftRunner;
 pub use wasm::WasmRunner;

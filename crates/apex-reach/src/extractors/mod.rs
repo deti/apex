@@ -1,10 +1,12 @@
 pub mod c_cpp;
+pub mod csharp;
 pub mod go;
 pub mod ruby;
 pub mod java;
 pub mod javascript;
 pub mod python;
 pub mod rust;
+pub mod swift;
 
 use apex_core::types::Language;
 use std::collections::HashMap;
