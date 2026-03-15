@@ -1,0 +1,41 @@
+schema_version: 1
+name: apex
+domain: "APEX coverage tool — Rust workspace with 15 crates spanning static analysis, fuzzing, concolic execution, RPC, and CLI"
+
+crews:
+  - foundation
+  - security-detect
+  - exploration
+  - runtime
+  - intelligence
+  - platform
+
+specialists:
+  - agent: "feature-dev:code-architect"
+    phase: analyze
+    when: "before multi-crate implementation — analyze impact across crate boundaries"
+  - agent: "feature-dev:code-explorer"
+    phase: analyze
+    when: "deep crate analysis — trace trait impls, dependency chains"
+  - agent: "feature-dev:code-reviewer"
+    phase: verify
+    when: "after implementation — find bugs, logic errors, quality issues"
+  - agent: "mycelium-core:rust-engineer"
+    phase: verify
+    when: "Rust-specific review — ownership, async, unsafe, lifetime issues"
+  - agent: "mycelium-core:security-engineer"
+    phase: verify
+    when: "sandbox, taint analysis, or auth changes"
+
+verification:
+  build: "cargo check --workspace"
+  test: "cargo test --workspace"
+  lint: "cargo clippy --workspace -- -D warnings"
+
+plan_dir: ".fleet/plans"
+
+dependency_order:
+  wave1: [foundation]
+  wave2: [security-detect, exploration, runtime]
+  wave3: [intelligence]
+  wave4: [platform]

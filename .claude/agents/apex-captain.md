@@ -169,6 +169,14 @@ Consolidate. **Bugs MUST include full descriptions, not just counts.**
 ### Code Review
 <each finding with FULL description from feature-dev:code-reviewer>
 
+### Long Tail (sub-80 confidence)
+Aggregated from crew long_tail sections. Write to .fleet/long-tail/<date>-<slug>.md.
+When 3+ entries point at same root cause, escalate to a bug.
+
+| Conf | Description | File:Line | Crew |
+|------|-------------|-----------|------|
+| 65 | HashMap iteration order assumed stable | cache.rs:203 | foundation |
+
 ### Unresolved
 - <items needing human decision>
 ```
