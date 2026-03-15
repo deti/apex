@@ -77,7 +77,7 @@ mod tests {
     fn reward_shifts_selection_probability() {
         let mut bandit = StrategyBandit::new(vec!["a".into(), "b".into()]);
         bandit.reward("b", 10.0);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let picks: Vec<&str> = (0..30).map(|_| bandit.select(&mut rng)).collect();
         let b_count = picks.iter().filter(|&&s| s == "b").count();
         assert!(

@@ -65,7 +65,7 @@ main() {
 
     chmod +x "${INSTALL_DIR}/${BINARY}"
     echo "Installed ${BINARY} to ${INSTALL_DIR}/${BINARY}"
-    ${INSTALL_DIR}/${BINARY} --version 2>/dev/null || true
+    "${INSTALL_DIR}/${BINARY}" --version 2>/dev/null || true
 }
 
 main

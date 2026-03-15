@@ -60,7 +60,7 @@ impl FuzzStrategy {
         FuzzStrategy {
             oracle,
             corpus: Mutex::new(Corpus::new(CORPUS_MAX)),
-            rng: Mutex::new(StdRng::from_entropy()),
+            rng: Mutex::new(StdRng::from_os_rng()),
             scheduler: Mutex::new(MOptScheduler::new(mutators::builtin_mutators())),
         }
     }
@@ -136,8 +136,8 @@ impl Strategy for FuzzStrategy {
                 .map_err(|e| ApexError::Other(format!("rng mutex poisoned: {e}")))?;
             return Ok((0..MUTATIONS_PER_INPUT)
                 .map(|_| {
-                    let len = rng.gen_range(1..=64);
-                    let data: Vec<u8> = (0..len).map(|_| rng.gen()).collect();
+                    let len = rng.random_range(1..=64);
+                    let data: Vec<u8> = (0..len).map(|_| rng.random()).collect();
                     InputSeed::new(data, SeedOrigin::Fuzzer)
                 })
                 .collect());

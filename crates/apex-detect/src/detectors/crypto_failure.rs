@@ -50,12 +50,10 @@ fn is_word_boundary_match(haystack: &str, pattern: &str) -> bool {
     let mut start = 0;
     while let Some(pos) = haystack[start..].find(pattern) {
         let abs_pos = start + pos;
-        let before_ok = abs_pos == 0
-            || !haystack.as_bytes()[abs_pos - 1]
-                .is_ascii_alphanumeric();
+        let before_ok = abs_pos == 0 || !haystack.as_bytes()[abs_pos - 1].is_ascii_alphanumeric();
         let after_pos = abs_pos + pattern.len();
-        let after_ok = after_pos >= haystack.len()
-            || !haystack.as_bytes()[after_pos].is_ascii_alphanumeric();
+        let after_ok =
+            after_pos >= haystack.len() || !haystack.as_bytes()[after_pos].is_ascii_alphanumeric();
         if before_ok && after_ok {
             return true;
         }
@@ -295,7 +293,10 @@ mod tests {
             .iter()
             .filter(|f| f.title.contains("cipher"))
             .collect();
-        assert!(cipher_findings.is_empty(), "DESCRIBES/NODES should not match DES");
+        assert!(
+            cipher_findings.is_empty(),
+            "DESCRIBES/NODES should not match DES"
+        );
     }
 
     #[test]

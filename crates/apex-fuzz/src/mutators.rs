@@ -13,8 +13,8 @@ pub fn bit_flip(data: &[u8], rng: &mut impl Rng) -> Vec<u8> {
         return vec![0];
     }
     let mut out = data.to_vec();
-    let pos = rng.gen_range(0..out.len());
-    let bit = rng.gen_range(0..8u8);
+    let pos = rng.random_range(0..out.len());
+    let bit = rng.random_range(0..8u8);
     out[pos] ^= 1 << bit;
     out
 }
@@ -24,19 +24,19 @@ pub fn byte_flip(data: &[u8], rng: &mut impl Rng) -> Vec<u8> {
         return vec![0xFF];
     }
     let mut out = data.to_vec();
-    let pos = rng.gen_range(0..out.len());
+    let pos = rng.random_range(0..out.len());
     out[pos] ^= 0xFF;
     out
 }
 
 pub fn byte_arith(data: &[u8], rng: &mut impl Rng) -> Vec<u8> {
     if data.is_empty() {
-        return vec![rng.gen()];
+        return vec![rng.random()];
     }
     let mut out = data.to_vec();
-    let pos = rng.gen_range(0..out.len());
+    let pos = rng.random_range(0..out.len());
     // Small arithmetic delta in range ±35 (AFL++ heuristic)
-    let delta: i8 = rng.gen_range(-35..=35);
+    let delta: i8 = rng.random_range(-35..=35);
     out[pos] = (out[pos] as i16 + delta as i16).clamp(0, 255) as u8;
     out
 }
@@ -45,11 +45,11 @@ pub fn byte_arith(data: &[u8], rng: &mut impl Rng) -> Vec<u8> {
 pub fn interesting_byte(data: &[u8], rng: &mut impl Rng) -> Vec<u8> {
     const INTERESTING: &[u8] = &[0, 1, 7, 8, 16, 32, 64, 127, 128, 192, 254, 255];
     if data.is_empty() {
-        return vec![INTERESTING[rng.gen_range(0..INTERESTING.len())]];
+        return vec![INTERESTING[rng.random_range(0..INTERESTING.len())]];
     }
     let mut out = data.to_vec();
-    let pos = rng.gen_range(0..out.len());
-    out[pos] = INTERESTING[rng.gen_range(0..INTERESTING.len())];
+    let pos = rng.random_range(0..out.len());
+    out[pos] = INTERESTING[rng.random_range(0..INTERESTING.len())];
     out
 }
 
@@ -57,9 +57,9 @@ pub fn insert_byte(data: &[u8], rng: &mut impl Rng) -> Vec<u8> {
     let pos = if data.is_empty() {
         0
     } else {
-        rng.gen_range(0..=data.len())
+        rng.random_range(0..=data.len())
     };
-    let val: u8 = rng.gen();
+    let val: u8 = rng.random();
     let mut out = Vec::with_capacity(data.len() + 1);
     out.extend_from_slice(&data[..pos]);
     out.push(val);
@@ -71,7 +71,7 @@ pub fn delete_byte(data: &[u8], rng: &mut impl Rng) -> Vec<u8> {
     if data.len() <= 1 {
         return data.to_vec();
     }
-    let pos = rng.gen_range(0..data.len());
+    let pos = rng.random_range(0..data.len());
     let mut out = data.to_vec();
     out.remove(pos);
     out
@@ -81,9 +81,9 @@ pub fn duplicate_block(data: &[u8], rng: &mut impl Rng) -> Vec<u8> {
     if data.len() < 2 {
         return data.to_vec();
     }
-    let start = rng.gen_range(0..data.len() - 1);
-    let end = rng.gen_range(start + 1..data.len());
-    let insert_at = rng.gen_range(0..=data.len());
+    let start = rng.random_range(0..data.len() - 1);
+    let end = rng.random_range(start + 1..data.len());
+    let insert_at = rng.random_range(0..=data.len());
     let block = data[start..end].to_vec();
     let mut out = Vec::with_capacity(data.len() + block.len());
     out.extend_from_slice(&data[..insert_at]);
@@ -100,8 +100,8 @@ pub fn splice(a: &[u8], b: &[u8], rng: &mut impl Rng) -> Vec<u8> {
     if b.is_empty() {
         return a.to_vec();
     }
-    let split_a = rng.gen_range(0..a.len());
-    let split_b = rng.gen_range(0..b.len());
+    let split_a = rng.random_range(0..a.len());
+    let split_b = rng.random_range(0..b.len());
     let mut out = a[..split_a].to_vec();
     out.extend_from_slice(&b[split_b..]);
     out
@@ -114,7 +114,7 @@ pub fn splice(a: &[u8], b: &[u8], rng: &mut impl Rng) -> Vec<u8> {
 pub fn havoc(data: &[u8], rng: &mut impl Rng, ops: usize) -> Vec<u8> {
     let mut cur = data.to_vec();
     for _ in 0..ops {
-        cur = match rng.gen_range(0..7u8) {
+        cur = match rng.random_range(0..7u8) {
             0 => bit_flip(&cur, rng),
             1 => byte_flip(&cur, rng),
             2 => byte_arith(&cur, rng),
@@ -146,9 +146,6 @@ impl rand::RngCore for RngCoreWrapper<'_> {
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         self.0.fill_bytes(dest)
-    }
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> std::result::Result<(), rand::Error> {
-        self.0.try_fill_bytes(dest)
     }
 }
 
@@ -468,7 +465,7 @@ mod tests {
     #[test]
     fn builtin_mutator_bit_flip_via_trait() {
         let m = BitFlipMutator;
-        let mut r = rand::thread_rng();
+        let mut r = rand::rng();
         let out = m.mutate(b"test", &mut r);
         assert_eq!(out.len(), 4);
         assert_eq!(m.name(), "bit_flip");
@@ -477,7 +474,7 @@ mod tests {
     #[test]
     fn builtin_mutator_byte_flip_via_trait() {
         let m = ByteFlipMutator;
-        let mut r = rand::thread_rng();
+        let mut r = rand::rng();
         let out = m.mutate(b"test", &mut r);
         assert_eq!(out.len(), 4);
         assert_eq!(m.name(), "byte_flip");
@@ -486,7 +483,7 @@ mod tests {
     #[test]
     fn builtin_mutator_byte_arith_via_trait() {
         let m = ByteArithMutator;
-        let mut r = rand::thread_rng();
+        let mut r = rand::rng();
         let out = m.mutate(b"test", &mut r);
         assert_eq!(out.len(), 4);
         assert_eq!(m.name(), "byte_arith");
@@ -495,7 +492,7 @@ mod tests {
     #[test]
     fn builtin_mutator_interesting_byte_via_trait() {
         let m = InterestingByteMutator;
-        let mut r = rand::thread_rng();
+        let mut r = rand::rng();
         let out = m.mutate(b"test", &mut r);
         assert_eq!(out.len(), 4);
         assert_eq!(m.name(), "interesting_byte");
@@ -504,7 +501,7 @@ mod tests {
     #[test]
     fn builtin_mutator_insert_byte_via_trait() {
         let m = InsertByteMutator;
-        let mut r = rand::thread_rng();
+        let mut r = rand::rng();
         let out = m.mutate(b"test", &mut r);
         assert_eq!(out.len(), 5);
         assert_eq!(m.name(), "insert_byte");
@@ -513,7 +510,7 @@ mod tests {
     #[test]
     fn builtin_mutator_delete_byte_via_trait() {
         let m = DeleteByteMutator;
-        let mut r = rand::thread_rng();
+        let mut r = rand::rng();
         let out = m.mutate(b"test", &mut r);
         assert_eq!(out.len(), 3);
         assert_eq!(m.name(), "delete_byte");
@@ -522,7 +519,7 @@ mod tests {
     #[test]
     fn builtin_mutator_duplicate_block_via_trait() {
         let m = DuplicateBlockMutator;
-        let mut r = rand::thread_rng();
+        let mut r = rand::rng();
         let out = m.mutate(b"test", &mut r);
         assert!(out.len() >= 4);
         assert_eq!(m.name(), "duplicate_block");
@@ -544,20 +541,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rng_core_wrapper_try_fill_bytes() {
-        use rand::RngCore;
-        let mut inner = StdRng::seed_from_u64(2);
-        let mut wrapper = RngCoreWrapper(&mut inner);
-        let mut dest = [0u8; 16];
-        let result = wrapper.try_fill_bytes(&mut dest);
-        assert!(result.is_ok(), "try_fill_bytes should succeed: {result:?}");
-        // Confirm bytes were written
-        assert_ne!(
-            dest, [0u8; 16],
-            "try_fill_bytes should have written random data"
-        );
-    }
+    // try_fill_bytes was removed from RngCore in rand 0.9 (moved to TryRngCore)
 
     #[test]
     fn all_builtin_mutators_implement_trait() {

@@ -59,7 +59,7 @@ impl Corpus {
             return None;
         }
         let total: f64 = self.entries.iter().map(|e| e.energy.max(0.001)).sum();
-        let mut pick = rng.gen::<f64>() * total;
+        let mut pick = rng.random::<f64>() * total;
         let mut selected = self.entries.len() - 1;
         for (i, entry) in self.entries.iter().enumerate() {
             let w = entry.energy.max(0.001);
@@ -81,8 +81,8 @@ impl Corpus {
         if self.entries.len() < 2 {
             return None;
         }
-        let i = rng.gen_range(0..self.entries.len());
-        let mut j = rng.gen_range(0..self.entries.len() - 1);
+        let i = rng.random_range(0..self.entries.len());
+        let mut j = rng.random_range(0..self.entries.len() - 1);
         if j >= i {
             j += 1;
         }

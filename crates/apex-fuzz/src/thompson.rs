@@ -77,7 +77,7 @@ mod tests {
         ts.add_seed(b"b".to_vec());
         ts.reward(0, 5); // 5 new branches from seed 0
                          // After many samples, seed 0 should dominate
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let picks: Vec<usize> = (0..50).map(|_| ts.select(&mut rng)).collect();
         let count_0 = picks.iter().filter(|&&x| x == 0).count();
         assert!(count_0 > 10, "rewarded seed should be picked more often");
@@ -89,7 +89,7 @@ mod tests {
         for _ in 0..4 {
             ts.add_seed(b"x".to_vec());
         }
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let picks: Vec<usize> = (0..100).map(|_| ts.select(&mut rng)).collect();
         // All 4 arms should be selected at least once
         for i in 0..4 {
@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn bug_select_empty_returns_invalid_index() {
         let ts = ThompsonScheduler::new();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let idx = ts.select(&mut rng);
         // Returns 0, but there are no arms -- 0 is not a valid index
         assert_eq!(idx, 0);
@@ -169,7 +169,7 @@ mod tests {
         ts.add_seed(b"a".to_vec());
         ts.reward(0, usize::MAX);
         // alpha is now 1.0 + usize::MAX as f64 -- extremely large
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // select should not panic (Beta with huge alpha, small beta)
         let idx = ts.select(&mut rng);
         assert_eq!(idx, 0);

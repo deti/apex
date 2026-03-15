@@ -58,7 +58,10 @@ impl RandomPath {
     }
 
     fn next_u64(&mut self) -> u64 {
-        // xorshift64 for reproducibility
+        // xorshift64 — seed 0 is a fixed point, escape it
+        if self.rng_seed == 0 {
+            self.rng_seed = 1;
+        }
         self.rng_seed ^= self.rng_seed << 13;
         self.rng_seed ^= self.rng_seed >> 7;
         self.rng_seed ^= self.rng_seed << 17;
@@ -349,5 +352,23 @@ mod tests {
         assert_eq!(DepthFirst.select(&states), 0);
         assert_eq!(RandomPath::new(99).select(&states), 0);
         assert_eq!(CoverageOptimized::new().select(&states), 0);
+    }
+
+    #[test]
+    fn xorshift_zero_seed_produces_nonzero() {
+        let mut rp = RandomPath::new(0);
+        let states = vec![make_state(0, 1), make_state(1, 5)];
+        let results: Vec<usize> = (0..10).map(|_| rp.select(&states)).collect();
+        let all_same = results.iter().all(|&r| r == results[0]);
+        assert!(!all_same, "zero seed should not produce identical results");
+    }
+
+    #[test]
+    fn interleaved_empty_strategies_no_panic() {
+        let states = vec![make_state(0, 1), make_state(1, 5)];
+        let mut interleaved = InterleavedSearch::new(vec![], 10);
+        assert_eq!(interleaved.select(&states), 0);
+        interleaved.on_coverage(0, 5);
+        interleaved.on_terminate(0);
     }
 }

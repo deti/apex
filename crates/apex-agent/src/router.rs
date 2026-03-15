@@ -57,8 +57,8 @@ impl S2FRouter {
             BranchClass::NeedsSolver => StrategyRecommendation::Gradient,
             BranchClass::NeedsSynth => StrategyRecommendation::LlmSynth,
             BranchClass::HardFuzz => {
-                let mut rng = rand::thread_rng();
-                match rng.gen_range(0..3) {
+                let mut rng = rand::rng();
+                match rng.random_range(0..3) {
                     0 => StrategyRecommendation::Fuzz,
                     1 => StrategyRecommendation::Gradient,
                     _ => StrategyRecommendation::LlmSynth,

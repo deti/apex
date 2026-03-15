@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn select_returns_valid_index() {
         let de = DeScheduler::new(5);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let idx = de.select(&mut rng);
         assert!(idx < 5);
     }

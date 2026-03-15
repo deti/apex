@@ -382,7 +382,7 @@ mod tests {
         log.add(CmpEntry::new(b"AAAA".to_vec(), b"BBBB".to_vec()));
         let m = CmpLogMutator::new(log);
         let input = b"xxAAAAyy";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // Run multiple times -- should eventually produce the replacement
         let mut found = false;
         for _ in 0..50 {
@@ -401,7 +401,7 @@ mod tests {
         log.add(CmpEntry::new(b"XX".to_vec(), b"YY".to_vec()));
         let m = CmpLogMutator::new(log);
         let input = b"__YY__";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut found = false;
         for _ in 0..50 {
             let out = m.mutate(input, &mut rng);
@@ -419,7 +419,7 @@ mod tests {
         log.add(CmpEntry::new(b"ZZZZ".to_vec(), b"WWWW".to_vec()));
         let m = CmpLogMutator::new(log);
         let input = b"no match here";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let out = m.mutate(input, &mut rng);
         assert_eq!(out, input);
     }
@@ -428,7 +428,7 @@ mod tests {
     fn cmplog_mutator_empty_log_returns_original() {
         let m = CmpLogMutator::new(CmpLog::new());
         let input = b"test";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let out = m.mutate(input, &mut rng);
         assert_eq!(out, input);
     }
@@ -460,7 +460,7 @@ mod tests {
         log.add(CmpEntry::new(b"LONGNEEDLE".to_vec(), b"SHORT".to_vec()));
         let m = CmpLogMutator::new(log);
         let input = b"tiny";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // needle.len() > input.len(), should return input unchanged
         let out = m.mutate(input, &mut rng);
         assert_eq!(out, input);
@@ -472,7 +472,7 @@ mod tests {
         log.add(CmpEntry::new(vec![], b"replacement".to_vec()));
         let m = CmpLogMutator::new(log);
         let input = b"test data";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // empty needle should return input unchanged
         let out = m.mutate(input, &mut rng);
         assert_eq!(out, input);
@@ -484,7 +484,7 @@ mod tests {
         log.add(CmpEntry::new(b"AA".to_vec(), b"BB".to_vec()));
         let m = CmpLogMutator::new(log);
         let input = b"AAXAA"; // "AA" at positions 0 and 3
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut saw_first = false;
         let mut saw_second = false;
         for _ in 0..100 {
@@ -585,7 +585,7 @@ mod tests {
         log.add(CmpEntry::new(b"AB".to_vec(), b"AB".to_vec()));
         let m = CmpLogMutator::new(log);
         let input = b"xABy";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // Replacing AB with AB is the identity
         let out = m.mutate(input, &mut rng);
         assert_eq!(out, input);
@@ -598,7 +598,7 @@ mod tests {
         log.add(CmpEntry::new(b"AA".to_vec(), b"BB".to_vec()));
         let m = CmpLogMutator::new(log);
         let input = b"XXAA";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // Should not panic regardless of which entry is selected
         let out = m.mutate(input, &mut rng);
         assert_eq!(out.len(), input.len()); // replacements are same length
@@ -747,7 +747,7 @@ mod tests {
         });
         let m = RedQueenMutator::new(Arc::new(table));
         let input = b"xxAAAAyy";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut found = false;
         for _ in 0..100 {
             let out = m.mutate(input, &mut rng);
@@ -765,7 +765,7 @@ mod tests {
         table.record(make_entry(1, b"ZZZZ", b"WWWW"));
         let m = RedQueenMutator::new(Arc::new(table));
         let input = b"no match here";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let out = m.mutate(input, &mut rng);
         assert_eq!(out, input);
     }
@@ -775,7 +775,7 @@ mod tests {
         let table = CmpLogTable::new();
         let m = RedQueenMutator::new(Arc::new(table));
         let input = b"test data";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let out = m.mutate(input, &mut rng);
         assert_eq!(out, input);
     }
@@ -792,7 +792,7 @@ mod tests {
         });
         let m = RedQueenMutator::new(Arc::new(table));
         let input = b"__AB__";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut found_grow = false;
         let mut found_shrink = false;
         for _ in 0..200 {
@@ -832,7 +832,7 @@ mod tests {
         });
         let m = RedQueenMutator::new(Arc::new(table));
         let input = b"test";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let out = m.mutate(input, &mut rng);
         assert_eq!(out, input);
     }
@@ -849,7 +849,7 @@ mod tests {
         table.record(make_entry(1, b"LONGNEEDLE", b"X"));
         let m = RedQueenMutator::new(Arc::new(table));
         let input = b"tiny";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let out = m.mutate(input, &mut rng);
         assert_eq!(out, input);
     }
@@ -865,7 +865,7 @@ mod tests {
         ));
         let m = CmpLogMutator::new(log);
         let input = b"xxAAAAyy";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut found = false;
         for _ in 0..100 {
             let out = m.mutate(input, &mut rng);

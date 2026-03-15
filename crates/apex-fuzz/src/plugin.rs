@@ -104,7 +104,7 @@ mod tests {
     fn registered_mutator_works() {
         let mut reg = MutatorRegistry::new();
         reg.register(Box::new(UpperMutator));
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let result = reg.mutators()[0].mutate(b"hello", &mut rng);
         assert_eq!(result, b"HELLO");
     }
@@ -146,7 +146,7 @@ mod tests {
     fn registry_reverse_mutator_works() {
         let mut reg = MutatorRegistry::new();
         reg.register(Box::new(ReverseMutator));
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let result = reg.mutators()[0].mutate(b"abcd", &mut rng);
         assert_eq!(result, b"dcba");
     }

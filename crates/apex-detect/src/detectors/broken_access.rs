@@ -117,9 +117,10 @@ pub fn scan_broken_access(source: &str, file_path: &str) -> Vec<Finding> {
         if trimmed.contains("<form") && trimmed.contains("method") {
             // Only flag POST, PUT, DELETE, PATCH — GET forms don't need CSRF.
             let lower = trimmed.to_lowercase();
-            let is_state_changing = ["post", "put", "delete", "patch"]
-                .iter()
-                .any(|m| lower.contains(&format!("method=\"{m}\"")) || lower.contains(&format!("method='{m}'")));
+            let is_state_changing = ["post", "put", "delete", "patch"].iter().any(|m| {
+                lower.contains(&format!("method=\"{m}\""))
+                    || lower.contains(&format!("method='{m}'"))
+            });
             if is_state_changing {
                 // Look ahead for csrf token.
                 let end = (line_num + 10).min(lines.len().saturating_sub(1));
@@ -279,15 +280,27 @@ mod tests {
     fn no_csrf_flag_on_get_form() {
         let source = "<form method=\"get\" action=\"/search\">\n<input name=\"q\">\n</form>\n";
         let findings = scan_broken_access(source, "search.html");
-        let csrf_findings: Vec<_> = findings.iter().filter(|f| f.cwe_ids.contains(&352)).collect();
-        assert!(csrf_findings.is_empty(), "GET form should not trigger CSRF warning");
+        let csrf_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.cwe_ids.contains(&352))
+            .collect();
+        assert!(
+            csrf_findings.is_empty(),
+            "GET form should not trigger CSRF warning"
+        );
     }
 
     #[test]
     fn csrf_flag_on_post_form() {
         let source = "<form method=\"POST\" action=\"/update\">\n<input name=\"val\">\n</form>\n";
         let findings = scan_broken_access(source, "update.html");
-        let csrf_findings: Vec<_> = findings.iter().filter(|f| f.cwe_ids.contains(&352)).collect();
-        assert!(!csrf_findings.is_empty(), "POST form without CSRF should be flagged");
+        let csrf_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.cwe_ids.contains(&352))
+            .collect();
+        assert!(
+            !csrf_findings.is_empty(),
+            "POST form without CSRF should be flagged"
+        );
     }
 }

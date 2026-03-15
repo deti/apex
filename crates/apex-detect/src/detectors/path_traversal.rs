@@ -19,9 +19,7 @@ static OPEN_LITERAL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"open\(\s*(?:f["']|["'])"#).unwrap());
 
 /// Sanitization indicators that suggest path is validated.
-const PATH_SANITIZATION: &[&str] = &[
-    "resolve", "realpath", "abspath", "normpath", "canonicalize",
-];
+const PATH_SANITIZATION: &[&str] = &["resolve", "realpath", "abspath", "normpath", "canonicalize"];
 
 /// Variable prefixes that suggest non-user-input (safe).
 const SAFE_VAR_PREFIXES: &[&str] = &["self.", "config", "BASE", "ROOT"];
@@ -74,9 +72,9 @@ pub fn scan_path_traversal(source: &str, file_path: &str) -> Vec<Finding> {
         if is_vuln {
             let ctx_start = line_num.saturating_sub(5);
             let ctx_end = (line_num + 5).min(lines.len().saturating_sub(1));
-            let has_sanitization = PATH_SANITIZATION.iter().any(|s| {
-                lines[ctx_start..=ctx_end].iter().any(|l| l.contains(s))
-            });
+            let has_sanitization = PATH_SANITIZATION
+                .iter()
+                .any(|s| lines[ctx_start..=ctx_end].iter().any(|l| l.contains(s)));
             if has_sanitization {
                 continue;
             }
@@ -178,24 +176,36 @@ safe = os.path.realpath(user_input)
 f = open(safe)
 "#;
         let findings = scan_path_traversal(source, "safe.py");
-        assert!(findings.is_empty(), "realpath nearby should suppress finding");
+        assert!(
+            findings.is_empty(),
+            "realpath nearby should suppress finding"
+        );
     }
 
     #[test]
     fn skip_safe_variable_prefixes() {
         let source = "f = open(config_path)\n";
         let findings = scan_path_traversal(source, "app.py");
-        assert!(findings.is_empty(), "config* variable should not be flagged");
+        assert!(
+            findings.is_empty(),
+            "config* variable should not be flagged"
+        );
 
         let source2 = "data = Path(self.base_dir).read_text()\n";
         let findings2 = scan_path_traversal(source2, "app.py");
-        assert!(findings2.is_empty(), "self.* variable should not be flagged");
+        assert!(
+            findings2.is_empty(),
+            "self.* variable should not be flagged"
+        );
     }
 
     #[test]
     fn still_flags_user_input_without_sanitization() {
         let source = "f = open(user_path)\n";
         let findings = scan_path_traversal(source, "handler.py");
-        assert!(!findings.is_empty(), "user_path without sanitization should be flagged");
+        assert!(
+            !findings.is_empty(),
+            "user_path without sanitization should be flagged"
+        );
     }
 }

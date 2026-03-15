@@ -77,9 +77,9 @@ pub fn scan_ssrf(source: &str, file_path: &str) -> Vec<Finding> {
         // Skip if sanitization is present within 5 lines before or after.
         let ctx_start = line_num.saturating_sub(5);
         let ctx_end = (line_num + 5).min(lines.len().saturating_sub(1));
-        let has_sanitization = SANITIZATION_INDICATORS.iter().any(|s| {
-            lines[ctx_start..=ctx_end].iter().any(|l| l.contains(s))
-        });
+        let has_sanitization = SANITIZATION_INDICATORS
+            .iter()
+            .any(|s| lines[ctx_start..=ctx_end].iter().any(|l| l.contains(s)));
         if has_sanitization {
             continue;
         }
@@ -192,6 +192,9 @@ mod tests {
         lines.push("requests.get(request.args['url'])");
         let source = lines.join("\n");
         let findings = scan_ssrf(&source, "app.py");
-        assert!(!findings.is_empty(), "distant urlparse should not suppress SSRF finding");
+        assert!(
+            !findings.is_empty(),
+            "distant urlparse should not suppress SSRF finding"
+        );
     }
 }

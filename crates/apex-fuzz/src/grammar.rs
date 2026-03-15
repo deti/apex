@@ -99,7 +99,7 @@ impl Grammar {
             return;
         }
 
-        let idx = rng.gen_range(0..prod.alternatives.len());
+        let idx = rng.random_range(0..prod.alternatives.len());
         let alt = &prod.alternatives[idx];
 
         for sym in alt {

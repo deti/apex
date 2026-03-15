@@ -130,9 +130,7 @@ impl Sandbox for PythonTestSandbox {
             .status()
             .await;
         if python_check.map(|s| !s.success()).unwrap_or(true) {
-            return Err(ApexError::Sandbox(
-                "python3 not found in PATH".into(),
-            ));
+            return Err(ApexError::Sandbox("python3 not found in PATH".into()));
         }
 
         // Step 1: run pytest under coverage.py

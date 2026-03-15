@@ -185,7 +185,7 @@ impl PsoMOptScheduler {
     ///   velocity = w * velocity + c1 * r1 * (local_best - current) + c2 * r2 * (global_best - current)
     ///   new_prob = current + velocity, clamped to [0.01, 1.0], then normalized
     pub fn update_probabilities(&mut self) {
-        self.update_probabilities_with_rng(&mut rand::thread_rng());
+        self.update_probabilities_with_rng(&mut rand::rng());
     }
 
     /// Deterministic variant for testing — accepts an explicit RNG.
@@ -223,8 +223,8 @@ impl PsoMOptScheduler {
 
         // PSO velocity update and position update.
         for i in 0..n {
-            let r1: f64 = rng.gen();
-            let r2: f64 = rng.gen();
+            let r1: f64 = rng.random();
+            let r2: f64 = rng.random();
             self.velocities[i] = Self::W * self.velocities[i]
                 + Self::C1 * r1 * (self.local_best[i] - self.operator_probs[i])
                 + Self::C2 * r2 * (self.global_best[i] - self.operator_probs[i]);
@@ -244,7 +244,7 @@ impl PsoMOptScheduler {
     /// Select an operator via weighted random sampling.
     pub fn select_operator(&self, rng: &mut impl rand::Rng) -> usize {
         let total: f64 = self.operator_probs.iter().sum();
-        let mut pick = rng.gen::<f64>() * total;
+        let mut pick = rng.random::<f64>() * total;
         for (i, &w) in self.operator_probs.iter().enumerate() {
             pick -= w;
             if pick <= 0.0 {

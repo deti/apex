@@ -111,11 +111,9 @@ impl CommandRunner for RealCommandRunner {
         if let Some(ref data) = spec.stdin {
             if let Some(mut stdin) = child.stdin.take() {
                 use tokio::io::AsyncWriteExt;
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    stdin.write_all(data),
-                )
-                .await;
+                let _ =
+                    tokio::time::timeout(std::time::Duration::from_secs(30), stdin.write_all(data))
+                        .await;
                 // stdin is dropped here, closing the pipe
             }
         }

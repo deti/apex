@@ -247,7 +247,7 @@ pub async fn has_llvm_cov() -> bool {
 
 /// Check if `cargo-llvm-cov` is available (using a custom runner).
 pub async fn has_llvm_cov_with_runner(runner: &dyn CommandRunner) -> bool {
-    let spec = CommandSpec::new("cargo", &std::env::temp_dir().display().to_string())
+    let spec = CommandSpec::new("cargo", std::env::temp_dir().display().to_string())
         .args(["llvm-cov", "--version"]);
     runner
         .run_command(&spec)

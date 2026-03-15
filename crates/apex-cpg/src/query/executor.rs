@@ -228,7 +228,7 @@ fn evaluate_condition(
                 let re = cache
                     .entry(pattern.to_string())
                     .or_insert_with(|| Regex::new(pattern).ok());
-                re.as_ref().map_or(false, |r| r.is_match(name))
+                re.as_ref().is_some_and(|r| r.is_match(name))
             })
         }
         Condition::And(left, right) => {

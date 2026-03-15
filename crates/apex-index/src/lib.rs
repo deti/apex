@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod c_cpp;
 pub mod change_impact;
 pub mod csharp;
 pub mod dead_code;
