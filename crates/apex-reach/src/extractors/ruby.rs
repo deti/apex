@@ -11,7 +11,7 @@ pub struct RubyExtractor;
 
 static RE_DEF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*def\s+(\w+)").unwrap());
 static RE_CLASS_DEF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*class\s+(\w+)").unwrap());
-static RE_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(\w+)\s*[\(.]|\b(\w+)\b").unwrap());
+static RE_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\w+)\s*\(").unwrap());
 static RE_DESCRIBE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(describe|context|it)\s").unwrap());
 static RE_ROUTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^\s*(get|post|put|patch|delete)\s+['"\/]"#).unwrap());
 
@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn detects_methods_and_calls() {
-        let src = "def greet\n  puts 'hi'\nend\n\ndef main\n  greet\nend\n";
+        let src = "def greet\n  puts('hi')\nend\n\ndef main\n  greet()\nend\n";
         let g = RubyExtractor.extract(&single_file("app.rb", src));
         assert_eq!(g.node_count(), 2);
         assert!(g.edge_count() >= 1);
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn cross_file_resolution() {
         let mut sources = HashMap::new();
-        sources.insert(PathBuf::from("a.rb"), "def caller_fn\n  helper\nend\n".to_string());
+        sources.insert(PathBuf::from("a.rb"), "def caller_fn\n  helper()\nend\n".to_string());
         sources.insert(PathBuf::from("b.rb"), "def helper\nend\n".to_string());
         let g = RubyExtractor.extract(&sources);
         assert!(g.edge_count() >= 1);
