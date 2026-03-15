@@ -8,6 +8,7 @@
 
 pub mod doctor;
 pub mod fuzz;
+pub mod mcp;
 
 use apex_agent::{AgentCluster, OrchestratorConfig};
 use apex_core::{
@@ -121,6 +122,8 @@ pub enum Commands {
     SchemaCheck(SchemaCheckArgs),
     /// Generate realistic test data from SQL schema files.
     TestData(TestDataArgs),
+    /// Start MCP STDIO server for AI tool integration.
+    Mcp,
 }
 
 #[derive(Parser, Clone)]
@@ -705,6 +708,7 @@ pub async fn run_cli(cli: Cli, cfg: &ApexConfig) -> Result<()> {
         Commands::ServiceMap(args) => run_service_map(args).await,
         Commands::SchemaCheck(args) => run_schema_check(args).await,
         Commands::TestData(args) => run_test_data(args).await,
+        Commands::Mcp => mcp::run_mcp().await,
     }
 }
 
