@@ -591,6 +591,114 @@ mod tests {
     }
 
     // ==================================================================
+    // Bug-hunting tests
+    // ==================================================================
+
+    /// BUG: mutate() on an empty scheduler panics.
+    /// select() returns 0 for empty, but then mutate() indexes stats[0]
+    /// and mutators[0] on empty vecs => index out of bounds.
+    #[test]
+    #[should_panic]
+    fn bug_mutate_empty_scheduler_panics() {
+        let mut scheduler = make_scheduler(0);
+        let mut rng = StdRng::seed_from_u64(0);
+        // This should ideally not panic, but it does because select()
+        // returns 0 and then stats[0] is accessed on an empty vec.
+        let _ = scheduler.mutate(b"data", &mut rng);
+    }
+
+    /// BUG: report_hit increments coverage_hits but yield_now uses the
+    /// OLD coverage_hits/applications ratio. When applications==0,
+    /// yield_now is 0.0 even though we just recorded a hit (coverage_hits=1).
+    /// The hit is "lost" in the EMA calculation.
+    #[test]
+    fn bug_report_hit_with_zero_applications_ignores_hit() {
+        let mut scheduler = make_scheduler(1);
+        assert_eq!(scheduler.stats[0].applications, 0);
+        assert_eq!(scheduler.stats[0].coverage_hits, 0);
+        scheduler.report_hit(0);
+        // coverage_hits was incremented to 1
+        assert_eq!(scheduler.stats[0].coverage_hits, 1);
+        // But yield_now = coverage_hits/applications = 1/0 => takes the else branch => 0.0
+        // So EMA = 0.1*0.0 + 0.9*1.0 = 0.9
+        // The hit didn't increase ema_yield at all -- it actually DECREASED it from 1.0 to 0.9.
+        // This is a bug: recording a successful hit should not decrease the yield estimate.
+        assert!(
+            scheduler.stats[0].ema_yield < 1.0,
+            "BUG CONFIRMED: report_hit with 0 applications decreased ema from 1.0 to {}",
+            scheduler.stats[0].ema_yield
+        );
+    }
+
+    /// BUG: report_hit doesn't increment applications, so the yield
+    /// ratio (coverage_hits / applications) grows unboundedly after
+    /// repeated hits without calls to mutate().
+    /// After 10 hits with applications=1, yield = 10/1 = 10.0 (>1.0).
+    #[test]
+    fn bug_report_hit_yield_exceeds_one() {
+        let mut scheduler = make_scheduler(1);
+        scheduler.stats[0].applications = 1;
+        // Call report_hit 10 times without incrementing applications
+        for _ in 0..10 {
+            scheduler.report_hit(0);
+        }
+        // coverage_hits = 10, applications = 1, yield = 10.0
+        // EMA should be close to 10.0 after many updates with yield=10.0
+        // A yield > 1.0 makes no probabilistic sense (>100% success rate)
+        assert!(
+            scheduler.stats[0].ema_yield > 1.0,
+            "BUG CONFIRMED: ema_yield exceeded 1.0: {}",
+            scheduler.stats[0].ema_yield
+        );
+    }
+
+    /// Verify that the PsoMOptScheduler with 0 operators doesn't panic
+    /// but creates a degenerate scheduler with 1 operator (max(1)).
+    #[test]
+    fn pso_zero_operators_creates_one() {
+        let s = PsoMOptScheduler::new(0);
+        // new() does num_operators.max(1), so we get 1 operator
+        assert_eq!(s.operator_probs.len(), 1);
+        assert!((s.operator_probs[0] - 1.0).abs() < 1e-9);
+    }
+
+    /// BUG: PsoMOptScheduler record() with out-of-bounds op_id silently
+    /// drops the record. This means if the caller passes the wrong index,
+    /// statistics are silently lost with no indication.
+    #[test]
+    fn pso_record_out_of_bounds_silently_drops() {
+        let mut s = PsoMOptScheduler::new(3);
+        s.record(99, true); // silently dropped
+        // All attempts should still be 0
+        for i in 0..3 {
+            assert_eq!(s.operator_attempts[i], 0);
+            assert_eq!(s.operator_finds[i], 0);
+        }
+    }
+
+    /// PsoMOptScheduler: after many updates with zero activity across
+    /// all operators, probabilities should remain valid (sum to 1.0,
+    /// all positive).
+    #[test]
+    fn pso_update_with_zero_activity_stays_valid() {
+        let mut s = PsoMOptScheduler::new(4);
+        let mut rng = StdRng::seed_from_u64(42);
+        // No records at all, just update 50 times
+        for _ in 0..50 {
+            s.update_probabilities_with_rng(&mut rng);
+        }
+        let sum: f64 = s.operator_probs.iter().sum();
+        assert!(
+            (sum - 1.0).abs() < 1e-9,
+            "probs should sum to 1.0 after zero-activity updates, got {sum}"
+        );
+        for (i, &p) in s.operator_probs.iter().enumerate() {
+            assert!(p > 0.0, "operator {i} prob should be > 0, got {p}");
+            assert!(!p.is_nan(), "operator {i} prob is NaN");
+        }
+    }
+
+    // ==================================================================
     // PsoMOptScheduler tests
     // ==================================================================
 

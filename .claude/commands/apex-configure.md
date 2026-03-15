@@ -1,14 +1,14 @@
-# APEX Threat Model Wizard
+# APEX Configure — Threat Model Wizard
 
 Interactive wizard that analyzes a project and generates a `[threat_model]` section for `apex.toml`.
 
 ## Usage
 ```
-/apex-threat-model [target]
+/apex-configure [target]
 ```
 Examples:
-- `/apex-threat-model` — analyze current directory
-- `/apex-threat-model /path/to/project`
+- `/apex-configure` — analyze current directory
+- `/apex-configure /path/to/project`
 
 ## Instructions
 
@@ -152,6 +152,6 @@ Write this to <TARGET>/apex.toml? (y/n)
 
 ```
 Threat model configured! Next steps:
-  /apex-run   — re-run audit with threat model (should see fewer false positives)
-  /apex       — full dashboard with updated metrics
+  /apex hunt    — bug-finding with threat model (should see fewer false positives)
+  /apex         — full analysis cycle with updated metrics
 ```

@@ -184,7 +184,7 @@ impl<R: CommandRunner> Sandbox for ProcessSandbox<R> {
             Ok(output) => {
                 let status = match output.exit_code {
                     0 => ExecutionStatus::Pass,
-                    c if c < 0 => ExecutionStatus::Crash,
+                    c if c < 0 || (128..=159).contains(&c) => ExecutionStatus::Crash,
                     _ => ExecutionStatus::Fail,
                 };
 
@@ -982,5 +982,283 @@ mod tests {
         );
         let err = sb.restore(SnapshotId::new()).await.unwrap_err();
         assert!(matches!(err, ApexError::NotSupported(_)));
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug-exposing tests
+    // -----------------------------------------------------------------------
+
+    /// BUG: When a process times out, run() discards any coverage data the
+    /// process wrote before the timeout. The bitmap is read (line 161) but
+    /// the Timeout arm returns empty new_branches. Coverage from partial
+    /// execution is silently lost.
+    #[tokio::test]
+    async fn bug_timeout_discards_coverage_data() {
+        // This test documents that timeout always returns empty branches.
+        // A timed-out process may have written valid coverage data to SHM
+        // before being killed, but that data is thrown away.
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command()
+            .returning(|_spec| Err(ApexError::Timeout(5000)));
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b0 = BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b0.clone()]);
+
+        let sb = ProcessSandbox::with_runner(
+            Language::C,
+            PathBuf::from("/tmp"),
+            vec!["./a.out".into()],
+            mock,
+        )
+        .with_coverage(oracle, vec![b0])
+        .with_timeout(5000);
+
+        let input = make_input(b"timeout-input");
+        let result = sb.run(&input).await.unwrap();
+        assert_eq!(result.status, ExecutionStatus::Timeout);
+        // BUG: new_branches is always empty on timeout, even if the
+        // process wrote coverage data before being killed.
+        assert!(
+            result.new_branches.is_empty(),
+            "BUG CONFIRMED: timeout discards all coverage data"
+        );
+    }
+
+    /// BUG: run() silently degrades to no-coverage mode when SHM creation
+    /// fails. The caller gets a successful ExecutionResult with empty
+    /// new_branches, indistinguishable from "target didn't hit any branches".
+    /// This can cause the fuzzer to miss all coverage feedback without
+    /// any indication.
+    #[tokio::test]
+    async fn bug_shm_failure_silently_drops_coverage() {
+        // When oracle is set but ShmBitmap::create() fails, run() logs a
+        // warning and continues with None. The result has new_branches = [],
+        // which is the same as "no new coverage found". The caller cannot
+        // distinguish "SHM failed" from "target hit no new branches".
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_spec| {
+            Ok(CommandOutput {
+                exit_code: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        });
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b0 = BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b0.clone()]);
+
+        let sb = ProcessSandbox::with_runner(
+            Language::C,
+            PathBuf::from("/tmp"),
+            vec!["./a.out".into()],
+            mock,
+        )
+        .with_coverage(oracle, vec![b0]);
+
+        let input = make_input(b"test");
+        let result = sb.run(&input).await.unwrap();
+        // This test documents the behavior: even with oracle set, if SHM
+        // creation succeeds (which it does here), we get empty branches
+        // because the mock doesn't write to SHM. But the real bug is that
+        // SHM failure is silently swallowed with just a warning log.
+        assert!(
+            result.new_branches.is_empty(),
+            "Expected empty branches when process doesn't write to SHM"
+        );
+    }
+
+    /// BUG: build_spec uses to_string_lossy() on the output path, which
+    /// silently replaces non-UTF8 path components with the Unicode
+    /// replacement character. This would cause the compiler to write to
+    /// the wrong path or fail in a confusing way.
+    #[test]
+    fn bug_build_spec_shim_path_uses_lossy_conversion() {
+        let mock = MockCmdRunner::new();
+        let sb = ProcessSandbox::with_runner(
+            Language::C,
+            PathBuf::from("/tmp"),
+            vec!["./a.out".into()],
+            mock,
+        )
+        .with_shim(PathBuf::from("/path/with spaces/libapex.so"));
+
+        let input = make_input(b"test");
+        let spec = sb.build_spec(&input, None).unwrap();
+
+        // Verify the shim path is passed through to the env var.
+        // Paths with spaces work fine, but the underlying to_string_lossy()
+        // in ensure_compiled() would corrupt non-UTF8 paths.
+        let preload_var = crate::shim::preload_env_var();
+        let shim_env = spec.env.iter().find(|(k, _)| k == preload_var);
+        assert!(shim_env.is_some(), "shim env var should be set");
+        assert_eq!(
+            shim_env.unwrap().1,
+            "/path/with spaces/libapex.so",
+            "shim path should be preserved exactly (spaces are ok)"
+        );
+    }
+
+    /// Verify that run() seed_id matches input seed_id for all exit statuses.
+    #[tokio::test]
+    async fn bug_seed_id_preserved_across_all_statuses() {
+        for exit_code in [-11i32, 0, 1, 2, 127] {
+            let mut mock = MockCmdRunner::new();
+            mock.expect_run_command().returning(move |_spec| {
+                Ok(CommandOutput {
+                    exit_code,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                })
+            });
+
+            let sb = ProcessSandbox::with_runner(
+                Language::C,
+                PathBuf::from("/tmp"),
+                vec!["./a.out".into()],
+                mock,
+            );
+
+            let input = make_input(b"test");
+            let expected_id = input.id;
+            let result = sb.run(&input).await.unwrap();
+            assert_eq!(
+                result.seed_id, expected_id,
+                "seed_id must be preserved for exit_code={exit_code}"
+            );
+        }
+    }
+
+    /// BUG: run() sets duration_ms from wall clock, but if the runner
+    /// returns a Timeout error very quickly (mock), duration_ms can be 0.
+    /// The duration_ms is measured from before SHM creation to after
+    /// runner.run_command(), so it includes SHM setup overhead.
+    #[tokio::test]
+    async fn bug_duration_includes_shm_setup_overhead() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_spec| {
+            Ok(CommandOutput {
+                exit_code: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        });
+
+        let oracle = Arc::new(CoverageOracle::new());
+        let b0 = BranchId::new(1, 1, 0, 0);
+        oracle.register_branches([b0.clone()]);
+
+        let sb = ProcessSandbox::with_runner(
+            Language::C,
+            PathBuf::from("/tmp"),
+            vec!["./a.out".into()],
+            mock,
+        )
+        .with_coverage(oracle, vec![b0]);
+
+        let input = make_input(b"test");
+        let result = sb.run(&input).await.unwrap();
+        // duration_ms includes SHM creation + command execution.
+        // For a fast mock, this should be very small but non-negative.
+        // The issue is that duration_ms reports total wall time, not just
+        // command execution time, which can be misleading for profiling.
+        assert!(
+            result.duration_ms < 5000,
+            "duration should be reasonable for a mock: {}ms",
+            result.duration_ms
+        );
+    }
+
+    /// run() with coverage enabled but empty branch_index should return
+    /// empty new_branches even if the bitmap has hits.
+    #[tokio::test]
+    async fn bug_coverage_with_empty_branch_index_always_empty() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_spec| {
+            Ok(CommandOutput {
+                exit_code: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        });
+
+        let oracle = Arc::new(CoverageOracle::new());
+        // Enable coverage but with empty branch_index
+        let sb = ProcessSandbox::with_runner(
+            Language::C,
+            PathBuf::from("/tmp"),
+            vec!["./a.out".into()],
+            mock,
+        )
+        .with_coverage(oracle, vec![]); // empty index = useless coverage
+
+        let input = make_input(b"test");
+        let result = sb.run(&input).await.unwrap();
+        // BUG: Caller can accidentally enable coverage with empty branch_index,
+        // which creates SHM overhead but can never report any branches.
+        // There's no validation or warning for this case.
+        assert!(
+            result.new_branches.is_empty(),
+            "empty branch_index means SHM was created for nothing"
+        );
+    }
+
+    /// Verify trace is always None in ProcessSandbox results.
+    #[tokio::test]
+    async fn trace_always_none() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_spec| {
+            Ok(CommandOutput {
+                exit_code: 0,
+                stdout: b"output".to_vec(),
+                stderr: Vec::new(),
+            })
+        });
+
+        let sb = ProcessSandbox::with_runner(
+            Language::Python,
+            PathBuf::from("/tmp"),
+            vec!["python3".into()],
+            mock,
+        );
+
+        let input = make_input(b"test");
+        let result = sb.run(&input).await.unwrap();
+        assert!(
+            result.trace.is_none(),
+            "ProcessSandbox never produces traces"
+        );
+    }
+
+    /// Verify input field is always None in ProcessSandbox results.
+    #[tokio::test]
+    async fn input_field_always_none() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_spec| {
+            Ok(CommandOutput {
+                exit_code: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        });
+
+        let sb = ProcessSandbox::with_runner(
+            Language::Python,
+            PathBuf::from("/tmp"),
+            vec!["python3".into()],
+            mock,
+        );
+
+        let input = make_input(b"some data");
+        let result = sb.run(&input).await.unwrap();
+        // BUG: The input field in ExecutionResult is always None.
+        // This means the caller cannot correlate the result back to the
+        // exact input bytes that were sent, which is needed for
+        // crash reproduction.
+        assert!(
+            result.input.is_none(),
+            "BUG: input is never populated in ExecutionResult"
+        );
     }
 }

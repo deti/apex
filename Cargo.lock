@@ -210,6 +210,7 @@ dependencies = [
  "mockall",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "toml",
@@ -363,12 +364,16 @@ version = "0.1.0"
 dependencies = [
  "apex-core",
  "apex-coverage",
+ "http 0.2.12",
  "prost",
  "serde",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-build",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -3879,6 +3884,7 @@ version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
 dependencies = [
+ "log",
  "pin-project-lite",
  "tracing-attributes",
  "tracing-core",

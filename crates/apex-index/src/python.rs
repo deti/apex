@@ -1196,4 +1196,218 @@ mod tests {
         let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
         assert!(branches.is_empty()); // len != 2
     }
+
+    // -----------------------------------------------------------------------
+    // Bug-hunting tests
+    // -----------------------------------------------------------------------
+
+    /// BUG: Large line numbers (> u32::MAX) get silently truncated via
+    /// `unsigned_abs() as u32` in parse_apex_format. While Python files
+    /// won't realistically have 4 billion lines, the code should not silently
+    /// produce wrong line numbers for any valid i64 input.
+    #[test]
+    fn bug_line_number_truncation_in_apex_format() {
+        // pair[0] = 4_294_967_296 (u32::MAX + 1) — unsigned_abs gives
+        // 4_294_967_296u64, which truncates to 0u32.
+        let json = r#"{
+            "files": {
+                "big.py": {
+                    "executed_branches": [[4294967296, 5]],
+                    "missing_branches": [],
+                    "all_branches": [[4294967296, 5]]
+                }
+            }
+        }"#;
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        let branches = parse_apex_format(&data, Path::new("/"));
+        assert_eq!(branches.len(), 1);
+        // BUG: line should be 4294967296 but gets truncated to 0
+        // This demonstrates that `as u32` silently wraps.
+        assert_eq!(branches[0].line, 0, "line was silently truncated to 0 — data loss");
+    }
+
+    /// Same truncation bug in parse_coverage_all_branches (raw format path).
+    #[test]
+    fn bug_line_number_truncation_in_raw_format() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"big.py": {"executed_branches": [[4294967296, 5]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, _) = parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        assert_eq!(branches.len(), 1);
+        // BUG: line truncated from 4294967296 to 0
+        assert_eq!(branches[0].line, 0, "line was silently truncated to 0 — data loss");
+    }
+
+    /// BUG: parse_coverage_all_branches double-counts branches that appear in
+    /// both executed_branches and missing_branches. While coverage.py normally
+    /// keeps these disjoint, the code provides no deduplication, so a malformed
+    /// or manually-constructed coverage report inflates total_branches.
+    #[test]
+    fn bug_duplicate_branches_in_all_branches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        // Same branch [10, 12] appears in both executed and missing
+        let json = r#"{
+            "files": {
+                "dup.py": {
+                    "executed_branches": [[10, 12]],
+                    "missing_branches": [[10, 12]]
+                }
+            }
+        }"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, _) = parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        // BUG: Returns 2 branches when logically there's only 1 unique branch.
+        // This inflates total_branches and gives wrong coverage percentage.
+        assert_eq!(branches.len(), 2, "duplicate branch counted twice — inflates total_branches");
+    }
+
+    /// BUG: parse_coverage_executed prefers APEX format, but if a raw
+    /// coverage.py JSON happens to include all three fields (executed_branches,
+    /// missing_branches, all_branches) as proper typed arrays, it gets parsed
+    /// as APEX format silently. This test documents the implicit priority.
+    #[test]
+    fn bug_format_detection_ambiguity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        // This JSON is valid for BOTH ApexCoverageJson and CoverageJsonRaw
+        let json = r#"{
+            "files": {
+                "mod.py": {
+                    "executed_branches": [[5, 8], [10, -1]],
+                    "missing_branches": [[15, 20]],
+                    "all_branches": [[5, 8], [10, -1], [15, 20]]
+                }
+            }
+        }"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        // Both parsers would return the same 2 executed branches,
+        // so the result is the same. But the APEX path is taken.
+        assert_eq!(branches.len(), 2);
+    }
+
+    /// BUG: negative `from` values produce unsigned line numbers via
+    /// unsigned_abs(). coverage.py uses negative "to" values to signal
+    /// exits, but negative "from" is unusual. The code silently converts
+    /// e.g. -10 to line 10.
+    #[test]
+    fn bug_negative_from_in_raw_format() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        // negative from = -10, coverage.py shouldn't produce this, but
+        // if it does the code silently maps it to line 10
+        let json = r#"{"files": {"a.py": {"executed_branches": [[-10, 5]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert_eq!(branches.len(), 1);
+        // unsigned_abs(-10) = 10 — silent sign flip
+        assert_eq!(branches[0].line, 10, "negative from silently became positive via unsigned_abs");
+    }
+
+    /// Test that parse_coverage_all_branches handles a file path that is
+    /// exactly the repo root (edge case for strip_prefix).
+    #[test]
+    fn bug_file_path_equals_repo_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        // File path equals repo root — strip_prefix gives ""
+        let json = r#"{"files": {"/repo": {"executed_branches": [[1, 2]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, file_paths) =
+            parse_coverage_all_branches(&json_path, Path::new("/repo")).unwrap();
+        assert_eq!(branches.len(), 1);
+        // strip_prefix("/repo", "/repo") = "" — empty path
+        let path = file_paths.values().next().unwrap();
+        assert_eq!(path, &PathBuf::from(""), "strip_prefix produces empty path for exact match");
+        // file_id is hash of "" which is the same as empty string hash
+        assert_eq!(branches[0].file_id, fnv1a_hash(""));
+    }
+
+    /// Test that CoverageJsonRaw gracefully handles null values in branch arrays.
+    #[test]
+    fn bug_null_values_in_branch_pair() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": [[null, null]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, _) = parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        // null.as_i64() returns None, unwrap_or(0) gives 0
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].line, 0);
+        assert_eq!(branches[0].direction, 0);
+    }
+
+    /// Test parse_coverage_executed with empty string file path.
+    #[test]
+    fn bug_empty_file_path_in_coverage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"": {"executed_branches": [[1, 2]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let branches = parse_coverage_executed(&json_path, tmp.path()).unwrap();
+        assert_eq!(branches.len(), 1);
+        // file_id from empty string
+        assert_eq!(branches[0].file_id, fnv1a_hash(""));
+    }
+
+    /// BUG: Very large negative `to` values don't affect direction logic
+    /// but unsigned_abs on `from` with i64::MIN would overflow in debug mode.
+    /// In release mode, i64::MIN.unsigned_abs() = 2^63 which truncates to 0u32.
+    #[test]
+    fn bug_i64_min_from_value() {
+        let json = r#"{
+            "files": {
+                "edge.py": {
+                    "executed_branches": [[-9223372036854775808, 1]],
+                    "missing_branches": [],
+                    "all_branches": [[-9223372036854775808, 1]]
+                }
+            }
+        }"#;
+        let data: ApexCoverageJson = serde_json::from_str(json).unwrap();
+        let branches = parse_apex_format(&data, Path::new("/"));
+        assert_eq!(branches.len(), 1);
+        // i64::MIN.unsigned_abs() = 9223372036854775808u64, as u32 = 0
+        assert_eq!(branches[0].line, 0, "i64::MIN truncated to 0 via as u32");
+    }
+
+    /// Test that multiple files with same relative path (after different
+    /// strip_prefix results) map to the same file_id — a collision risk.
+    #[test]
+    fn bug_file_id_collision_different_abs_paths_same_relative() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        // Two different absolute paths that both strip to "src/app.py"
+        let json = r#"{
+            "files": {
+                "/repo/src/app.py": {"executed_branches": [[1, 2]]},
+                "/other/repo/src/app.py": {"executed_branches": [[3, 4]]}
+            }
+        }"#;
+        std::fs::write(&json_path, json).unwrap();
+        // strip_prefix with "/repo" — first strips to "src/app.py", second doesn't strip
+        let (branches, file_paths) =
+            parse_coverage_all_branches(&json_path, Path::new("/repo")).unwrap();
+        assert_eq!(branches.len(), 2);
+        // One path strips to "src/app.py", the other stays as "/other/repo/src/app.py"
+        // So they get different file_ids — no collision in this case
+        assert_eq!(file_paths.len(), 2);
+    }
+
+    /// Test that parse_coverage_all_branches handles float values in pairs.
+    /// coverage.py always outputs integers, but JSON allows floats.
+    #[test]
+    fn bug_float_values_in_branch_pair() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json_path = tmp.path().join("cov.json");
+        let json = r#"{"files": {"a.py": {"executed_branches": [[10.5, 20.7]]}}}"#;
+        std::fs::write(&json_path, json).unwrap();
+        let (branches, _) = parse_coverage_all_branches(&json_path, Path::new("/")).unwrap();
+        // as_i64() on a float returns None (serde_json behavior), falls back to 0
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].line, 0, "float from-value silently becomes line 0");
+        assert_eq!(branches[0].direction, 0, "float to-value silently becomes direction 0");
+    }
 }

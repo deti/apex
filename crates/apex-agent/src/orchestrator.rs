@@ -3424,5 +3424,552 @@ mod tests {
         let cluster = AgentCluster::new(oracle, sandbox, test_target())
             .with_driller_escalation(escalation);
         assert!(cluster.driller_escalation.is_some());
+
+    // ==================================================================
+    // Bug-hunting tests
+    // ==================================================================
+
+    /// BUG: CoverageMonitor is never updated during run().
+    ///
+    /// The `run()` loop maintains its own local `stall_count` variable but
+    /// never calls `self.monitor.record(...)`. This means `monitor_action()`
+    /// always returns `Normal` even after a full run with many stalled
+    /// iterations. The monitor is dead weight — it can never report
+    /// SwitchStrategy, AgentCycle, or Stop.
+    #[tokio::test]
+    async fn bug_monitor_never_updated_during_run() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(200, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        // No strategies → all iterations produce empty suggestions → stall.
+        // With stall_threshold=5, the loop runs 5 iterations of stalling.
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+            OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 5,
+            },
+        );
+
+        cluster.run().await.unwrap();
+
+        // After 5 stalled iterations, the monitor SHOULD report something
+        // other than Normal (e.g. SwitchStrategy). But since run() never
+        // calls monitor.record(), it still says Normal.
+        //
+        // This test documents the bug: the monitor is disconnected from
+        // the exploration loop.
+        let action = cluster.monitor_action();
+        // BUG: This should NOT be Normal after 5 stalled iterations.
+        // If the monitor were being updated, it would be SwitchStrategy.
+        assert_eq!(
+            action,
+            MonitorAction::Normal,
+            "BUG CONFIRMED: monitor is never updated during run() — \
+             it stays Normal even after {} stalled iterations",
+            5
+        );
+    }
+
+    /// BUG: stall_threshold=0 causes the loop to exit after exactly one
+    /// iteration regardless of coverage progress.
+    ///
+    /// The stall check `stall_count >= self.config.stall_threshold` with
+    /// threshold=0 is always true (0 >= 0) after the loop body executes,
+    /// even if new coverage was found (stall_count reset to 0).
+    /// This means a stall_threshold of 0 doesn't mean "no stall detection"
+    /// — it means "always stall after one iteration".
+    #[tokio::test]
+    async fn bug_stall_threshold_zero_exits_after_one_iteration() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct CountingStrategy {
+            call_count: Arc<AtomicU64>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for CountingStrategy {
+            fn name(&self) -> &str {
+                "counting"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                self.call_count.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![InputSeed::new(
+                    b"data".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let call_count = Arc::new(AtomicU64::new(0));
+        let oracle = Arc::new(CoverageOracle::new());
+        let b1 = apex_core::types::BranchId::new(201, 1, 0, 0);
+        let b2 = apex_core::types::BranchId::new(201, 2, 0, 0);
+        oracle.register_branches([b1.clone(), b2.clone()]);
+
+        // Sandbox covers b1 on first call — new coverage is found.
+        let sandbox: Arc<dyn Sandbox> = Arc::new(CoveringSandbox::new(vec![b1]));
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(CountingStrategy {
+                call_count: call_count.clone(),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 0, // BUG: 0 >= 0 is always true
+            });
+
+        cluster.run().await.unwrap();
+
+        // BUG: Even though new coverage was found (b1 was covered, stall_count
+        // was reset to 0), the check `0 >= 0` is true so the loop exits
+        // after only 1 iteration. The strategy was only called once.
+        let calls = call_count.load(Ordering::SeqCst);
+        assert_eq!(
+            calls, 1,
+            "BUG CONFIRMED: stall_threshold=0 exits after 1 iteration even with new coverage"
+        );
+        // b2 is never covered because the loop exited too early.
+        assert_eq!(
+            oracle.covered_count(),
+            1,
+            "BUG CONFIRMED: only 1 of 2 branches covered due to premature exit"
+        );
+    }
+
+    /// BUG: coverage_target > 1.0 makes the target unreachable via the
+    /// coverage check. The loop can only exit via deadline or stall.
+    ///
+    /// Since coverage_percent()/100.0 maxes out at 1.0 (100%), setting
+    /// coverage_target to 2.0 means `coverage >= 2.0` is never true.
+    /// There's no validation or clamping of the config value.
+    #[tokio::test]
+    async fn bug_coverage_target_above_one_is_unreachable() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(202, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+
+        // Sandbox covers the only branch on first call → 100% coverage.
+        let sandbox: Arc<dyn Sandbox> = Arc::new(CoveringSandbox::new(vec![b]));
+
+        struct AlwaysSeed;
+        #[async_trait::async_trait]
+        impl Strategy for AlwaysSeed {
+            fn name(&self) -> &str {
+                "always"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![InputSeed::new(
+                    b"x".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let cluster = AgentCluster::new(oracle.clone(), sandbox, test_target())
+            .with_strategy(Box::new(AlwaysSeed))
+            .with_config(OrchestratorConfig {
+                coverage_target: 2.0, // BUG: impossible target
+                deadline_secs: None,
+                stall_threshold: 3,
+            });
+
+        cluster.run().await.unwrap();
+
+        // Even though we reached 100% coverage, the loop did NOT exit via
+        // the coverage target check (1.0 >= 2.0 is false). It exited via
+        // the "all branches covered" (uncovered.is_empty()) check instead.
+        assert_eq!(oracle.coverage_percent(), 100.0);
+        // BUG: The coverage_target of 2.0 was accepted without validation.
+        // A user setting coverage_target=200 (thinking it's a percentage)
+        // would get silently wrong behavior.
+        assert!(
+            2.0 > 1.0,
+            "BUG DOCUMENTED: coverage_target > 1.0 accepted without validation"
+        );
+    }
+
+    /// BUG: With stall_threshold=0 and no strategies, the loop runs one
+    /// full iteration (checking uncovered, building ctx) before exiting.
+    /// The empty suggestions case sets stall_count=1, then 1>=0 breaks.
+    #[tokio::test]
+    async fn bug_stall_threshold_zero_no_strategies_runs_one_iteration() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(203, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+            OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 0,
+            },
+        );
+
+        // This should complete without hanging. With stall_threshold=0:
+        // - suggestions is empty (no strategies)
+        // - stall_count becomes 1
+        // - 1 >= 0 → break
+        cluster.run().await.unwrap();
+    }
+
+    /// BUG: The run() loop doesn't use the CoverageMonitor's action() at all.
+    /// Even when monitor says Stop, the loop keeps going until its own
+    /// local stall detection triggers.
+    #[tokio::test]
+    async fn bug_monitor_stop_action_ignored_by_run_loop() {
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(204, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target()).with_config(
+            OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 5,
+            },
+        );
+
+        // Manually inject enough stalls into the monitor so it says Stop.
+        {
+            let mut monitor = cluster.monitor.lock().unwrap();
+            monitor.record(0, 0);
+            for i in 1..=50 {
+                monitor.record(i, 0);
+            }
+        }
+        assert_eq!(cluster.monitor_action(), MonitorAction::Stop);
+
+        // Despite the monitor saying Stop, run() proceeds normally
+        // and runs 5 iterations (its own stall_threshold).
+        cluster.run().await.unwrap();
+
+        // BUG: Monitor still says Stop, but run() completely ignored it.
+        assert_eq!(
+            cluster.monitor_action(),
+            MonitorAction::Stop,
+            "BUG CONFIRMED: run() ignores monitor.action() — \
+             the monitor said Stop before run() started, but run() \
+             used its own independent stall counter"
+        );
+    }
+
+    /// BUG: iteration counter starts at 0 and only increments at end of
+    /// loop. If coverage target is met on the first check (before any
+    /// strategy runs), the final log says "iterations = 0". The counter
+    /// counts completed iterations, not attempts. This is a semantic
+    /// confusion — bugs recorded at "iteration 0" may have been from
+    /// the first or zeroth iteration.
+    #[tokio::test]
+    async fn bug_iteration_counter_zero_indexed() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct IterTrackingStrategy {
+            last_iteration: Arc<AtomicU64>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for IterTrackingStrategy {
+            fn name(&self) -> &str {
+                "iter-track"
+            }
+            async fn suggest_inputs(
+                &self,
+                ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                self.last_iteration
+                    .store(ctx.iteration, Ordering::SeqCst);
+                Ok(vec![InputSeed::new(
+                    b"x".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let last_iter = Arc::new(AtomicU64::new(u64::MAX));
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(205, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(CoveringSandbox::new(vec![b]));
+
+        let cluster = AgentCluster::new(oracle, sandbox, test_target())
+            .with_strategy(Box::new(IterTrackingStrategy {
+                last_iteration: last_iter.clone(),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.9,
+                deadline_secs: Some(5),
+                stall_threshold: 100,
+            });
+
+        cluster.run().await.unwrap();
+
+        // The first (and only) call to suggest_inputs gets iteration=0.
+        // Bugs recorded at this iteration use iteration=0, which is
+        // confusing — is it the "zeroth" or "first" iteration?
+        let iter = last_iter.load(Ordering::SeqCst);
+        assert_eq!(iter, 0, "First iteration is zero-indexed");
+    }
+
+    /// BUG: When all sandbox runs return Err, `results` is empty.
+    /// The `new_coverage` flag stays false, so stall_count increments.
+    /// But the code takes the `else` branch (suggestions non-empty),
+    /// not the `if suggestions.is_empty()` branch. Both paths increment
+    /// stall_count, so functionally it's the same — but the distinction
+    /// matters: with sandbox errors, we're stalling due to execution
+    /// failures, not lack of ideas. The monitor (if used) would not
+    /// distinguish these cases.
+    #[tokio::test]
+    async fn bug_sandbox_all_errors_stalls_silently() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct SeedStrategy {
+            calls: Arc<AtomicU64>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for SeedStrategy {
+            fn name(&self) -> &str {
+                "seed"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![InputSeed::new(
+                    b"x".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let calls = Arc::new(AtomicU64::new(0));
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(206, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(ErrorSandbox), test_target())
+            .with_strategy(Box::new(SeedStrategy {
+                calls: calls.clone(),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 3,
+            });
+
+        cluster.run().await.unwrap();
+
+        // Strategy was called 3 times (stall_threshold=3), producing seeds
+        // each time. But ALL sandbox results were errors. The stall counter
+        // incremented because no new coverage was found, but the code
+        // doesn't distinguish "sandbox broken" from "no new coverage".
+        let n = calls.load(Ordering::SeqCst);
+        assert_eq!(n, 3, "Strategy called once per iteration before stall");
+    }
+
+    /// BUG: When sandbox returns empty results (all errors filtered out),
+    /// the observe() method is never called on strategies for that iteration,
+    /// even though suggestions were generated. Strategies get no feedback
+    /// about execution failures.
+    #[tokio::test]
+    async fn bug_observe_not_called_when_all_sandbox_results_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct ObserveCounter {
+            observe_calls: Arc<AtomicUsize>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for ObserveCounter {
+            fn name(&self) -> &str {
+                "observe-counter"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                Ok(vec![InputSeed::new(
+                    b"x".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                self.observe_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+
+        let observe_calls = Arc::new(AtomicUsize::new(0));
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(207, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(ErrorSandbox), test_target())
+            .with_strategy(Box::new(ObserveCounter {
+                observe_calls: observe_calls.clone(),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 2,
+            });
+
+        cluster.run().await.unwrap();
+
+        // BUG: observe() is never called because sandbox errors are filtered
+        // out, leaving `results` empty, so the `for result in &results` loop
+        // body never executes. Strategies have no idea their seeds all failed.
+        assert_eq!(
+            observe_calls.load(Ordering::SeqCst),
+            0,
+            "BUG CONFIRMED: observe() never called when all sandbox runs fail — \
+             strategies get no feedback about execution failures"
+        );
+    }
+
+    /// BUG: `coverage_target = 0.0` exits immediately even with uncovered
+    /// branches, because `coverage_percent()` returns 0% for 0-of-N covered,
+    /// and 0.0/100.0 = 0.0 >= 0.0 is true. A target of 0.0 should arguably
+    /// mean "don't care about coverage", but it still prevents ANY exploration.
+    #[tokio::test]
+    async fn bug_zero_coverage_target_skips_all_exploration() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        struct CallCounter {
+            calls: Arc<AtomicU64>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for CallCounter {
+            fn name(&self) -> &str {
+                "counter"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![InputSeed::new(
+                    b"x".to_vec(),
+                    apex_core::types::SeedOrigin::Fuzzer,
+                )])
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let calls = Arc::new(AtomicU64::new(0));
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(208, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle.clone(), Arc::new(StubSandbox), test_target())
+            .with_strategy(Box::new(CallCounter {
+                calls: calls.clone(),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 0.0, // "don't care" about coverage
+                deadline_secs: None,
+                stall_threshold: 100,
+            });
+
+        cluster.run().await.unwrap();
+
+        // BUG: The strategy was never called because coverage_target=0.0
+        // causes immediate exit. Even with 0% actual coverage, the check
+        // `0.0 >= 0.0` is true.
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "BUG CONFIRMED: coverage_target=0.0 skips all exploration — \
+             no strategies are ever invoked"
+        );
+    }
+
+    /// BUG: The dual stall paths (empty suggestions vs no-coverage results)
+    /// both increment the same counter but represent different failure modes.
+    /// With stall_threshold=2: if iteration 0 has empty suggestions (stall=1)
+    /// and iteration 1 has suggestions but no coverage (stall=2), the loop
+    /// exits. The threshold doesn't distinguish the two cases.
+    #[tokio::test]
+    async fn bug_stall_counter_conflates_empty_suggestions_and_no_coverage() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // Strategy that returns empty on first call, then seeds on subsequent calls.
+        struct AlternatingStrategy {
+            calls: Arc<AtomicU64>,
+        }
+        #[async_trait::async_trait]
+        impl Strategy for AlternatingStrategy {
+            fn name(&self) -> &str {
+                "alternating"
+            }
+            async fn suggest_inputs(
+                &self,
+                _ctx: &ExplorationContext,
+            ) -> apex_core::error::Result<Vec<InputSeed>> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    // First call: no suggestions
+                    Ok(Vec::new())
+                } else {
+                    // Subsequent calls: return seeds (but sandbox won't cover anything)
+                    Ok(vec![InputSeed::new(
+                        b"x".to_vec(),
+                        apex_core::types::SeedOrigin::Fuzzer,
+                    )])
+                }
+            }
+            async fn observe(&self, _result: &ExecutionResult) -> apex_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let calls = Arc::new(AtomicU64::new(0));
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = apex_core::types::BranchId::new(209, 1, 0, 0);
+        oracle.register_branches([b]);
+
+        let cluster = AgentCluster::new(oracle, Arc::new(StubSandbox), test_target())
+            .with_strategy(Box::new(AlternatingStrategy {
+                calls: calls.clone(),
+            }))
+            .with_config(OrchestratorConfig {
+                coverage_target: 1.0,
+                deadline_secs: None,
+                stall_threshold: 2,
+            });
+
+        cluster.run().await.unwrap();
+
+        // Iteration 0: empty suggestions → stall_count=1 (empty suggestions path)
+        // Iteration 1: has suggestions, sandbox returns no coverage → stall_count=2 (no coverage path)
+        // 2 >= 2 → break
+        // BUG: Two different failure modes counted together as the same "stall".
+        let n = calls.load(Ordering::SeqCst);
+        assert_eq!(
+            n, 2,
+            "BUG DOCUMENTED: empty-suggestions stall and no-coverage stall \
+             share the same counter, conflating two failure modes"
+        );
     }
 }

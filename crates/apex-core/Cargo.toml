@@ -18,5 +18,8 @@ async-trait = "0.1"
 tracing = "0.1"
 tokio = { workspace = true }
 
+[dependencies.tempfile]
+version = "3"
+
 [dev-dependencies]
 mockall = { workspace = true }

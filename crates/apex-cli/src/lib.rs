@@ -1659,9 +1659,9 @@ fn build_source_cache(
     let extensions: &[&str] = match lang {
         Language::Rust => &["rs"],
         Language::Python => &["py"],
-        Language::JavaScript => &["js", "ts"],
+        Language::JavaScript => &["js", "ts", "jsx", "tsx", "mjs", "cjs"],
         Language::Java => &["java"],
-        Language::C => &["c", "h"],
+        Language::C => &["c", "h", "cpp", "cc", "cxx", "hpp", "hh"],
         Language::Wasm => &["rs", "wat"],
         Language::Ruby => &["rb"],
         Language::Kotlin => &["kt", "kts"],
@@ -1699,12 +1699,25 @@ fn walk_recursive(
             let path = entry.path();
             if path.is_dir() {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if name.starts_with('.') || name == "target" || name == "node_modules" {
+                if name.starts_with('.')
+                    || matches!(
+                        name,
+                        "target"
+                            | "node_modules"
+                            | "venv"
+                            | ".venv"
+                            | "__pycache__"
+                            | "dist"
+                            | "build"
+                            | ".git"
+                    )
+                {
                     continue;
                 }
                 walk_recursive(&path, extensions, files)?;
             } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if extensions.contains(&ext) {
+                let ext_lower = ext.to_ascii_lowercase();
+                if extensions.iter().any(|e| e.eq_ignore_ascii_case(&ext_lower)) {
                     files.push(path);
                 }
             }
@@ -4104,5 +4117,93 @@ mod tests {
         report.discovered_at_iteration = 42;
         let summary = apex_core::types::BugSummary::new(vec![report]);
         print_json_bug_report(&summary);
+    }
+
+    // -- Bug-exposing tests for walkdir / build_source_cache -----------------
+
+    fn create_test_tree(dirs: &[&str], files: &[&str]) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        for d in dirs {
+            std::fs::create_dir_all(tmp.path().join(d)).unwrap();
+        }
+        for f in files {
+            let p = tmp.path().join(f);
+            if let Some(parent) = p.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&p, "// content").unwrap();
+        }
+        tmp
+    }
+
+    #[test]
+    fn bug_walkdir_skips_venv() {
+        let tmp = create_test_tree(
+            &["src", "venv/lib"],
+            &["src/main.py", "venv/lib/dep.py"],
+        );
+        let files = walkdir(tmp.path(), &["py"]).unwrap();
+        let names: Vec<_> = files.iter().map(|p| p.file_name().unwrap().to_str().unwrap()).collect();
+        assert!(names.contains(&"main.py"), "should find src/main.py");
+        assert!(!names.contains(&"dep.py"), "should skip venv/lib/dep.py");
+    }
+
+    #[test]
+    fn bug_walkdir_skips_pycache() {
+        let tmp = create_test_tree(
+            &["src", "__pycache__"],
+            &["src/app.py", "__pycache__/app.cpython-311.pyc"],
+        );
+        let files = walkdir(tmp.path(), &["py", "pyc"]).unwrap();
+        assert_eq!(files.len(), 1, "should only find src/app.py, not __pycache__ files");
+    }
+
+    #[test]
+    fn bug_walkdir_skips_dist_and_build() {
+        let tmp = create_test_tree(
+            &["src", "dist", "build"],
+            &["src/lib.rs", "dist/bundle.js", "build/output.js"],
+        );
+        let files = walkdir(tmp.path(), &["rs", "js"]).unwrap();
+        let names: Vec<_> = files.iter().map(|p| p.file_name().unwrap().to_str().unwrap()).collect();
+        assert!(names.contains(&"lib.rs"));
+        assert!(!names.contains(&"bundle.js"), "should skip dist/");
+        assert!(!names.contains(&"output.js"), "should skip build/");
+    }
+
+    #[test]
+    fn bug_source_cache_js_includes_jsx_tsx() {
+        let tmp = create_test_tree(
+            &["src"],
+            &["src/App.jsx", "src/Page.tsx", "src/index.js", "src/util.mjs"],
+        );
+        let cache = build_source_cache(tmp.path(), Language::JavaScript);
+        assert!(cache.contains_key(&PathBuf::from("src/App.jsx")), "should include .jsx");
+        assert!(cache.contains_key(&PathBuf::from("src/Page.tsx")), "should include .tsx");
+        assert!(cache.contains_key(&PathBuf::from("src/index.js")), "should include .js");
+        assert!(cache.contains_key(&PathBuf::from("src/util.mjs")), "should include .mjs");
+    }
+
+    #[test]
+    fn bug_source_cache_c_includes_cpp() {
+        let tmp = create_test_tree(
+            &["src"],
+            &["src/main.c", "src/util.cpp", "src/lib.cc", "src/types.hpp"],
+        );
+        let cache = build_source_cache(tmp.path(), Language::C);
+        assert!(cache.contains_key(&PathBuf::from("src/main.c")), "should include .c");
+        assert!(cache.contains_key(&PathBuf::from("src/util.cpp")), "should include .cpp");
+        assert!(cache.contains_key(&PathBuf::from("src/lib.cc")), "should include .cc");
+        assert!(cache.contains_key(&PathBuf::from("src/types.hpp")), "should include .hpp");
+    }
+
+    #[test]
+    fn bug_walkdir_case_insensitive_extensions() {
+        let tmp = create_test_tree(
+            &["src"],
+            &["src/main.RS", "src/lib.rs", "src/Mod.Rs"],
+        );
+        let files = walkdir(tmp.path(), &["rs"]).unwrap();
+        assert_eq!(files.len(), 3, "should match .RS, .rs, and .Rs case-insensitively");
     }
 }

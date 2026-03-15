@@ -636,6 +636,320 @@ mod tests {
         assert!(extract_covered_branches(&json, "/target").is_empty());
     }
 
+    // -----------------------------------------------------------------------
+    // Bug-exposing tests
+    // -----------------------------------------------------------------------
+
+    /// BUG: make_relative strips a prefix that's a substring of a different
+    /// directory name. E.g., target="/home/user/project" incorrectly strips
+    /// from path="/home/user/projectfoo/src/main.rs" → "foo/src/main.rs".
+    /// The second strip_prefix (without trailing slash) does a pure string
+    /// prefix match, not a path-component-boundary match.
+    #[test]
+    fn bug_make_relative_prefix_substring_of_different_dir() {
+        // path is in "projectfoo", NOT in "project" — should be returned as-is
+        let result = make_relative(
+            "/home/user/projectfoo/src/main.rs",
+            "/home/user/project",
+        );
+        assert_eq!(
+            result, "/home/user/projectfoo/src/main.rs",
+            "make_relative should not strip prefix that is a substring of a different directory"
+        );
+    }
+
+    /// BUG: make_relative returns empty string when path equals target exactly.
+    /// This produces an empty relative path which is invalid for file lookups.
+    #[test]
+    fn bug_make_relative_path_equals_target() {
+        let result = make_relative("/home/user/project", "/home/user/project");
+        // The path IS the target itself — stripping the prefix gives ""
+        // which is not a usable path. Should return "." or the original.
+        assert!(
+            !result.is_empty(),
+            "make_relative should not return empty string when path == target"
+        );
+    }
+
+    /// Edge case: make_relative with empty target should return the path unchanged.
+    #[test]
+    fn bug_make_relative_empty_target() {
+        let result = make_relative("/some/file.rs", "");
+        // With target = "", prefix becomes "/", stripping it from "/some/file.rs"
+        // gives "some/file.rs" — but "" is not a valid target directory.
+        // This is a latent bug: empty target silently corrupts paths.
+        assert_eq!(
+            result, "/some/file.rs",
+            "make_relative with empty target should return path unchanged"
+        );
+    }
+
+    /// BUG: fnv1a on empty input — should match the FNV-1a spec (offset basis).
+    /// Verify it's consistent with apex-instrument. Not a crash bug but
+    /// important for correctness.
+    #[test]
+    fn fnv1a_empty_input() {
+        let hash = fnv1a(b"");
+        assert_eq!(hash, 0xcbf29ce484222325, "empty input should return FNV offset basis");
+    }
+
+    /// Edge case: segments with fewer than 6 elements should be skipped
+    /// without panicking.
+    #[test]
+    fn extract_branches_short_segments_no_panic() {
+        let json = LlvmCovJson {
+            data: vec![LlvmCovData {
+                files: vec![LlvmCovFile {
+                    filename: "/project/src/lib.rs".to_string(),
+                    segments: vec![
+                        vec![],                                    // 0 elements
+                        vec![serde_json::json!(1)],                // 1 element
+                        vec![serde_json::json!(1), serde_json::json!(2),
+                             serde_json::json!(3), serde_json::json!(4),
+                             serde_json::json!(5)],                // 5 elements (< 6)
+                    ],
+                }],
+            }],
+        };
+        let branches = extract_covered_branches(&json, "/project");
+        assert!(branches.is_empty(), "short segments should be skipped");
+    }
+
+    /// Edge case: segments with null/unexpected types in fields should not panic.
+    #[test]
+    fn extract_branches_null_fields_no_panic() {
+        let json = LlvmCovJson {
+            data: vec![LlvmCovData {
+                files: vec![LlvmCovFile {
+                    filename: "/project/src/lib.rs".to_string(),
+                    segments: vec![
+                        vec![
+                            serde_json::json!(null),
+                            serde_json::json!(null),
+                            serde_json::json!(null),
+                            serde_json::json!(null),
+                            serde_json::json!(null),
+                            serde_json::json!(null),
+                        ],
+                    ],
+                }],
+            }],
+        };
+        // Should not panic — null fields default to false/0 via unwrap_or
+        let branches = extract_covered_branches(&json, "/project");
+        assert!(branches.is_empty(), "null segments should produce no branches");
+    }
+
+    /// parse_coverage_stats should agree with extract_covered_branches
+    /// on what counts as a covered branch.
+    #[test]
+    fn parse_coverage_stats_agrees_with_extract() {
+        let json = LlvmCovJson {
+            data: vec![LlvmCovData {
+                files: vec![LlvmCovFile {
+                    filename: "/project/src/lib.rs".to_string(),
+                    segments: vec![
+                        // Covered entry
+                        vec![
+                            serde_json::json!(10), serde_json::json!(5),
+                            serde_json::json!(3),  serde_json::json!(true),
+                            serde_json::json!(true), serde_json::json!(false),
+                        ],
+                        // Uncovered entry
+                        vec![
+                            serde_json::json!(20), serde_json::json!(1),
+                            serde_json::json!(0),  serde_json::json!(true),
+                            serde_json::json!(true), serde_json::json!(false),
+                        ],
+                        // Gap
+                        vec![
+                            serde_json::json!(30), serde_json::json!(1),
+                            serde_json::json!(5),  serde_json::json!(true),
+                            serde_json::json!(true), serde_json::json!(true),
+                        ],
+                    ],
+                }],
+            }],
+        };
+
+        let branches = extract_covered_branches(&json, "/project");
+        let (_, total, covered) = parse_coverage_stats(&json, "/project");
+
+        assert_eq!(total, 2, "total should count non-gap entries");
+        assert_eq!(covered, 1, "covered should count entries with count > 0");
+        assert_eq!(branches.len(), covered, "extract and parse should agree on covered count");
+    }
+
+    /// parse_coverage_stats with completely empty JSON
+    #[test]
+    fn parse_coverage_stats_empty_data() {
+        let json = LlvmCovJson { data: vec![] };
+        let (paths, total, covered) = parse_coverage_stats(&json, "/project");
+        assert!(paths.is_empty());
+        assert_eq!(total, 0);
+        assert_eq!(covered, 0);
+    }
+
+    /// Multiple files in same data entry should all be processed
+    #[test]
+    fn parse_coverage_stats_multiple_files() {
+        let json = LlvmCovJson {
+            data: vec![LlvmCovData {
+                files: vec![
+                    LlvmCovFile {
+                        filename: "/project/src/a.rs".to_string(),
+                        segments: vec![vec![
+                            serde_json::json!(1), serde_json::json!(1),
+                            serde_json::json!(1), serde_json::json!(true),
+                            serde_json::json!(true), serde_json::json!(false),
+                        ]],
+                    },
+                    LlvmCovFile {
+                        filename: "/project/src/b.rs".to_string(),
+                        segments: vec![vec![
+                            serde_json::json!(1), serde_json::json!(1),
+                            serde_json::json!(0), serde_json::json!(true),
+                            serde_json::json!(true), serde_json::json!(false),
+                        ]],
+                    },
+                ],
+            }],
+        };
+
+        let (paths, total, covered) = parse_coverage_stats(&json, "/project");
+        assert_eq!(paths.len(), 2, "both files should be in file_paths");
+        assert_eq!(total, 2);
+        assert_eq!(covered, 1);
+    }
+
+    /// extract_covered_branches correctly computes file_id from relative path
+    #[test]
+    fn extract_branches_file_id_uses_relative_path() {
+        let json = LlvmCovJson {
+            data: vec![LlvmCovData {
+                files: vec![LlvmCovFile {
+                    filename: "/project/src/lib.rs".to_string(),
+                    segments: vec![vec![
+                        serde_json::json!(10), serde_json::json!(5),
+                        serde_json::json!(1), serde_json::json!(true),
+                        serde_json::json!(true), serde_json::json!(false),
+                    ]],
+                }],
+            }],
+        };
+
+        let branches = extract_covered_branches(&json, "/project");
+        assert_eq!(branches.len(), 1);
+        // file_id should be fnv1a of "src/lib.rs", NOT of the full path
+        let expected_id = fnv1a(b"src/lib.rs");
+        assert_eq!(branches[0].file_id, expected_id);
+    }
+
+    /// Verify line/col are correctly extracted from segments
+    #[test]
+    fn extract_branches_correct_line_col() {
+        let json = LlvmCovJson {
+            data: vec![LlvmCovData {
+                files: vec![LlvmCovFile {
+                    filename: "/project/src/lib.rs".to_string(),
+                    segments: vec![vec![
+                        serde_json::json!(42), serde_json::json!(17),
+                        serde_json::json!(5),  serde_json::json!(true),
+                        serde_json::json!(true), serde_json::json!(false),
+                    ]],
+                }],
+            }],
+        };
+
+        let branches = extract_covered_branches(&json, "/project");
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].line, 42);
+        assert_eq!(branches[0].col, 17);
+        assert_eq!(branches[0].direction, 0, "direction should always be 0 from LLVM segments");
+    }
+
+    /// make_relative with double slashes in path
+    #[test]
+    fn make_relative_double_slash() {
+        let result = make_relative("/home/user//project/src/main.rs", "/home/user//project");
+        assert_eq!(result, "src/main.rs");
+    }
+
+    /// FNV-1a hash should differ for paths that differ only by case
+    #[test]
+    fn fnv1a_case_sensitive() {
+        assert_ne!(fnv1a(b"src/Main.rs"), fnv1a(b"src/main.rs"));
+    }
+
+    /// Large line/col values should not overflow
+    #[test]
+    fn extract_branches_large_line_col() {
+        let json = LlvmCovJson {
+            data: vec![LlvmCovData {
+                files: vec![LlvmCovFile {
+                    filename: "/project/src/lib.rs".to_string(),
+                    segments: vec![vec![
+                        serde_json::json!(u32::MAX as u64), serde_json::json!(u16::MAX as u64),
+                        serde_json::json!(1), serde_json::json!(true),
+                        serde_json::json!(true), serde_json::json!(false),
+                    ]],
+                }],
+            }],
+        };
+
+        let branches = extract_covered_branches(&json, "/project");
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].line, u32::MAX);
+        assert_eq!(branches[0].col, u16::MAX);
+    }
+
+    /// Line value larger than u32::MAX should truncate (potential data loss bug)
+    #[test]
+    fn bug_extract_branches_line_overflow_truncates() {
+        let big_line = u32::MAX as u64 + 1; // 4294967296
+        let json = LlvmCovJson {
+            data: vec![LlvmCovData {
+                files: vec![LlvmCovFile {
+                    filename: "/project/src/lib.rs".to_string(),
+                    segments: vec![vec![
+                        serde_json::json!(big_line), serde_json::json!(1),
+                        serde_json::json!(1), serde_json::json!(true),
+                        serde_json::json!(true), serde_json::json!(false),
+                    ]],
+                }],
+            }],
+        };
+
+        let branches = extract_covered_branches(&json, "/project");
+        assert_eq!(branches.len(), 1);
+        // `as u32` truncates: u32::MAX + 1 wraps to 0
+        // This is a silent data corruption bug — line number becomes 0
+        assert_eq!(branches[0].line, 0, "u64 -> u32 cast silently truncates large line numbers");
+    }
+
+    /// Col value larger than u16::MAX should truncate (potential data loss bug)
+    #[test]
+    fn bug_extract_branches_col_overflow_truncates() {
+        let big_col = u16::MAX as u64 + 1; // 65536
+        let json = LlvmCovJson {
+            data: vec![LlvmCovData {
+                files: vec![LlvmCovFile {
+                    filename: "/project/src/lib.rs".to_string(),
+                    segments: vec![vec![
+                        serde_json::json!(1), serde_json::json!(big_col),
+                        serde_json::json!(1), serde_json::json!(true),
+                        serde_json::json!(true), serde_json::json!(false),
+                    ]],
+                }],
+            }],
+        };
+
+        let branches = extract_covered_branches(&json, "/project");
+        assert_eq!(branches.len(), 1);
+        // `as u16` truncates: u16::MAX + 1 wraps to 0
+        assert_eq!(branches[0].col, 0, "u64 -> u16 cast silently truncates large col numbers");
+    }
+
     #[test]
     fn extract_branches_filters_correctly() {
         let json = LlvmCovJson {
@@ -691,12 +1005,6 @@ mod tests {
     }
 
     #[test]
-    fn bug_make_relative_path_equals_target() {
-        let result = make_relative("/home/user/project", "/home/user/project");
-        assert_eq!(result, ".", "path == target should return '.' not empty string");
-    }
-
-    #[test]
     fn bug_make_relative_sibling_dir() {
         let result = make_relative("/home/user/project2/src/lib.rs", "/home/user/project");
         assert_eq!(
@@ -741,11 +1049,6 @@ mod tests {
         for input in &[b"hello" as &[u8], b"", b"src/main.rs", b"\xff\x00\x01"] {
             assert_eq!(fnv1a(input), fnv1a(input));
         }
-    }
-
-    #[test]
-    fn fnv1a_empty_input() {
-        assert_eq!(fnv1a(b""), 0xcbf29ce484222325);
     }
 
     #[test]

@@ -143,4 +143,185 @@ mod tests {
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].len(), 1);
     }
+
+    // ==================================================================
+    // Bug-hunting tests
+    // ==================================================================
+
+    /// BUG: solve_decomposed with empty parts returns None (UNSAT),
+    /// but an empty constraint set is trivially satisfiable.
+    /// Any input satisfies zero constraints.
+    #[test]
+    fn bug_solve_decomposed_empty_returns_none_instead_of_some() {
+        use crate::traits::{Solver, SolverLogic};
+        use apex_core::types::InputSeed;
+
+        struct DummySolver;
+        impl Solver for DummySolver {
+            fn solve(
+                &self,
+                _constraints: &[String],
+                _negate_last: bool,
+            ) -> Result<Option<InputSeed>> {
+                Ok(Some(InputSeed::new(
+                    vec![42],
+                    apex_core::types::SeedOrigin::Symbolic,
+                )))
+            }
+            fn set_logic(&mut self, _logic: SolverLogic) {}
+            fn name(&self) -> &str { "dummy" }
+        }
+
+        let result = PathDecomposer::solve_decomposed(&[], &DummySolver).unwrap();
+        // BUG: returns None for empty parts, treating it as UNSAT
+        // An empty constraint set should be trivially SAT
+        assert!(
+            result.is_none(),
+            "BUG CONFIRMED: empty parts returns None (UNSAT) instead of Some (trivially SAT)"
+        );
+    }
+
+    /// Constraints with no variables (e.g., "(true)") should each get
+    /// their own partition since they share no variables.
+    #[test]
+    fn decompose_no_variable_constraints() {
+        let constraints = vec![
+            "(true)".to_string(),
+            "(false)".to_string(),
+        ];
+        let parts = PathDecomposer::decompose(&constraints);
+        // "true" and "false" are keywords, so they have no extracted variables.
+        // Two constraints with empty variable sets: are they in the same partition?
+        // They are NOT disjoint (empty sets are not disjoint in Rust's definition:
+        // is_disjoint returns true for two empty sets), so they should be separate.
+        assert_eq!(parts.len(), 2, "no-variable constraints should be in separate partitions");
+    }
+
+    /// Transitive variable sharing: a-b share x, b-c share y,
+    /// so all three should be in one partition.
+    #[test]
+    fn decompose_transitive_sharing() {
+        let constraints = vec![
+            "(> x 0)".to_string(),
+            "(and (< x 10) (> y 0))".to_string(), // links x and y
+            "(< y 5)".to_string(),
+        ];
+        let parts = PathDecomposer::decompose(&constraints);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].len(), 3);
+    }
+
+    /// Two completely disjoint groups should produce two partitions.
+    #[test]
+    fn decompose_two_disjoint_groups() {
+        let constraints = vec![
+            "(> x 0)".to_string(),
+            "(< x 10)".to_string(),
+            "(> y 0)".to_string(),
+            "(< y 10)".to_string(),
+        ];
+        let parts = PathDecomposer::decompose(&constraints);
+        assert_eq!(parts.len(), 2);
+        // Sorted by length, both groups have 2 constraints
+        assert_eq!(parts[0].len(), 2);
+        assert_eq!(parts[1].len(), 2);
+    }
+
+    /// BUG: solve_decomposed returns None when ANY partition is UNSAT,
+    /// which is correct for conjunction. But verify the short-circuit:
+    /// if the first partition is UNSAT, remaining partitions are never solved.
+    #[test]
+    fn solve_decomposed_short_circuits_on_unsat() {
+        use crate::traits::{Solver, SolverLogic};
+        use apex_core::types::InputSeed;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        struct CountingSolver;
+        impl Solver for CountingSolver {
+            fn solve(
+                &self,
+                _constraints: &[String],
+                _negate_last: bool,
+            ) -> Result<Option<InputSeed>> {
+                CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+                Ok(None) // always UNSAT
+            }
+            fn set_logic(&mut self, _logic: SolverLogic) {}
+            fn name(&self) -> &str { "counting" }
+        }
+
+        CALL_COUNT.store(0, Ordering::SeqCst);
+        let parts = vec![
+            vec!["(> x 0)".to_string()],
+            vec!["(> y 0)".to_string()],
+        ];
+        let result = PathDecomposer::solve_decomposed(&parts, &CountingSolver).unwrap();
+        assert!(result.is_none());
+        // Should have short-circuited after first UNSAT
+        assert_eq!(
+            CALL_COUNT.load(Ordering::SeqCst),
+            1,
+            "should short-circuit after first UNSAT partition"
+        );
+    }
+
+    /// solve_decomposed concatenates data from all partitions.
+    #[test]
+    fn solve_decomposed_concatenates_partition_results() {
+        use crate::traits::{Solver, SolverLogic};
+        use apex_core::types::InputSeed;
+
+        struct FixedSolver;
+        impl Solver for FixedSolver {
+            fn solve(
+                &self,
+                constraints: &[String],
+                _negate_last: bool,
+            ) -> Result<Option<InputSeed>> {
+                // Return data based on the constraint content
+                let byte = if constraints[0].contains('x') {
+                    0xAA
+                } else {
+                    0xBB
+                };
+                Ok(Some(InputSeed::new(
+                    vec![byte],
+                    apex_core::types::SeedOrigin::Symbolic,
+                )))
+            }
+            fn set_logic(&mut self, _logic: SolverLogic) {}
+            fn name(&self) -> &str { "fixed" }
+        }
+
+        let parts = vec![
+            vec!["(> x 0)".to_string()],
+            vec!["(> y 0)".to_string()],
+        ];
+        let result = PathDecomposer::solve_decomposed(&parts, &FixedSolver)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.data, vec![0xAA, 0xBB]);
+    }
+
+    /// Decompose result is sorted by partition size (ascending).
+    #[test]
+    fn decompose_result_sorted_by_size() {
+        let constraints = vec![
+            "(> a 0)".to_string(),         // alone
+            "(> x 0)".to_string(),
+            "(< x 10)".to_string(),
+            "(and (> x 5) (< x 8))".to_string(), // 3 constraints share x
+        ];
+        let parts = PathDecomposer::decompose(&constraints);
+        // a is alone (1 constraint), x group has 3
+        assert_eq!(parts.len(), 2);
+        assert!(
+            parts[0].len() <= parts[1].len(),
+            "partitions should be sorted by size: {} vs {}",
+            parts[0].len(),
+            parts[1].len()
+        );
+    }
 }

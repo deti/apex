@@ -420,4 +420,112 @@ mod tests {
             "shim must use MAP_SHARED for cross-process visibility"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Bug-exposing tests
+    // -----------------------------------------------------------------------
+
+    /// BUG: The C shim uses uint8_t for hit counters, which wraps around at
+    /// 255 to 0. A branch hit exactly 256 times appears as "never hit" in
+    /// the bitmap. The shim should use saturating increment or a wider type.
+    #[test]
+    fn bug_shim_counter_overflow_loses_coverage() {
+        let src = coverage_shim_source();
+        // The shim does `__apex_trace_bits[*guard]++` on a uint8_t.
+        // After 256 hits, it wraps to 0 — the branch looks unhit.
+        // A correct shim would use saturating arithmetic:
+        //   if (__apex_trace_bits[*guard] < 255) __apex_trace_bits[*guard]++;
+        // or use a wider type.
+        let has_saturation = src.contains("< 255")
+            || src.contains("<= 254")
+            || src.contains("uint16_t")
+            || src.contains("uint32_t *__apex_trace_bits");
+        assert!(
+            !has_saturation,
+            "BUG CONFIRMED: shim uses bare `++` on uint8_t counters, \
+             which wrap to 0 after 256 hits causing coverage loss. \
+             Should use saturating increment."
+        );
+        // The test passes to confirm the bug EXISTS in the current code.
+        // To track: this assert!(!...) will fail once the bug is fixed.
+    }
+
+    /// BUG: Guard IDs start at 1 (from `++n`) but the bounds check is
+    /// `*guard >= APEX_MAP_SIZE` (65536). This means guard 65535 is valid,
+    /// but guard 0 is skipped. The effective capacity is 65535 branches
+    /// (guards 1..65535), NOT 65536. If a target has exactly 65536 guards,
+    /// the last guard gets ID 65536 which is silently dropped.
+    #[test]
+    fn bug_shim_guard_id_starts_at_one_wastes_slot_zero() {
+        let src = coverage_shim_source();
+        // Guard init uses `*x = ++n` so IDs start at 1, not 0.
+        // But bitmap index 0 is never written because guard 0 means "uninitialized".
+        // This wastes bitmap[0] and means the max guard count is MAP_SIZE-1, not MAP_SIZE.
+        assert!(
+            src.contains("++n"),
+            "guard_init should start IDs at 1 (confirming the off-by-one design)"
+        );
+        // The bounds check allows guard values 1..65535, but the init can
+        // assign up to n=65536+ which gets silently dropped by the guard check.
+        // A target with exactly APEX_MAP_SIZE branches will lose coverage on the last one.
+        assert!(
+            src.contains("*guard >= APEX_MAP_SIZE"),
+            "BUG: bounds check drops guard == APEX_MAP_SIZE but init can assign it"
+        );
+    }
+
+    /// BUG: shim_path() has the side effect of creating ~/.apex/shims/
+    /// directory even when just querying the path. This violates the
+    /// principle of least surprise — a "get path" function should not
+    /// create directories.
+    #[test]
+    fn bug_shim_path_creates_directory_as_side_effect() {
+        // shim_path() calls std::fs::create_dir_all, so calling it
+        // creates ~/.apex/shims/ as a side effect. This is confirmed
+        // by the source code. A pure path-computation function should
+        // not have filesystem side effects.
+        let result = shim_path();
+        if let Ok(path) = result {
+            // The directory was created as a side effect of calling shim_path()
+            let parent = path.parent().unwrap();
+            assert!(
+                parent.exists(),
+                "BUG CONFIRMED: shim_path() created directory as side effect"
+            );
+        }
+    }
+
+    /// The shim source APEX_MAP_SIZE must match the Rust-side MAP_SIZE constant
+    /// to avoid writing out of bounds. Verify they are the same value.
+    #[test]
+    fn bug_map_size_mismatch_between_shim_and_rust() {
+        use crate::shm::MAP_SIZE;
+        let src = coverage_shim_source();
+        let expected = format!("{MAP_SIZE}");
+        assert!(
+            src.contains(&expected),
+            "C shim APEX_MAP_SIZE must match Rust MAP_SIZE ({MAP_SIZE}), \
+             otherwise the shim writes out of bounds or misses coverage"
+        );
+    }
+
+    /// The shim's constructor silently returns without error if __APEX_SHM_NAME
+    /// is not set or if shm_open fails. This is intentional for LD_PRELOAD
+    /// scenarios, but means that misconfigured runs silently produce zero
+    /// coverage. Verify this silent-failure design is documented.
+    #[test]
+    fn bug_shim_silent_failure_on_missing_env() {
+        let src = coverage_shim_source();
+        // If shm_name is NULL, the constructor just returns.
+        // No error indicator is set. The parent process has no way to know
+        // the shim failed to attach.
+        assert!(
+            src.contains("if (!shm_name) return;"),
+            "shim silently returns on missing env var — no error reporting"
+        );
+        assert!(
+            src.contains("if (fd < 0) return;"),
+            "shim silently returns on shm_open failure — no error reporting"
+        );
+    }
 }
