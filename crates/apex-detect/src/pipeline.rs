@@ -45,6 +45,15 @@ impl DetectorPipeline {
         if cfg.enabled.contains(&"path-normalize".to_string()) {
             detectors.push(Box::new(PathNormalizationDetector));
         }
+        if cfg.enabled.contains(&"timeout".to_string()) {
+            detectors.push(Box::new(MissingTimeoutDetector));
+        }
+        if cfg.enabled.contains(&"session-security".to_string()) {
+            detectors.push(Box::new(SessionSecurityDetector));
+        }
+        if cfg.enabled.contains(&"secret-scan".to_string()) {
+            detectors.push(Box::new(SecretScanDetector::new()));
+        }
 
         Self { detectors }
     }
@@ -308,7 +317,7 @@ mod tests {
     fn from_config_enables_all_by_default() {
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
-        assert_eq!(pipeline.detectors.len(), 7);
+        assert_eq!(pipeline.detectors.len(), 10);
     }
 
     #[test]
@@ -683,7 +692,7 @@ mod tests {
         // Python should get all except unsafe
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Python);
-        assert_eq!(pipeline.detectors.len(), 6);
+        assert_eq!(pipeline.detectors.len(), 9);
         assert!(pipeline.detectors.iter().all(|d| d.name() != "unsafe-reachability"));
     }
 

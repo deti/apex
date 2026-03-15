@@ -125,8 +125,10 @@ impl CoverageOracle {
     /// Branch IDs are resolved by index position in the registered set.
     pub fn merge_bitmap(&self, bitmap: &[u8], seed_id: SeedId) -> DeltaCoverage {
         let mut delta = DeltaCoverage::default();
-        // Collect ordered keys once so index matches bitmap position.
-        let keys: Vec<BranchId> = self.branches.iter().map(|r| r.key().clone()).collect();
+        // Collect keys and sort deterministically so index matches bitmap position
+        // regardless of DashMap's non-deterministic iteration order.
+        let mut keys: Vec<BranchId> = self.branches.iter().map(|r| r.key().clone()).collect();
+        keys.sort_by_key(|b| (b.file_id, b.line, b.col, b.direction));
         for (idx, &byte) in bitmap.iter().enumerate() {
             if byte > 0 {
                 if let Some(branch) = keys.get(idx) {

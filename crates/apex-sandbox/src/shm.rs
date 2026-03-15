@@ -19,8 +19,11 @@ pub struct ShmBitmap {
 
 // SAFETY: The pointer is only accessed through &self methods which are
 // synchronised by the caller (one bitmap per child process lifetime).
+// Send is safe because ownership transfers between threads.
+// Sync is intentionally NOT implemented: concurrent reads through the raw
+// pointer are not guaranteed safe. The single-writer-after-fork pattern
+// means callers must not share &ShmBitmap across threads simultaneously.
 unsafe impl Send for ShmBitmap {}
-unsafe impl Sync for ShmBitmap {}
 
 impl ShmBitmap {
     /// Create a new SHM region of `MAP_SIZE` bytes, zeroed.
