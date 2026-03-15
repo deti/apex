@@ -4,6 +4,7 @@
 //! and an interleaved meta-strategy that round-robins across them.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 /// A symbolic execution state for search strategy selection.
 #[derive(Debug, Clone)]
@@ -97,13 +98,13 @@ impl SearchStrategy for RandomPath {
 
 /// Coverage-optimized — weight states by recent coverage productivity.
 pub struct CoverageOptimized {
-    coverage_scores: Vec<f64>,
+    coverage_scores: HashMap<usize, f64>,
 }
 
 impl CoverageOptimized {
     pub fn new() -> Self {
         Self {
-            coverage_scores: Vec::new(),
+            coverage_scores: HashMap::new(),
         }
     }
 }
@@ -120,17 +121,13 @@ impl SearchStrategy for CoverageOptimized {
     }
 
     fn select(&mut self, states: &[SymState]) -> usize {
-        // Extend scores if needed
-        while self.coverage_scores.len() < states.len() {
-            self.coverage_scores.push(0.0);
-        }
         // Pick state with highest coverage score, tie-break by most recent coverage
         states
             .iter()
             .enumerate()
             .max_by(|(i, si), (j, sj)| {
-                let score_i = self.coverage_scores.get(*i).unwrap_or(&0.0);
-                let score_j = self.coverage_scores.get(*j).unwrap_or(&0.0);
+                let score_i = self.coverage_scores.get(i).unwrap_or(&0.0);
+                let score_j = self.coverage_scores.get(j).unwrap_or(&0.0);
                 score_i
                     .partial_cmp(score_j)
                     .unwrap_or(Ordering::Equal)
@@ -141,16 +138,11 @@ impl SearchStrategy for CoverageOptimized {
     }
 
     fn on_coverage(&mut self, state_idx: usize, new_branches: usize) {
-        while self.coverage_scores.len() <= state_idx {
-            self.coverage_scores.push(0.0);
-        }
-        self.coverage_scores[state_idx] += new_branches as f64;
+        *self.coverage_scores.entry(state_idx).or_insert(0.0) += new_branches as f64;
     }
 
     fn on_terminate(&mut self, state_idx: usize) {
-        if state_idx < self.coverage_scores.len() {
-            self.coverage_scores[state_idx] = 0.0;
-        }
+        self.coverage_scores.remove(&state_idx);
     }
 }
 
@@ -281,16 +273,16 @@ mod tests {
         let mut co = CoverageOptimized::new();
         co.on_coverage(0, 5);
         co.on_coverage(0, 3);
-        assert_eq!(co.coverage_scores[0], 8.0);
+        assert_eq!(co.coverage_scores[&0], 8.0);
     }
 
     #[test]
     fn coverage_optimized_on_terminate_resets() {
         let mut co = CoverageOptimized::new();
         co.on_coverage(0, 10);
-        assert_eq!(co.coverage_scores[0], 10.0);
+        assert_eq!(co.coverage_scores[&0], 10.0);
         co.on_terminate(0);
-        assert_eq!(co.coverage_scores[0], 0.0);
+        assert_eq!(co.coverage_scores.get(&0).copied().unwrap_or(0.0), 0.0);
     }
 
     #[test]
@@ -318,8 +310,8 @@ mod tests {
         // After on_coverage, both internal strategies should reflect the update
         co1.on_coverage(0, 5);
         co2.on_coverage(0, 5);
-        assert_eq!(co1.coverage_scores[0], 5.0);
-        assert_eq!(co2.coverage_scores[0], 5.0);
+        assert_eq!(co1.coverage_scores[&0], 5.0);
+        assert_eq!(co2.coverage_scores[&0], 5.0);
 
         // Also test that InterleavedSearch calls on_coverage
         let mut interleaved = InterleavedSearch::new(

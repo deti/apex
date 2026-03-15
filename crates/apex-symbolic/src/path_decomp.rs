@@ -69,6 +69,12 @@ impl PathDecomposer {
         parts: &[Vec<String>],
         solver: &dyn Solver,
     ) -> Result<Option<InputSeed>> {
+        if parts.is_empty() {
+            return Ok(Some(InputSeed::new(
+                vec![],
+                apex_core::types::SeedOrigin::Symbolic,
+            )));
+        }
         let mut combined_data: Vec<u8> = Vec::new();
 
         for part in parts {
@@ -148,11 +154,9 @@ mod tests {
     // Bug-hunting tests
     // ==================================================================
 
-    /// BUG: solve_decomposed with empty parts returns None (UNSAT),
-    /// but an empty constraint set is trivially satisfiable.
-    /// Any input satisfies zero constraints.
+    /// Empty parts is trivially SAT — returns Some with empty data.
     #[test]
-    fn bug_solve_decomposed_empty_returns_none_instead_of_some() {
+    fn solve_decomposed_empty_returns_some() {
         use crate::traits::{Solver, SolverLogic};
         use apex_core::types::InputSeed;
 
@@ -178,9 +182,10 @@ mod tests {
         // BUG: returns None for empty parts, treating it as UNSAT
         // An empty constraint set should be trivially SAT
         assert!(
-            result.is_none(),
-            "BUG CONFIRMED: empty parts returns None (UNSAT) instead of Some (trivially SAT)"
+            result.is_some(),
+            "empty parts should return Some (trivially SAT)"
         );
+        assert!(result.unwrap().data.is_empty());
     }
 
     /// Constraints with no variables (e.g., "(true)") should each get

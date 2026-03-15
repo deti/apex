@@ -408,6 +408,12 @@ impl PythonConcolicStrategy {
                 .collect::<Vec<_>>()
                 .join(", ");
 
+            // Skip variants with empty body — they produce a Python stub with
+            // an empty function body which is a SyntaxError.
+            if assigns.is_empty() && call_args.is_empty() {
+                continue;
+            }
+
             let seed = format!(
                 r#"# apex-concolic: {file}:{line} direction={dir}
 # condition: {cond}

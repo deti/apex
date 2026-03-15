@@ -382,7 +382,15 @@ fn find_word_outside_parens(text: &str, needle: &str) -> Option<usize> {
         let b = bytes[i];
         if let Some(q) = in_str {
             if b == q {
-                in_str = None;
+                let mut backslash_count = 0;
+                let mut j = i;
+                while j > 0 && bytes[j - 1] == b'\\' {
+                    backslash_count += 1;
+                    j -= 1;
+                }
+                if backslash_count % 2 == 0 {
+                    in_str = None;
+                }
             }
             i += 1;
             continue;
