@@ -4,7 +4,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
-use super::util::{in_test_block, is_comment, is_test_file};
+use super::util::{in_test_block, is_comment, is_test_file, references_env_var};
 use crate::context::AnalysisContext;
 use crate::finding::{Finding, FindingCategory, Severity};
 use crate::Detector;
@@ -91,15 +91,6 @@ const FALSE_POSITIVE_VALUES: &[&str] = &[
     "demo",
 ];
 
-const ENV_VAR_MARKERS: &[&str] = &[
-    "env(",
-    "ENV[",
-    "os.environ",
-    "process.env",
-    "std::env",
-    "getenv(",
-];
-
 fn is_example_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.contains(".example")
@@ -113,11 +104,6 @@ fn is_example_file(path: &std::path::Path) -> bool {
 /// Returns true if the line contains a placeholder/false-positive value.
 fn contains_placeholder(line: &str) -> bool {
     FALSE_POSITIVE_VALUES.iter().any(|fp| line.contains(fp))
-}
-
-/// Returns true if the line references an environment variable.
-fn references_env_var(line: &str) -> bool {
-    ENV_VAR_MARKERS.iter().any(|m| line.contains(m))
 }
 
 static COMPILED_PATTERNS: LazyLock<Vec<(&'static SecretPattern, Regex)>> = LazyLock::new(|| {

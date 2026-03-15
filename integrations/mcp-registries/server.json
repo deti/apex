@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "name": "io.github.allexdav2/apex",
+  "version": "0.1.0",
+  "title": "APEX — Code Coverage & Security Analysis",
+  "description": "Autonomous coverage analysis and security detection for 11 languages. Coverage gaps, CWE-mapped findings, reverse path reachability, and deployment confidence scoring.",
+  "websiteUrl": "https://github.com/allexdav2/apex",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@apex-coverage/cli",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": ["mcp"],
+      "environmentVariables": []
+    },
+    {
+      "registryType": "pypi",
+      "identifier": "apex-coverage",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": ["mcp"],
+      "environmentVariables": []
+    }
+  ],
+  "repository": {
+    "url": "https://github.com/allexdav2/apex",
+    "source": "github"
+  },
+  "keywords": ["coverage", "security", "testing", "sast", "cwe", "sarif"]
+}

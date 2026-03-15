@@ -86,6 +86,7 @@ impl Instrumentor for LlvmInstrumentor {
 async fn instrument_llvm(target: &Target) -> Result<InstrumentedTarget> {
     use addr2line::Context;
     use apex_core::error::ApexError;
+    use apex_core::hash::fnv1a_hash;
     use object::{Object, ObjectSection};
     use std::path::{Path, PathBuf};
 
@@ -152,16 +153,6 @@ async fn instrument_llvm(target: &Target) -> Result<InstrumentedTarget> {
         file_paths,
         work_dir: target.root.clone(),
     })
-}
-
-#[cfg(feature = "llvm-instrument")]
-fn fnv1a_hash(s: &str) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in s.bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 #[cfg(test)]

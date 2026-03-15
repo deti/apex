@@ -143,6 +143,20 @@ pub fn is_comment(trimmed: &str, lang: Language) -> bool {
     false
 }
 
+const ENV_VAR_MARKERS: &[&str] = &[
+    "env(",
+    "ENV[",
+    "os.environ",
+    "process.env",
+    "std::env",
+    "getenv(",
+];
+
+/// Returns true if the line references an environment variable.
+pub(crate) fn references_env_var(line: &str) -> bool {
+    ENV_VAR_MARKERS.iter().any(|m| line.contains(m))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

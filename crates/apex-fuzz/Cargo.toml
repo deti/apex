@@ -16,6 +16,7 @@ libafl-qemu = ["libafl", "libafl_bolts"]
 [dependencies]
 apex-core = { path = "../apex-core" }
 apex-coverage = { path = "../apex-coverage" }
+apex-index = { path = "../apex-index" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -1,0 +1,12 @@
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      target:
+        type: string
+        description: "Default project path (overridable per tool call)"
+      lang:
+        type: string
+        description: "Default language (overridable per tool call)"
+        enum: ["python", "rust", "javascript", "java", "go", "ruby", "cpp", "swift", "csharp", "kotlin"]

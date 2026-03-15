@@ -4,7 +4,7 @@ use regex::RegexSet;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
-use super::util::{in_test_block, is_comment};
+use super::util::{in_test_block, is_comment, references_env_var};
 use crate::context::AnalysisContext;
 use crate::finding::{Finding, FindingCategory, Severity};
 use crate::Detector;
@@ -231,15 +231,6 @@ const FALSE_POSITIVE_VALUES: &[&str] = &[
     "demo",
 ];
 
-const ENV_VAR_MARKERS: &[&str] = &[
-    "env(",
-    "ENV[",
-    "os.environ",
-    "process.env",
-    "std::env",
-    "getenv(",
-];
-
 /// Calculate Shannon entropy of a string (log base 2).
 pub fn shannon_entropy(s: &str) -> f64 {
     if s.is_empty() {
@@ -275,11 +266,6 @@ fn is_skip_file(path: &std::path::Path) -> bool {
 /// Returns true if the line contains a placeholder/false-positive value.
 fn contains_placeholder(line: &str) -> bool {
     FALSE_POSITIVE_VALUES.iter().any(|fp| line.contains(fp))
-}
-
-/// Returns true if the line references an environment variable lookup.
-fn references_env_var(line: &str) -> bool {
-    ENV_VAR_MARKERS.iter().any(|m| line.contains(m))
 }
 
 /// Extract string literal contents from a line for entropy analysis.

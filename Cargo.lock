@@ -274,6 +274,7 @@ version = "0.1.0"
 dependencies = [
  "apex-core",
  "apex-coverage",
+ "apex-index",
  "async-trait",
  "libafl",
  "libafl_bolts",

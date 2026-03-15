@@ -2,6 +2,7 @@
 //! Based on the HGFuzzer paper.
 
 use apex_core::types::BranchId;
+use apex_index::types::branch_key;
 use std::collections::HashMap;
 
 /// Directed greybox fuzzer that assigns energy based on distance to target branches.
@@ -33,10 +34,6 @@ impl HGFuzzer {
             None => 0.1, // default low energy for unknown distance
         }
     }
-}
-
-fn branch_key(b: &BranchId) -> String {
-    format!("{}:{}:{}:{}", b.file_id, b.line, b.col, b.direction)
 }
 
 #[cfg(test)]

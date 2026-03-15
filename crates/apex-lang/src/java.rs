@@ -33,7 +33,7 @@ impl Default for JavaRunner {
 }
 
 /// Detect whether the project uses Gradle or Maven.
-fn detect_build_tool(target: &Path) -> &'static str {
+pub fn detect_build_tool(target: &Path) -> &'static str {
     if target.join("build.gradle").exists() || target.join("build.gradle.kts").exists() {
         "gradle"
     } else {
