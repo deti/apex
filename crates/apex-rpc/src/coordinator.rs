@@ -177,6 +177,33 @@ impl CoordinatorServer {
 
         Ok((service, handle))
     }
+
+    /// Start a gRPC server on a Unix domain socket. Returns the service handle
+    /// and a join handle for the server task. The socket file is created at the
+    /// given path.
+    #[cfg(unix)]
+    pub async fn start_uds_with_service(
+        uds_path: &std::path::Path,
+        oracle: Arc<CoverageOracle>,
+    ) -> std::io::Result<(
+        Arc<CoordinatorService>,
+        tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
+    )> {
+        let service = Arc::new(CoordinatorService::new(oracle));
+        let svc_clone = service.clone();
+
+        let uds = tokio::net::UnixListener::bind(uds_path)?;
+        let incoming = tokio_stream::wrappers::UnixListenerStream::new(uds);
+
+        let handle = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(ApexCoordinatorServer::from_arc(svc_clone))
+                .serve_with_incoming(incoming)
+                .await
+        });
+
+        Ok((service, handle))
+    }
 }
 
 #[cfg(test)]
@@ -588,7 +615,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_proto_branch_conversion_edge_values() {
-        // Test col/direction truncation: col is u32→u16, direction is u32→u8
+        // Test col/direction truncation: col is u32->u16, direction is u32->u8
         let proto = ProtoBranchId {
             file_id: u64::MAX,
             line: u32::MAX,
@@ -938,7 +965,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_proto_to_core_branch_truncates_large_col() {
-        // col is u32 in proto, u16 in core — test with value that fits in u16
+        // col is u32 in proto, u16 in core -- test with value that fits in u16
         let proto = ProtoBranchId {
             file_id: 1,
             line: 1,
@@ -963,8 +990,18 @@ mod tests {
                         seed_id: "s1".into(),
                         status: "pass".into(),
                         new_branches: vec![
-                            ProtoBranchId { file_id: 1, line: 1, col: 0, direction: 0 },
-                            ProtoBranchId { file_id: 1, line: 2, col: 0, direction: 0 },
+                            ProtoBranchId {
+                                file_id: 1,
+                                line: 1,
+                                col: 0,
+                                direction: 0,
+                            },
+                            ProtoBranchId {
+                                file_id: 1,
+                                line: 2,
+                                col: 0,
+                                direction: 0,
+                            },
                         ],
                         duration_ms: 5,
                         stdout: "out1".into(),
@@ -974,8 +1011,18 @@ mod tests {
                         seed_id: "s2".into(),
                         status: "fail".into(),
                         new_branches: vec![
-                            ProtoBranchId { file_id: 1, line: 3, col: 0, direction: 0 },
-                            ProtoBranchId { file_id: 1, line: 4, col: 0, direction: 0 },
+                            ProtoBranchId {
+                                file_id: 1,
+                                line: 3,
+                                col: 0,
+                                direction: 0,
+                            },
+                            ProtoBranchId {
+                                file_id: 1,
+                                line: 4,
+                                col: 0,
+                                direction: 0,
+                            },
                         ],
                         duration_ms: 15,
                         stdout: String::new(),
@@ -1370,8 +1417,18 @@ mod tests {
                     seed_id: "s2".into(),
                     status: "pass".into(),
                     new_branches: vec![
-                        ProtoBranchId { file_id: 1, line: 2, col: 0, direction: 0 },
-                        ProtoBranchId { file_id: 1, line: 3, col: 0, direction: 0 },
+                        ProtoBranchId {
+                            file_id: 1,
+                            line: 2,
+                            col: 0,
+                            direction: 0,
+                        },
+                        ProtoBranchId {
+                            file_id: 1,
+                            line: 3,
+                            col: 0,
+                            direction: 0,
+                        },
                     ],
                     duration_ms: 10,
                     stdout: String::new(),
@@ -1481,9 +1538,21 @@ mod tests {
 
         service
             .enqueue_seeds(vec![
-                InputSeed { id: "a".into(), data: vec![1], origin: "t".into() },
-                InputSeed { id: "b".into(), data: vec![2], origin: "t".into() },
-                InputSeed { id: "c".into(), data: vec![3], origin: "t".into() },
+                InputSeed {
+                    id: "a".into(),
+                    data: vec![1],
+                    origin: "t".into(),
+                },
+                InputSeed {
+                    id: "b".into(),
+                    data: vec![2],
+                    origin: "t".into(),
+                },
+                InputSeed {
+                    id: "c".into(),
+                    data: vec![3],
+                    origin: "t".into(),
+                },
             ])
             .await;
 
@@ -1525,8 +1594,18 @@ mod tests {
                     seed_id: "s1".into(),
                     status: "pass".into(),
                     new_branches: vec![
-                        ProtoBranchId { file_id: 1, line: 1, col: 0, direction: 0 },
-                        ProtoBranchId { file_id: 99, line: 1, col: 0, direction: 0 },
+                        ProtoBranchId {
+                            file_id: 1,
+                            line: 1,
+                            col: 0,
+                            direction: 0,
+                        },
+                        ProtoBranchId {
+                            file_id: 99,
+                            line: 1,
+                            col: 0,
+                            direction: 0,
+                        },
                     ],
                     duration_ms: 10,
                     stdout: String::new(),

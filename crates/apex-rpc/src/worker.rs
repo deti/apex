@@ -35,6 +35,30 @@ impl WorkerClient {
         }
     }
 
+    /// Connect to a coordinator over a Unix domain socket.
+    #[cfg(unix)]
+    pub async fn connect_uds(
+        uds_path: &std::path::Path,
+        language: String,
+    ) -> Result<Self, tonic::transport::Error> {
+        let path = uds_path.to_owned();
+        // The URI is a dummy — tonic requires a valid URI but we override the
+        // connector to use the Unix socket directly.
+        let channel = tonic::transport::Endpoint::try_from("http://[::]:50051")
+            .unwrap()
+            .connect_with_connector(tower::service_fn(move |_: tonic::transport::Uri| {
+                let path = path.clone();
+                async move { tokio::net::UnixStream::connect(path).await }
+            }))
+            .await?;
+        let client = ApexCoordinatorClient::new(channel);
+        Ok(WorkerClient {
+            client,
+            worker_id: Uuid::new_v4().to_string(),
+            language,
+        })
+    }
+
     pub fn worker_id(&self) -> &str {
         &self.worker_id
     }
@@ -165,7 +189,7 @@ mod tests {
         }
 
         // Bind a TCP listener to get a free port, then release it.
-        // This may fail in sandboxed environments — return None to skip.
+        // This may fail in sandboxed environments -- return None to skip.
         let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
             Ok(l) => l,
             Err(_) => return None,
@@ -410,7 +434,7 @@ mod tests {
     /// so we can exercise the constructor and accessor without a server.
     #[tokio::test]
     async fn test_from_channel_worker_id_is_uuid() {
-        // Channel::from_static creates a lazily-evaluated channel — no connection
+        // Channel::from_static creates a lazily-evaluated channel -- no connection
         // is made until an RPC is issued.
         let channel = tonic::transport::Channel::from_static("http://127.0.0.1:1").connect_lazy();
         let worker = WorkerClient::from_channel(channel, "rust".into());
@@ -665,7 +689,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Additional coverage: rejecting coordinator — heartbeat, get_coverage,
+    // Additional coverage: rejecting coordinator -- heartbeat, get_coverage,
     // get_seeds, submit_results, pull_once paths
     // -----------------------------------------------------------------------
 
@@ -1133,5 +1157,301 @@ mod tests {
         assert_eq!(count, 1);
         assert!((pct - 25.0).abs() < 0.01);
         assert_eq!(oracle.covered_count(), 1);
+    }
+
+    // =======================================================================
+    // Unix Domain Socket (UDS) tests -- always succeed, no port conflicts
+    // =======================================================================
+
+    #[cfg(unix)]
+    mod uds_tests {
+        use super::*;
+
+        /// Generic helper to start a custom coordinator impl over UDS and
+        /// connect a `WorkerClient` to it. Returns the worker and a handle
+        /// to the temp directory (which must be kept alive to prevent socket
+        /// cleanup).
+        ///
+        /// Returns `None` if UDS binding is blocked (e.g. in sandboxed envs).
+        async fn setup_custom_coordinator_uds<S>(
+            service: S,
+        ) -> Option<(WorkerClient, tempfile::TempDir)>
+        where
+            S: crate::proto::apex_coordinator_server::ApexCoordinator,
+        {
+            use crate::proto::apex_coordinator_server::ApexCoordinatorServer;
+
+            let tmp = tempfile::tempdir().expect("failed to create tempdir");
+            let sock_path = tmp.path().join("coordinator.sock");
+
+            let uds = match tokio::net::UnixListener::bind(&sock_path) {
+                Ok(l) => l,
+                Err(_) => return None,
+            };
+            let incoming = tokio_stream::wrappers::UnixListenerStream::new(uds);
+
+            tokio::spawn(async move {
+                tonic::transport::Server::builder()
+                    .add_service(ApexCoordinatorServer::new(service))
+                    .serve_with_incoming(incoming)
+                    .await
+                    .ok();
+            });
+
+            // UDS is ready immediately after bind — no sleep needed.
+            let worker = WorkerClient::connect_uds(&sock_path, "python".into())
+                .await
+                .expect("failed to connect over UDS");
+
+            Some((worker, tmp))
+        }
+
+        /// Start a real `CoordinatorServer` on a UDS, connect a `WorkerClient`,
+        /// and return all handles needed for testing.
+        ///
+        /// Returns `None` if UDS binding is blocked (e.g. in sandboxed envs).
+        async fn setup_worker_uds() -> Option<(
+            WorkerClient,
+            Arc<CoordinatorService>,
+            Arc<CoverageOracle>,
+            tempfile::TempDir,
+        )> {
+            let oracle = Arc::new(CoverageOracle::new());
+            for line in 1..=4 {
+                oracle.register_branches([BranchId::new(1, line, 0, 0)]);
+            }
+
+            let tmp = tempfile::tempdir().expect("failed to create tempdir");
+            let sock_path = tmp.path().join("coordinator.sock");
+
+            let (service, _handle) = match CoordinatorServer::start_uds_with_service(
+                &sock_path,
+                oracle.clone(),
+            )
+            .await
+            {
+                Ok(s) => s,
+                Err(_) => return None,
+            };
+
+            // UDS is ready immediately after bind — no sleep needed.
+            let worker = WorkerClient::connect_uds(&sock_path, "python".into())
+                .await
+                .expect("failed to connect over UDS");
+
+            Some((worker, service, oracle, tmp))
+        }
+
+        async fn setup_rejecting_worker_uds() -> Option<(WorkerClient, tempfile::TempDir)> {
+            setup_custom_coordinator_uds(RejectingCoordinator).await
+        }
+
+        async fn setup_error_worker_uds() -> Option<(WorkerClient, tempfile::TempDir)> {
+            setup_custom_coordinator_uds(ErrorCoordinator).await
+        }
+
+        // -------------------------------------------------------------------
+        // UDS test variants -- same logic as TCP tests but always succeed
+        // -------------------------------------------------------------------
+
+        #[tokio::test]
+        async fn test_register_succeeds_uds() {
+            let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else {
+                return;
+            };
+            let session_id = worker.register(4).await.unwrap();
+            assert!(!session_id.is_empty());
+            assert!(
+                uuid::Uuid::parse_str(&session_id).is_ok(),
+                "session_id should be a valid UUID, got: {session_id}"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_heartbeat_succeeds_uds() {
+            let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else {
+                return;
+            };
+            let ok = worker.heartbeat(0).await.unwrap();
+            assert!(ok);
+        }
+
+        #[tokio::test]
+        async fn test_pull_once_uds() {
+            let Some((mut worker, service, oracle, _tmp)) = setup_worker_uds().await else {
+                return;
+            };
+
+            service
+                .enqueue_seeds(vec![
+                    InputSeed {
+                        id: "s1".into(),
+                        data: vec![1],
+                        origin: "fuzzer".into(),
+                    },
+                    InputSeed {
+                        id: "s2".into(),
+                        data: vec![2],
+                        origin: "fuzzer".into(),
+                    },
+                ])
+                .await;
+
+            let (count, pct) = worker
+                .pull_once(10, |seed| {
+                    let line = seed.data[0] as u32;
+                    Some(make_result(&seed.id, vec![make_branch(line)]))
+                })
+                .await
+                .unwrap();
+
+            assert_eq!(count, 2);
+            assert!((pct - 50.0).abs() < 0.01);
+            assert_eq!(oracle.covered_count(), 2);
+        }
+
+        #[tokio::test]
+        async fn test_register_rejected_uds() {
+            let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else {
+                return;
+            };
+            let result = worker.register(4).await;
+            assert!(result.is_err());
+            let status = result.unwrap_err();
+            assert_eq!(status.code(), tonic::Code::PermissionDenied);
+            assert!(
+                status.message().contains("rejected"),
+                "expected 'rejected' in message, got: {}",
+                status.message()
+            );
+        }
+
+        #[tokio::test]
+        async fn test_error_register_uds() {
+            let Some((mut worker, _tmp)) = setup_error_worker_uds().await else {
+                return;
+            };
+            let err = worker.register(4).await.unwrap_err();
+            assert_eq!(err.code(), tonic::Code::Internal);
+            assert!(err.message().contains("register error"));
+        }
+
+        #[tokio::test]
+        async fn test_enqueue_and_get_seeds_uds() {
+            let Some((mut worker, service, _oracle, _tmp)) = setup_worker_uds().await else {
+                return;
+            };
+
+            service
+                .enqueue_seeds(vec![
+                    InputSeed {
+                        id: "s1".into(),
+                        data: vec![1, 2],
+                        origin: "fuzzer".into(),
+                    },
+                    InputSeed {
+                        id: "s2".into(),
+                        data: vec![3],
+                        origin: "corpus".into(),
+                    },
+                ])
+                .await;
+
+            let seeds = worker.get_seeds(10).await.unwrap();
+            assert_eq!(seeds.len(), 2);
+            assert_eq!(seeds[0].id, "s1");
+            assert_eq!(seeds[1].id, "s2");
+        }
+
+        #[tokio::test]
+        async fn test_submit_results_updates_coverage_uds() {
+            let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else {
+                return;
+            };
+
+            let results = vec![make_result("s1", vec![make_branch(1), make_branch(2)])];
+            let (new_count, pct) = worker.submit_results(results).await.unwrap();
+
+            assert_eq!(new_count, 2);
+            assert!((pct - 50.0).abs() < 0.01);
+            assert_eq!(oracle.covered_count(), 2);
+        }
+
+        #[tokio::test]
+        async fn test_get_coverage_snapshot_uds() {
+            let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else {
+                return;
+            };
+
+            let snap = worker.get_coverage().await.unwrap();
+            assert_eq!(snap.total_branches, 4);
+            assert_eq!(snap.covered_branches, 0);
+
+            worker
+                .submit_results(vec![make_result(
+                    "s1",
+                    vec![make_branch(1), make_branch(3)],
+                )])
+                .await
+                .unwrap();
+
+            let snap2 = worker.get_coverage().await.unwrap();
+            assert_eq!(snap2.covered_branches, 2);
+            assert!((snap2.coverage_percent - 50.0).abs() < 0.01);
+            assert_eq!(oracle.covered_count(), 2);
+        }
+
+        #[tokio::test]
+        async fn test_sequential_submit_accumulates_coverage_uds() {
+            let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else {
+                return;
+            };
+
+            let (c1, _) = worker
+                .submit_results(vec![make_result("s1", vec![make_branch(1)])])
+                .await
+                .unwrap();
+            assert_eq!(c1, 1);
+
+            let (c2, _) = worker
+                .submit_results(vec![make_result(
+                    "s2",
+                    vec![make_branch(2), make_branch(3)],
+                )])
+                .await
+                .unwrap();
+            assert_eq!(c2, 2);
+
+            let (c3, pct3) = worker
+                .submit_results(vec![make_result("s3", vec![make_branch(4)])])
+                .await
+                .unwrap();
+            assert_eq!(c3, 1);
+            assert!((pct3 - 100.0).abs() < 0.01);
+            assert_eq!(oracle.covered_count(), 4);
+        }
+
+        #[tokio::test]
+        async fn test_custom_coordinator_uds_helper() {
+            // Verify the generic setup_custom_coordinator_uds helper works
+            // with the SubmitErrorCoordinator.
+            let Some((mut worker, _tmp)) =
+                setup_custom_coordinator_uds(SubmitErrorCoordinator).await
+            else {
+                return;
+            };
+
+            // get_seeds succeeds (returns 1 seed)
+            let seeds = worker.get_seeds(10).await.unwrap();
+            assert_eq!(seeds.len(), 1);
+            assert_eq!(seeds[0].id, "seed-1");
+
+            // submit_results fails
+            let err = worker
+                .submit_results(vec![make_result("seed-1", vec![make_branch(1)])])
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), tonic::Code::Aborted);
+        }
     }
 }

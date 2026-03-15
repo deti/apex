@@ -2,6 +2,7 @@
 //! for parallel coverage exploration across multiple machines.
 
 pub mod coordinator;
+pub mod interceptor;
 pub mod worker;
 
 pub mod proto {
