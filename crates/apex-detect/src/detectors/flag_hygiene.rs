@@ -51,7 +51,7 @@ impl FlagHygieneDetector {
     }
 }
 
-/// Compiled regex patterns for detecting feature flags in source code.
+/// Compiled patterns for detecting feature flags in source code.
 static FLAG_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     vec![
         // Python
@@ -161,7 +161,7 @@ impl Detector for FlagHygieneDetector {
                 id: Uuid::new_v4(),
                 detector: "flag-hygiene".into(),
                 severity: Severity::Info,
-                category: FindingCategory::FeatureFlagHygiene,
+                category: FindingCategory::SecuritySmell,
                 file: first_ref.file.clone(),
                 line: Some(first_ref.line),
                 title: format!("Feature flag: {flag_name}"),

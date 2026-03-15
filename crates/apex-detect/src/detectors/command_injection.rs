@@ -6,9 +6,6 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
-static SHELL_TRUE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"subprocess\.\w+\([^)]*shell\s*=\s*True"#).unwrap());
-
 /// Shell execution function patterns that are dangerous with user input.
 const DANGEROUS_FUNCS: &[&str] = &[
     "os.system(",
@@ -17,10 +14,12 @@ const DANGEROUS_FUNCS: &[&str] = &[
     "commands.getstatusoutput(",
 ];
 
+static SHELL_TRUE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"subprocess\.\w+\([^)]*shell\s*=\s*True"#).unwrap());
+
 /// Scan source code for command injection vulnerabilities.
 pub fn scan_command_injection(source: &str, file_path: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
-    let shell_true = &*SHELL_TRUE;
 
     for (line_num, line) in source.lines().enumerate() {
         let line_1based = (line_num + 1) as u32;
@@ -37,7 +36,7 @@ pub fn scan_command_injection(source: &str, file_path: &str) -> Vec<Finding> {
         }
 
         // Check subprocess with shell=True.
-        if shell_true.is_match(trimmed) {
+        if SHELL_TRUE_RE.is_match(trimmed) {
             is_vuln = true;
         }
 

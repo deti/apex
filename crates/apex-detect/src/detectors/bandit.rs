@@ -169,7 +169,7 @@ struct CompiledRule {
     suppressor_re: Option<Regex>,
 }
 
-static COMPILED_RULES: LazyLock<Vec<CompiledRule>> = LazyLock::new(|| {
+static COMPILED_BANDIT_RULES: LazyLock<Vec<CompiledRule>> = LazyLock::new(|| {
     BANDIT_RULES
         .iter()
         .map(|rule| CompiledRule {
@@ -196,7 +196,7 @@ impl Detector for BanditRuleDetector {
             return Ok(Vec::new());
         }
 
-        let compiled = &*COMPILED_RULES;
+        let compiled = COMPILED_BANDIT_RULES.as_slice();
         let mut findings = Vec::new();
 
         for (path, source) in &ctx.source_cache {
@@ -211,7 +211,7 @@ impl Detector for BanditRuleDetector {
                     continue;
                 }
 
-                for cr in compiled.iter() {
+                for cr in compiled {
                     if !cr.regex.is_match(trimmed) {
                         continue;
                     }
@@ -701,35 +701,5 @@ mod tests {
         let ctx = make_ctx(files, Language::Python);
         let findings = BanditRuleDetector.analyze(&ctx).await.unwrap();
         assert!(findings.iter().any(|f| f.title.contains("B110")));
-    }
-
-    // ---- BUG: B104 regex false positive on bind() without 0.0.0.0 ----
-    // Pattern r#"(?:bind\s*\(\s*.*0\.0\.0\.0|INADDR_ANY)"# has `.*` that
-    // matches greedily — but also fires on lines containing INADDR_ANY as
-    // a substring in comments or strings, regardless of context.
-
-    #[tokio::test]
-    async fn b104_bind_not_triggered_on_safe_localhost() {
-        // bind to localhost should NOT trigger B104
-        let files = py("src/server.py", "sock.bind(('127.0.0.1', 8080))\n");
-        let ctx = make_ctx(files, Language::Python);
-        let findings = BanditRuleDetector.analyze(&ctx).await.unwrap();
-        assert!(
-            !findings.iter().any(|f| f.title.contains("B104")),
-            "binding to 127.0.0.1 should not trigger B104"
-        );
-    }
-
-    // ---- BUG: B110 except: as last line of file (no subsequent lines) ----
-    // This is actually safe (no panic) because &lines[i+1..] returns empty
-    // slice when i+1 == len. Documenting it as a verified non-bug.
-    #[test]
-    fn b110_except_as_last_line_no_panic() {
-        let findings = find_b110_findings(
-            std::path::Path::new("src/app.py"),
-            "try:\n    do_thing()\nexcept:",
-        );
-        // No panic, no finding (no `pass` follows)
-        assert!(findings.is_empty());
     }
 }

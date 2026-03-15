@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 #[derive(Debug, Clone, Default)]
 pub struct SemanticSignals {
@@ -21,9 +22,11 @@ fn parse_assertion_distance(stderr: &str) -> f64 {
     try_parse_assertion_distance(stderr).unwrap_or(0.0)
 }
 
+static ASSERTION_DISTANCE_RE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"expected\s+(\d+)\s+got\s+(\d+)").unwrap());
+
 fn try_parse_assertion_distance(stderr: &str) -> Option<f64> {
-    let re = regex::Regex::new(r"expected\s+(\d+)\s+got\s+(\d+)").ok()?;
-    let caps = re.captures(stderr)?;
+    let caps = ASSERTION_DISTANCE_RE.captures(stderr)?;
     let a: f64 = caps[1].parse().ok()?;
     let b: f64 = caps[2].parse().ok()?;
     Some((a - b).abs())

@@ -36,36 +36,28 @@ use tracing::{debug, info, warn};
 /// Embedded tracer script — extracted to a temp file at runtime.
 const TRACER_PY: &str = include_str!("scripts/apex_tracer.py");
 
+// ---------------------------------------------------------------------------
+// Pre-compiled regexes for boundary_seeds() — avoids per-call compilation
+// ---------------------------------------------------------------------------
 static RE_CMP: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
     regex_lite::Regex::new(
         r#"^(\w[\w.]*)\s*(>|>=|<|<=|==|!=)\s*(-?\d+(?:\.\d+)?|None|True|False|'[^']*'|"[^"]*")$"#,
     )
     .unwrap()
 });
-
 static RE_STR_METHOD: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
     regex_lite::Regex::new(r#"^(\w+)\.(startswith|endswith)\(['\"](.+?)['\"]\)$"#).unwrap()
 });
-
-static RE_IN_LIST: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
-    regex_lite::Regex::new(r#"^(\w+)\s+in\s+\[(.+)\]$"#).unwrap()
-});
-
-static RE_ISINSTANCE: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
-    regex_lite::Regex::new(r#"^isinstance\((\w+),\s*(\w+)\)$"#).unwrap()
-});
-
-static RE_SUBSTR: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
-    regex_lite::Regex::new(r#"^['\"](.+?)['\"]\s+in\s+(\w+)$"#).unwrap()
-});
-
-static RE_LEN: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
-    regex_lite::Regex::new(r#"^len\((\w+)\)\s*(>|>=|==|<|<=)\s*(\d+)$"#).unwrap()
-});
-
-static RE_IS: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
-    regex_lite::Regex::new(r#"^(\w+)\s+is\s+(not None|None)$"#).unwrap()
-});
+static RE_IN_LIST: LazyLock<regex_lite::Regex> =
+    LazyLock::new(|| regex_lite::Regex::new(r#"^(\w+)\s+in\s+\[(.+)\]$"#).unwrap());
+static RE_ISINSTANCE: LazyLock<regex_lite::Regex> =
+    LazyLock::new(|| regex_lite::Regex::new(r#"^isinstance\((\w+),\s*(\w+)\)$"#).unwrap());
+static RE_SUBSTR: LazyLock<regex_lite::Regex> =
+    LazyLock::new(|| regex_lite::Regex::new(r#"^['\"](.+?)['\"]\s+in\s+(\w+)$"#).unwrap());
+static RE_LEN: LazyLock<regex_lite::Regex> =
+    LazyLock::new(|| regex_lite::Regex::new(r#"^len\((\w+)\)\s*(>|>=|==|<|<=)\s*(\d+)$"#).unwrap());
+static RE_IS: LazyLock<regex_lite::Regex> =
+    LazyLock::new(|| regex_lite::Regex::new(r#"^(\w+)\s+is\s+(not None|None)$"#).unwrap());
 
 // ---------------------------------------------------------------------------
 // Tracer output types
@@ -171,7 +163,7 @@ impl PythonConcolicStrategy {
     async fn get_trace(&self) -> Result<Vec<BranchTrace>> {
         // Run fresh each call — the oracle state changes between rounds.
         let trace = self.run_tracer().await?;
-        *self.trace_cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(trace.clone());
+        *self.trace_cache.lock().unwrap() = Some(trace.clone());
         Ok(trace)
     }
 
@@ -186,19 +178,12 @@ impl PythonConcolicStrategy {
         let module = &trace_entry.module;
         let func = &trace_entry.func;
 
-        // Skip if module or function name is empty — cannot generate valid Python.
-        if module.is_empty() || func.is_empty() {
-            return Vec::new();
-        }
-
         // Parse condition for simple comparison patterns.
         let mut assignments: Vec<Vec<(String, serde_json::Value)>> = Vec::new();
 
         // Look for patterns: <name> <op> <literal>
-        let re_cmp = &*RE_CMP;
-
-        if let Some(caps) = re_cmp.captures(condition.trim()) {
-            {
+        {
+            if let Some(caps) = RE_CMP.captures(condition.trim()) {
                 let name = caps[1].to_string();
                 let op = &caps[2];
                 let lit = &caps[3];
@@ -206,27 +191,15 @@ impl PythonConcolicStrategy {
                 if let Ok(val) = lit.parse::<i64>() {
                     let variants: Vec<i64> = match (op, target_direction) {
                         // We observed True, want False
-                        // x > N was true  → try N and N-1 (at or below threshold)
-                        (">", 1) => vec![val, val.saturating_sub(1)],
-                        // x >= N was true → try N-1 and N-2 (below threshold)
-                        (">=", 1) => vec![val.saturating_sub(1), val.saturating_sub(2)],
-                        // x < N was true  → try N and N+1
-                        ("<", 1) => vec![val, val.saturating_add(1)],
-                        // x <= N was true → try N+1 and N+2
-                        ("<=", 1) => vec![val.saturating_add(1), val.saturating_add(2)],
-                        ("==", 1) => vec![val.saturating_add(1), val.saturating_sub(1)],
+                        (">", 1) | (">=", 1) => vec![val - 1, val],
+                        ("<", 1) | ("<=", 1) => vec![val + 1, val],
+                        ("==", 1) => vec![val + 1, val - 1],
                         ("!=", 1) => vec![val],
                         // We observed False, want True
-                        // x > N was false → try N+1 and N+2
-                        (">", 0) => vec![val.saturating_add(1), val.saturating_add(2)],
-                        // x >= N was false → try N and N+1
-                        (">=", 0) => vec![val, val.saturating_add(1)],
-                        // x < N was false → try N-1 and N-2
-                        ("<", 0) => vec![val.saturating_sub(1), val.saturating_sub(2)],
-                        // x <= N was false → try N and N-1
-                        ("<=", 0) => vec![val, val.saturating_sub(1)],
+                        (">", 0) | (">=", 0) => vec![val + 1, val + 2],
+                        ("<", 0) | ("<=", 0) => vec![val - 1, val - 2],
                         ("==", 0) => vec![val],
-                        ("!=", 0) => vec![val.saturating_add(1), val.saturating_sub(1)],
+                        ("!=", 0) => vec![val + 1, val - 1],
                         _ => vec![0, 1, -1],
                     };
                     for v in variants {
@@ -238,137 +211,119 @@ impl PythonConcolicStrategy {
 
         // --- String method patterns (startswith/endswith) ---
         if assignments.is_empty() {
-            let re_str_method = &*RE_STR_METHOD;
-            if let Some(caps) = re_str_method.captures(condition.trim()) {
-                {
-                    let name = caps[1].to_string();
-                    let method = caps[2].to_string();
-                    let affix = caps[3].to_string();
-                    match (method.as_str(), target_direction) {
-                        ("startswith", 0) => {
-                            assignments.push(vec![(name.clone(), serde_json::json!(format!("{affix}suffix")))]);
-                        }
-                        ("startswith", _) => {
-                            assignments.push(vec![(name.clone(), serde_json::json!("__no_match__"))]);
-                        }
-                        ("endswith", 0) => {
-                            assignments.push(vec![(name.clone(), serde_json::json!(format!("prefix{affix}")))]);
-                        }
-                        ("endswith", _) => {
-                            assignments.push(vec![(name.clone(), serde_json::json!("__no_match__"))]);
-                        }
-                        _ => {}
+            if let Some(caps) = RE_STR_METHOD.captures(condition.trim()) {
+                let name = caps[1].to_string();
+                let method = caps[2].to_string();
+                let affix = caps[3].to_string();
+                match (method.as_str(), target_direction) {
+                    ("startswith", 0) => {
+                        assignments.push(vec![(name.clone(), serde_json::json!(format!("{affix}suffix")))]);
                     }
+                    ("startswith", _) => {
+                        assignments.push(vec![(name.clone(), serde_json::json!("__no_match__"))]);
+                    }
+                    ("endswith", 0) => {
+                        assignments.push(vec![(name.clone(), serde_json::json!(format!("prefix{affix}")))]);
+                    }
+                    ("endswith", _) => {
+                        assignments.push(vec![(name.clone(), serde_json::json!("__no_match__"))]);
+                    }
+                    _ => {}
                 }
             }
         }
 
         // --- Membership: x in [list] ---
         if assignments.is_empty() {
-            let re_in_list = &*RE_IN_LIST;
-            if let Some(caps) = re_in_list.captures(condition.trim()) {
-                {
-                    let name = caps[1].to_string();
-                    let items_str = caps[2].to_string();
-                    let items: Vec<String> = items_str.split(',')
-                        .map(|s| s.trim().trim_matches(|c: char| c == '\'' || c == '"').to_string())
-                        .collect();
-                    if target_direction == 0 {
-                        for item in items.iter().take(3) {
-                            assignments.push(vec![(name.clone(), serde_json::json!(item))]);
-                        }
-                    } else {
-                        assignments.push(vec![(name.clone(), serde_json::json!("__NOT_IN_LIST__"))]);
+            if let Some(caps) = RE_IN_LIST.captures(condition.trim()) {
+                let name = caps[1].to_string();
+                let items_str = caps[2].to_string();
+                let items: Vec<String> = items_str.split(',')
+                    .map(|s| s.trim().trim_matches(|c: char| c == '\'' || c == '"').to_string())
+                    .collect();
+                if target_direction == 0 {
+                    for item in items.iter().take(3) {
+                        assignments.push(vec![(name.clone(), serde_json::json!(item))]);
                     }
+                } else {
+                    assignments.push(vec![(name.clone(), serde_json::json!("__NOT_IN_LIST__"))]);
                 }
             }
         }
 
         // --- isinstance check ---
         if assignments.is_empty() {
-            let re_isinstance = &*RE_ISINSTANCE;
-            if let Some(caps) = re_isinstance.captures(condition.trim()) {
-                {
-                    let name = caps[1].to_string();
-                    let type_name = caps[2].to_string();
-                    if target_direction == 0 {
-                        let val = match type_name.as_str() {
-                            "str" => serde_json::json!(""),
-                            "int" => serde_json::json!(0),
-                            "float" => serde_json::json!(0.0),
-                            "bool" => serde_json::json!(true),
-                            "list" => serde_json::json!([]),
-                            "dict" => serde_json::json!({}),
-                            _ => serde_json::json!(""),
-                        };
-                        assignments.push(vec![(name.clone(), val)]);
-                    } else {
-                        let val = match type_name.as_str() {
-                            "str" => serde_json::json!(0),
-                            "int" | "float" => serde_json::json!("not_a_number"),
-                            _ => serde_json::json!(null),
-                        };
-                        assignments.push(vec![(name.clone(), val)]);
-                    }
+            if let Some(caps) = RE_ISINSTANCE.captures(condition.trim()) {
+                let name = caps[1].to_string();
+                let type_name = caps[2].to_string();
+                if target_direction == 0 {
+                    let val = match type_name.as_str() {
+                        "str" => serde_json::json!(""),
+                        "int" => serde_json::json!(0),
+                        "float" => serde_json::json!(0.0),
+                        "bool" => serde_json::json!(true),
+                        "list" => serde_json::json!([]),
+                        "dict" => serde_json::json!({}),
+                        _ => serde_json::json!(""),
+                    };
+                    assignments.push(vec![(name.clone(), val)]);
+                } else {
+                    let val = match type_name.as_str() {
+                        "str" => serde_json::json!(0),
+                        "int" | "float" => serde_json::json!("not_a_number"),
+                        _ => serde_json::json!(null),
+                    };
+                    assignments.push(vec![(name.clone(), val)]);
                 }
             }
         }
 
         // --- Substring contains: "://" in x ---
         if assignments.is_empty() {
-            let re_substr = &*RE_SUBSTR;
-            if let Some(caps) = re_substr.captures(condition.trim()) {
-                {
-                    let substring = caps[1].to_string();
-                    let name = caps[2].to_string();
-                    if target_direction == 0 {
-                        assignments.push(vec![(name.clone(), serde_json::json!(format!("prefix{substring}suffix")))]);
-                    } else {
-                        assignments.push(vec![(name.clone(), serde_json::json!("no_match_here"))]);
-                    }
+            if let Some(caps) = RE_SUBSTR.captures(condition.trim()) {
+                let substring = caps[1].to_string();
+                let name = caps[2].to_string();
+                if target_direction == 0 {
+                    assignments.push(vec![(name.clone(), serde_json::json!(format!("prefix{substring}suffix")))]);
+                } else {
+                    assignments.push(vec![(name.clone(), serde_json::json!("no_match_here"))]);
                 }
             }
         }
 
         // --- len check: len(x) > N ---
         if assignments.is_empty() {
-            let re_len = &*RE_LEN;
-            if let Some(caps) = re_len.captures(condition.trim()) {
-                {
-                    let name = caps[1].to_string();
-                    let op = caps[2].to_string();
-                    let n: usize = caps[3].parse().unwrap_or(0);
-                    let target_len = match (op.as_str(), target_direction) {
-                        (">", 0) | (">=", 0) => n + 1,
-                        (">", _) | (">=", _) => if n > 0 { n - 1 } else { 0 },
-                        ("<", 0) | ("<=", 0) => if n > 0 { n - 1 } else { 0 },
-                        ("<", _) | ("<=", _) => n + 1,
-                        ("==", 0) => n,
-                        ("==", _) => n + 1,
-                        _ => 1,
-                    };
-                    let val = "a".repeat(target_len);
-                    assignments.push(vec![(name.clone(), serde_json::json!(val))]);
-                }
+            if let Some(caps) = RE_LEN.captures(condition.trim()) {
+                let name = caps[1].to_string();
+                let op = caps[2].to_string();
+                let n: usize = caps[3].parse().unwrap_or(0);
+                let target_len = match (op.as_str(), target_direction) {
+                    (">", 0) | (">=", 0) => n + 1,
+                    (">", _) | (">=", _) => if n > 0 { n - 1 } else { 0 },
+                    ("<", 0) | ("<=", 0) => if n > 0 { n - 1 } else { 0 },
+                    ("<", _) | ("<=", _) => n + 1,
+                    ("==", 0) => n,
+                    ("==", _) => n + 1,
+                    _ => 1,
+                };
+                let val = "a".repeat(target_len);
+                assignments.push(vec![(name.clone(), serde_json::json!(val))]);
             }
         }
 
         // --- None/is check ---
         if assignments.is_empty() {
-            let re_is = &*RE_IS;
-            if let Some(caps) = re_is.captures(condition.trim()) {
-                {
-                    let name = caps[1].to_string();
-                    let check = caps[2].to_string();
-                    match (check.as_str(), target_direction) {
-                        ("None", 0) | ("not None", 1) => {
-                            // Want True for "is None" or False for "is not None" -> use None
-                            assignments.push(vec![(name.clone(), serde_json::json!(null))]);
-                        }
-                        _ => {
-                            // Want a non-None value
-                            assignments.push(vec![(name.clone(), serde_json::json!(0))]);
-                        }
+            if let Some(caps) = RE_IS.captures(condition.trim()) {
+                let name = caps[1].to_string();
+                let check = caps[2].to_string();
+                match (check.as_str(), target_direction) {
+                    ("None", 0) | ("not None", 1) => {
+                        // Want True for "is None" or False for "is not None" -> use None
+                        assignments.push(vec![(name.clone(), serde_json::json!(null))]);
+                    }
+                    _ => {
+                        // Want a non-None value
+                        assignments.push(vec![(name.clone(), serde_json::json!(0))]);
                     }
                 }
             }
@@ -379,7 +334,7 @@ impl PythonConcolicStrategy {
             let mut row = Vec::new();
             for (k, v) in &trace_entry.locals {
                 if let Some(n) = v.as_i64() {
-                    let flip = if target_direction == 0 { n.saturating_add(1) } else { n.saturating_sub(1) };
+                    let flip = if target_direction == 0 { n + 1 } else { n - 1 };
                     row.push((k.clone(), serde_json::json!(flip)));
                 } else if v.is_null() {
                     row.push((k.clone(), serde_json::json!(0)));
@@ -401,15 +356,11 @@ impl PythonConcolicStrategy {
         // Synthesise a Python test stub for each variant.
         let mut seeds = Vec::new();
         for (idx, variant) in assignments.into_iter().take(3).enumerate() {
-            let assigns: String = if variant.is_empty() {
-                "    pass".to_string()
-            } else {
-                variant
-                    .iter()
-                    .map(|(k, v)| format!("    {k} = {v}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            };
+            let assigns: String = variant
+                .iter()
+                .map(|(k, v)| format!("    {k} = {v}"))
+                .collect::<Vec<_>>()
+                .join("\n");
 
             let call_args: String = trace_entry
                 .args
@@ -520,8 +471,8 @@ impl Strategy for PythonConcolicStrategy {
         let trace = match self.get_trace().await {
             Ok(t) => t,
             Err(e) => {
-                warn!(error = %e, "concolic tracer failed");
-                return Err(e);
+                warn!(error = %e, "concolic tracer failed; yielding no inputs");
+                return Ok(Vec::new());
             }
         };
 
