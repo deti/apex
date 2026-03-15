@@ -15,12 +15,12 @@ pyo3-tracer = ["pyo3"]
 apex-core = { path = "../apex-core" }
 apex-coverage = { path = "../apex-coverage" }
 apex-symbolic = { path = "../apex-symbolic" }
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "1"
-tracing = "0.1"
-async-trait = "0.1"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
 regex-lite = "0.1"
 
 # Feature-gated: only with --features pyo3-tracer
@@ -28,4 +28,4 @@ pyo3 = { version = "0.20", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
-tokio = { version = "1", features = ["full", "test-util"] }
+tokio = { workspace = true, features = ["test-util"] }

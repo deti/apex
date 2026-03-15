@@ -10,19 +10,13 @@ description = "gRPC distributed coordination for APEX"
 [dependencies]
 apex-core = { path = "../apex-core" }
 apex-coverage = { path = "../apex-coverage" }
-serde = { version = "1", features = ["derive"] }
-thiserror = "1"
+serde = { workspace = true }
+thiserror = { workspace = true }
 tonic = "0.11"
 prost = "0.12"
-tokio = { version = "1", features = ["full"] }
-tokio-stream = { version = "0.1", features = ["net"] }
-tower = "0.4"
-http = "0.2"
-uuid = { version = "1", features = ["v4"] }
-tracing = "0.1"
-
-[dev-dependencies]
-tempfile = "3"
+tokio = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
 
 [build-dependencies]
 tonic-build = "0.11"

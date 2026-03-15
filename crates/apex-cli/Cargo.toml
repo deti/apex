@@ -29,19 +29,17 @@ apex-fuzz = { path = "../apex-fuzz" }
 apex-cpg = { path = "../apex-cpg" }
 apex-detect = { path = "../apex-detect" }
 apex-index = { path = "../apex-index" }
-apex-reach = { path = "../apex-reach" }
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 toml = "0.8"
-thiserror = "1"
-tracing = "0.1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 color-eyre = "0.6"
 clap = { version = "4", features = ["derive"] }
-async-trait = "0.1"
+async-trait = { workspace = true }
 scopeguard = "1"
-rmcp = { version = "1", features = ["server", "transport-io", "macros", "schemars"] }
 
 [dev-dependencies]
 mockall = { workspace = true }
