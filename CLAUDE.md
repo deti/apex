@@ -84,12 +84,32 @@ Binary: 5MB static release (`lto = true`, `codegen-units = 1`). No runtime deps 
 | Nix | `flake.nix` | `nix run github:allexdav2/apex` |
 | cargo | source | `cargo install --git https://github.com/allexdav2/apex` |
 
-**Release process:** `git tag v<version> && git push --tags` → CI builds binaries → update sha256 in Homebrew formula → `npm publish` / `twine upload`.
+**Version bumping:** `./scripts/bump-version.sh 0.2.0` — updates all 5 locations atomically and stamps CHANGELOG.md.
 
-Keep versions in sync: `Cargo.toml`, `npm/package.json`, `python/pyproject.toml`, `python/apex_cli/__init__.py`, `HomebrewFormula/apex.rb`.
+**Release process:**
+1. `./scripts/bump-version.sh <version>`
+2. Create PR, get CI green, merge
+3. `git tag v<version> && git push --tags` → CI builds binaries
+4. Update Homebrew sha256 after release assets upload
+5. `npm publish` / `twine upload`
 
 ## Git Workflow
 
+- **PR-driven**: all changes go through pull requests. Direct pushes to main are blocked.
+- **CI required**: Check, Test, Clippy, Format, Changelog must pass before merge.
+- **Changelog required**: every PR must update CHANGELOG.md under `[Unreleased]`.
 - Use worktrees for feature branches: `.worktrees/<name>/`
 - Never switch branches in the main checkout
 - After merging worktree branches, check for struct drift (fields added on main while worktree was active)
+
+```bash
+# Typical PR workflow
+git worktree add .worktrees/my-feature -b feat/my-feature
+cd .worktrees/my-feature
+# ... work, commit ...
+git push -u origin feat/my-feature
+gh pr create --title "feat: my feature"
+# After merge:
+cd ../..
+git worktree remove .worktrees/my-feature
+```
