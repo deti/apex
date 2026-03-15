@@ -41,7 +41,7 @@ static CURL_PIPE_SH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"curl.*\|\s*(?:sh|bash)").unwrap());
 #[allow(dead_code)]
 static APT_NO_VERSION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)apt-get\s+install\s+(?!.*=)").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)apt-get\s+install\s+\w+(?:\s+\w+)*\s*$").unwrap());
 static EXPOSE_SSH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^EXPOSE\s+22\b").unwrap());
 

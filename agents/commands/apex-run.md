@@ -23,6 +23,19 @@ export LLVM_COV=${LLVM_COV:-/opt/homebrew/opt/llvm/bin/llvm-cov}
 export LLVM_PROFDATA=${LLVM_PROFDATA:-/opt/homebrew/opt/llvm/bin/llvm-profdata}
 ```
 
+### Fleet Preflight (before first dispatch)
+
+Before dispatching parallel agents, probe the runtime environment:
+```bash
+./scripts/fleet-preflight.sh <agent_count>
+```
+Parse the JSON output. Use `dispatch.max_parallel` for concurrent agent count and
+`dispatch.wave_sizes` for wave-based dispatch. Include `agent_rules` in each agent prompt:
+- `batch_fixes_before_testing: true` — fix ALL bugs, then test once
+- `max_cargo_test_invocations: 3` — test → fix failures → test → clippy (not per-fix)
+
+If the script is unavailable, default to `max(1, cpu_cores / 4)` parallel agents.
+
 ### Agent Loop
 
 For each round (1 to max_rounds):

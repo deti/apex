@@ -1,0 +1,23 @@
+# APEX Coverage & Security Analysis
+
+This project uses APEX for code coverage analysis and security detection.
+
+## When to use APEX
+
+- After writing or modifying code, run `apex_run` to check coverage gaps
+- Before committing, run `apex_detect` to check for security issues
+- When investigating a vulnerability, use `apex_reach` to find which entry points can reach it
+- In CI, use `apex_ratchet` to enforce minimum coverage
+
+## Available MCP Tools
+
+- `apex_run` — coverage gap analysis (pass target path + language)
+- `apex_detect` — security findings with CWE IDs
+- `apex_reach` — reverse path from file:line to entry points
+- `apex_ratchet` — CI coverage gate (PASS/FAIL)
+- `apex_doctor` — check prerequisites
+- `apex_deploy_score` — deployment readiness 0-100
+
+## Supported Languages
+
+python, rust, javascript, typescript, java, kotlin, go, c, cpp, ruby, swift, csharp

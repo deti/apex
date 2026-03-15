@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 pub struct RubyExtractor;
 
 static RE_DEF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*def\s+(\w+)").unwrap());
-static RE_CLASS_DEF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*class\s+(\w+)").unwrap());
+static _RE_CLASS_DEF: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*class\s+(\w+)").unwrap());
 static RE_CALL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\w+)\s*\(").unwrap());
 static RE_DESCRIBE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(describe|context|it)\s").unwrap());
 static RE_ROUTE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^\s*(get|post|put|patch|delete)\s+['"\/]"#).unwrap());

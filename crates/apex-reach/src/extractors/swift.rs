@@ -44,7 +44,7 @@ impl CallGraphExtractor for SwiftExtractor {
         for (path, source) in sources {
             let lines: Vec<&str> = source.lines().collect();
             let has_xctest = source.contains("XCTestCase");
-            let has_main_attr = source.contains("@main");
+            let _has_main_attr = source.contains("@main");
             let has_ui_delegate = source.contains("UIApplicationDelegate");
 
             let mut current_fn: Option<(FnId, i32)> = None;

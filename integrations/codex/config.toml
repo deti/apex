@@ -1,0 +1,7 @@
+# APEX MCP Server for Codex CLI
+# Copy this to .codex/config.toml in your project root
+
+[mcp_servers.apex]
+type = "stdio"
+command = "apex"
+args = ["mcp"]

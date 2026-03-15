@@ -1,0 +1,59 @@
+# Smithery.ai MCP Server Listing
+# https://smithery.ai/docs/publishing
+
+name: apex
+display_name: "APEX — Code Coverage & Security Analysis"
+description: |
+  Autonomous coverage analysis, security detection, and reverse path reachability
+  for 11 languages. Run coverage gap analysis, find security vulnerabilities with
+  CWE mappings, trace code paths from any location to entry points, and get
+  deployment confidence scores.
+version: "0.1.0"
+author: "allexdav2"
+repository: "https://github.com/allexdav2/apex"
+license: "MIT"
+
+transport: stdio
+command: apex
+args: ["mcp"]
+
+tools:
+  - name: apex_run
+    description: "Run coverage analysis — returns uncovered branches and gap report"
+  - name: apex_detect
+    description: "Security analysis — returns findings with CWE IDs and SARIF format"
+  - name: apex_reach
+    description: "Reverse path — find entry points (tests, HTTP handlers) reaching a code location"
+  - name: apex_ratchet
+    description: "CI coverage gate — PASS/FAIL with coverage percentage"
+  - name: apex_doctor
+    description: "Check prerequisites for a language"
+  - name: apex_deploy_score
+    description: "Deployment confidence score (0-100)"
+
+languages:
+  - python
+  - rust
+  - javascript
+  - typescript
+  - java
+  - kotlin
+  - go
+  - c
+  - cpp
+  - ruby
+  - swift
+  - csharp
+
+categories:
+  - code-analysis
+  - security
+  - testing
+  - developer-tools
+
+install:
+  homebrew: "brew install allexdav2/tap/apex"
+  npm: "npm install -g @apex-coverage/cli"
+  pip: "pip install apex-coverage"
+  cargo: "cargo install --git https://github.com/allexdav2/apex"
+  curl: "curl -sSL https://raw.githubusercontent.com/allexdav2/apex/main/install.sh | sh"

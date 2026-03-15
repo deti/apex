@@ -1,0 +1,43 @@
+{
+  "name": "apex",
+  "description": "Code coverage & security analysis for 11 languages. Coverage gaps, CWE-mapped security findings, reverse path reachability, deployment confidence scores.",
+  "version": "0.1.0",
+  "author": "allexdav2",
+  "homepage": "https://github.com/allexdav2/apex",
+  "license": "MIT",
+  "transport": "stdio",
+  "command": "apex",
+  "args": ["mcp"],
+  "tools": [
+    {
+      "name": "apex_run",
+      "description": "Run coverage analysis on a project"
+    },
+    {
+      "name": "apex_detect",
+      "description": "Run security detectors with CWE mappings"
+    },
+    {
+      "name": "apex_reach",
+      "description": "Find entry points reaching a code location"
+    },
+    {
+      "name": "apex_ratchet",
+      "description": "CI coverage gate check"
+    },
+    {
+      "name": "apex_doctor",
+      "description": "Check tool prerequisites"
+    },
+    {
+      "name": "apex_deploy_score",
+      "description": "Deployment confidence score 0-100"
+    }
+  ],
+  "categories": ["code-analysis", "security", "testing"],
+  "install": {
+    "homebrew": "brew install allexdav2/tap/apex",
+    "npm": "npm install -g @apex-coverage/cli",
+    "curl": "curl -sSL https://raw.githubusercontent.com/allexdav2/apex/main/install.sh | sh"
+  }
+}

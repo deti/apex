@@ -69,10 +69,8 @@ impl CallGraphExtractor for GoExtractor {
                     let type_name = caps[1].to_string();
                     let method_name = caps[2].to_string();
                     Some(format!("{}.{}", type_name, method_name))
-                } else if let Some(caps) = RE_FUNC.captures(trimmed) {
-                    Some(caps[1].to_string())
                 } else {
-                    None
+                    RE_FUNC.captures(trimmed).map(|caps| caps[1].to_string())
                 };
 
                 if let Some(name) = func_match {

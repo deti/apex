@@ -1,0 +1,6 @@
+{
+  "apex": {
+    "command": "apex",
+    "args": ["mcp"]
+  }
+}

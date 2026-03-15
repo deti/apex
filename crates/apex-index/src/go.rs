@@ -158,9 +158,8 @@ fn build_traces_from_verbose(stdout: &str, all_branches: &[BranchId]) -> Vec<Tes
     for line in stdout.lines() {
         let trimmed = line.trim();
 
-        if trimmed.starts_with("--- PASS: ") {
+        if let Some(rest) = trimmed.strip_prefix("--- PASS: ") {
             // Format: --- PASS: TestFoo (0.01s)
-            let rest = &trimmed["--- PASS: ".len()..];
             if let Some((name, duration_part)) = rest.split_once(' ') {
                 let duration_ms = parse_duration_parens(duration_part);
                 traces.push(TestTrace {
@@ -170,8 +169,7 @@ fn build_traces_from_verbose(stdout: &str, all_branches: &[BranchId]) -> Vec<Tes
                     status: ExecutionStatus::Pass,
                 });
             }
-        } else if trimmed.starts_with("--- FAIL: ") {
-            let rest = &trimmed["--- FAIL: ".len()..];
+        } else if let Some(rest) = trimmed.strip_prefix("--- FAIL: ") {
             let name = rest.split_whitespace().next().unwrap_or(rest);
             traces.push(TestTrace {
                 test_name: name.to_string(),

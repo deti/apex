@@ -93,6 +93,30 @@ Binary: 5MB static release (`lto = true`, `codegen-units = 1`). No runtime deps 
 4. Update Homebrew sha256 after release assets upload
 5. `npm publish` / `twine upload`
 
+## Agent Fleet Pattern
+
+When dispatching parallel worktree agents, use fleet officer / crew terminology:
+- Main session = **fleet officer** (orchestrates, dispatches, merges)
+- Worktree agents = **crew** (each handles one independent task in isolation)
+
+### Pre-Dispatch Checklist
+Before dispatching crew agents:
+1. Run `git status` — check for uncommitted changes
+2. If changes exist in files crew will touch:
+   a. Create a WIP commit: `git commit -am "WIP: pre-dispatch snapshot"`
+   b. Note the WIP commit hash for later cleanup
+3. Dispatch crew agents (they now have full state)
+4. After all crew complete and changes are merged:
+   a. `git reset HEAD~1` to undo the WIP commit (keeps changes staged)
+
+### Merging Crew Changes
+NEVER copy files wholesale from worktrees. Always use diffs:
+1. Generate patch: `git -C <worktree> diff HEAD -- crates/ > /tmp/crew-name.patch`
+2. Apply to main: `git apply /tmp/crew-name.patch`
+3. If patch conflicts, read the diff and apply changes manually to specific lines
+
+This prevents overwriting uncommitted main changes that crew agents couldn't see.
+
 ## Git Workflow
 
 - **PR-driven**: all changes go through pull requests. Direct pushes to main are blocked.

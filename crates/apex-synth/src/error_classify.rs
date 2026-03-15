@@ -23,7 +23,7 @@ pub fn classify_test_error(error: &str) -> ErrorKind {
         ErrorKind::Import
     } else if lower.contains("syntaxerror") || lower.contains("invalid syntax") {
         ErrorKind::Syntax
-    } else if lower.contains("assertionerror") || lower.contains("assert") && lower.contains("fail")
+    } else if lower.contains("assertionerror") || (lower.contains("assert") && lower.contains("fail"))
     {
         ErrorKind::Assertion
     } else if lower.contains("error") || lower.contains("exception") {

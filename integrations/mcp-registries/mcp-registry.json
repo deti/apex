@@ -1,0 +1,74 @@
+{
+  "$schema": "https://registry.modelcontextprotocol.io/server.schema.json",
+  "id": "io.github.allexdav2/apex",
+  "name": "APEX",
+  "description": "Autonomous code coverage analysis and security detection for 11 languages. Coverage gaps, CWE-mapped findings, reverse path reachability, and deployment confidence scoring.",
+  "version": "0.1.0",
+  "homepage": "https://github.com/allexdav2/apex",
+  "repository": "https://github.com/allexdav2/apex",
+  "license": "MIT",
+  "authors": ["allexdav2"],
+  "keywords": ["coverage", "security", "testing", "sast", "cwe", "sarif", "code-analysis"],
+  "transport": {
+    "type": "stdio",
+    "command": "apex",
+    "args": ["mcp"]
+  },
+  "tools": [
+    {
+      "name": "apex_run",
+      "description": "Run coverage analysis on a project. Returns uncovered branches, gap report, and coverage percentage.",
+      "parameters": {
+        "target": { "type": "string", "required": true, "description": "Path to project root" },
+        "lang": { "type": "string", "required": true, "description": "Language (python, rust, javascript, java, go, ruby, cpp, swift, csharp, kotlin)" },
+        "strategy": { "type": "string", "description": "Analysis strategy (agent, fuzz, concolic, all)" }
+      }
+    },
+    {
+      "name": "apex_detect",
+      "description": "Run security detectors. Returns findings with CWE IDs, severity, and remediation advice.",
+      "parameters": {
+        "target": { "type": "string", "required": true },
+        "lang": { "type": "string", "required": true },
+        "severity_threshold": { "type": "string", "description": "Minimum severity (low, medium, high, critical)" }
+      }
+    },
+    {
+      "name": "apex_reach",
+      "description": "Find all entry points (tests, HTTP handlers, main) that can reach a specific code location.",
+      "parameters": {
+        "target": { "type": "string", "required": true, "description": "file:line format" },
+        "lang": { "type": "string", "required": true },
+        "granularity": { "type": "string", "description": "function, block, or line" },
+        "entry_kind": { "type": "string", "description": "Filter: test, http, main, api, cli" }
+      }
+    },
+    {
+      "name": "apex_ratchet",
+      "description": "CI coverage gate. Returns PASS/FAIL with coverage percentage.",
+      "parameters": {
+        "target": { "type": "string", "required": true },
+        "lang": { "type": "string", "required": true },
+        "min_coverage": { "type": "number", "description": "Minimum coverage ratio 0.0-1.0" }
+      }
+    },
+    {
+      "name": "apex_doctor",
+      "description": "Check that all required tools are installed."
+    },
+    {
+      "name": "apex_deploy_score",
+      "description": "Deployment confidence score (0-100) based on coverage, security, and test health.",
+      "parameters": {
+        "target": { "type": "string", "required": true },
+        "lang": { "type": "string", "required": true }
+      }
+    }
+  ],
+  "install": {
+    "npm": "@apex-coverage/cli",
+    "pip": "apex-coverage",
+    "homebrew": "allexdav2/tap/apex",
+    "cargo": "apex-coverage"
+  }
+}

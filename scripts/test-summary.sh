@@ -4,12 +4,12 @@ set -euo pipefail
 # Usage: ./scripts/test-summary.sh [cargo test args...]
 # Example: ./scripts/test-summary.sh -p apex-lang -- cpp
 #
-# Friendly test runner that replaces cargo's confusing multi-binary output
-# with a clean, color-coded summary.
+# Friendly wrapper around `cargo test` inspired by cargo-nextest and gotestsum.
+# Hides empty test binaries, aggregates results, color-codes the summary.
 
 export PATH="$HOME/.cargo/bin:$PATH"
 
-# ── Colors (disabled if piped) ──────────────────────────────────────
+# ── Colors (disabled if not a terminal) ─────────────────────────────
 if [ -t 1 ]; then
   GREEN='\033[32m' RED='\033[31m' YELLOW='\033[33m'
   DIM='\033[90m' BOLD='\033[1m' RESET='\033[0m'
@@ -17,7 +17,7 @@ else
   GREEN='' RED='' YELLOW='' DIM='' BOLD='' RESET=''
 fi
 
-# ── Parse args for display ──────────────────────────────────────────
+# ── Parse args to show what we're testing ───────────────────────────
 CRATE="" FILTER="" PREV="" SEEN_SEP=false
 for arg in "$@"; do
   if $SEEN_SEP; then
@@ -26,84 +26,82 @@ for arg in "$@"; do
     SEEN_SEP=true
   elif [ "$PREV" = "-p" ]; then
     CRATE="$arg"
+  elif [ "$arg" = "--workspace" ]; then
+    CRATE="workspace"
   fi
   PREV="$arg"
 done
 
-# Build header label
-LABEL="${BOLD}${CRATE:-workspace}${RESET}"
-[ -n "$FILTER" ] && LABEL="$LABEL ${DIM}filter: ${FILTER}${RESET}"
+LABEL="${CRATE:-workspace}"
+[ -n "$FILTER" ] && LABEL="$LABEL (filter: $FILTER)"
 
-# ── Run tests ───────────────────────────────────────────────────────
-printf "\n${DIM}──${RESET} Testing %b ${DIM}──────────────────────────────────${RESET}\n\n" "$LABEL"
+# ── Run ─────────────────────────────────────────────────────────────
+printf "\n  ${BOLD}Running:${RESET} cargo test"
+[ -n "$CRATE" ] && [ "$CRATE" != "workspace" ] && printf " -p %s" "$CRATE"
+[ "$CRATE" = "workspace" ] && printf " --workspace"
+[ -n "$FILTER" ] && printf " -- %s" "$FILTER"
+printf "\n\n"
 
 OUTPUT=$(cargo test "$@" 2>&1) || true
 EXIT_CODE=${PIPESTATUS[0]:-$?}
 
-# ── Parse results (skip empty test binaries) ────────────────────────
-RESULTS=$(echo "$OUTPUT" | grep "^test result:" | grep -v "0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out" || true)
+# ── Parse results ───────────────────────────────────────────────────
+# Skip binaries with zero tests (no matches, doc-tests with nothing)
+RESULTS=$(echo "$OUTPUT" | grep "^test result:" \
+  | grep -v "0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out" || true)
 
-if [ -z "$RESULTS" ]; then
-  printf "  ${DIM}No matching tests found.${RESET}\n\n"
-  exit 0
-fi
-
-# Also treat "all zeros except filtered" as no real matches
-ALL_ZERO=$(echo "$RESULTS" | awk '{for(i=1;i<=NF;i++) if($i=="passed;") s+=$(i-1)} END{print s+0}')
-ALL_FAIL=$(echo "$RESULTS" | awk '{for(i=1;i<=NF;i++) if($i=="failed;") s+=$(i-1)} END{print s+0}')
-if [ "$ALL_ZERO" -eq 0 ] && [ "$ALL_FAIL" -eq 0 ]; then
-  printf "  ${YELLOW}No tests matched the filter.${RESET}\n\n"
-  exit 0
-fi
-
-# Aggregate totals
+# Aggregate counts
 TOTAL_PASSED=$(echo "$RESULTS" | awk '{for(i=1;i<=NF;i++) if($i=="passed;") s+=$(i-1)} END{print s+0}')
 TOTAL_FAILED=$(echo "$RESULTS" | awk '{for(i=1;i<=NF;i++) if($i=="failed;") s+=$(i-1)} END{print s+0}')
 TOTAL_IGNORED=$(echo "$RESULTS" | awk '{for(i=1;i<=NF;i++) if($i=="ignored;") s+=$(i-1)} END{print s+0}')
+TOTAL_FILTERED=$(echo "$RESULTS" | awk '{for(i=1;i<=NF;i++) if($i=="filtered") s+=$(i-1)} END{print s+0}')
 
-# Extract timing from last result line
-TIME=$(echo "$RESULTS" | tail -1 | sed 's/.*finished in //' | sed 's/s$/s/')
-
-# ── Display results ─────────────────────────────────────────────────
-
-# Show passed
-if [ "$TOTAL_PASSED" -gt 0 ]; then
-  printf "  ${GREEN}✓ %d passed${RESET}" "$TOTAL_PASSED"
-else
-  printf "  ${DIM}0 passed${RESET}"
+# ── Handle edge cases ──────────────────────────────────────────────
+if [ -z "$RESULTS" ] || { [ "$TOTAL_PASSED" -eq 0 ] && [ "$TOTAL_FAILED" -eq 0 ]; }; then
+  if [ -n "$FILTER" ]; then
+    printf "  ${YELLOW}0 tests matched filter \"%s\"${RESET}\n\n" "$FILTER"
+  else
+    printf "  ${DIM}No tests found.${RESET}\n\n"
+  fi
+  exit 0
 fi
 
-# Show failed
-if [ "$TOTAL_FAILED" -gt 0 ]; then
-  printf "  ${RED}✗ %d failed${RESET}" "$TOTAL_FAILED"
-fi
-
-# Show ignored
-if [ "$TOTAL_IGNORED" -gt 0 ]; then
-  printf "  ${YELLOW}○ %d skipped${RESET}" "$TOTAL_IGNORED"
-fi
-
-# Timing
-printf "  ${DIM}%s${RESET}\n" "$TIME"
-
-# ── Show failure details ────────────────────────────────────────────
+# ── Show failure details first (most important info) ────────────────
 if [ "$TOTAL_FAILED" -gt 0 ]; then
   FAILURES=$(echo "$OUTPUT" | awk '/^failures:$/,/^test result:/' | grep '^ ' || true)
   if [ -n "$FAILURES" ]; then
-    printf "\n  ${RED}Failed:${RESET}\n"
+    printf "  ${RED}${BOLD}Failures:${RESET}\n"
     echo "$FAILURES" | while read -r line; do
-      printf "  ${RED}  ✗${RESET} %s\n" "$line"
+      printf "    ${RED}FAIL${RESET} %s\n" "$line"
     done
+    printf "\n"
   fi
 fi
 
-# ── Summary line ────────────────────────────────────────────────────
-printf "\n"
-if [ "$TOTAL_FAILED" -gt 0 ]; then
-  printf "${RED}${BOLD}  FAIL${RESET}${RED} — %d passed, %d failed${RESET}\n" "$TOTAL_PASSED" "$TOTAL_FAILED"
-else
-  printf "${GREEN}${BOLD}  PASS${RESET}${GREEN} — %d tests${RESET}\n" "$TOTAL_PASSED"
-fi
-printf "\n"
+# ── Summary (nextest-style) ─────────────────────────────────────────
+# Format: PASS 14 passed, 2 skipped in 0.01s
+#    or:  FAIL 12 passed, 2 failed in 0.03s
 
+# Build parts list
+PARTS=""
+[ "$TOTAL_PASSED" -gt 0 ] && PARTS="${TOTAL_PASSED} passed"
+if [ "$TOTAL_FAILED" -gt 0 ]; then
+  [ -n "$PARTS" ] && PARTS="$PARTS, "
+  PARTS="${PARTS}${TOTAL_FAILED} failed"
+fi
+if [ "$TOTAL_IGNORED" -gt 0 ]; then
+  [ -n "$PARTS" ] && PARTS="$PARTS, "
+  PARTS="${PARTS}${TOTAL_IGNORED} skipped"
+fi
+
+# Extract timing — sum all binary timings
+TOTAL_TIME=$(echo "$RESULTS" | sed 's/.*finished in //' | awk '{s+=$1} END{printf "%.2fs", s}')
+
+if [ "$TOTAL_FAILED" -gt 0 ]; then
+  printf "  ${RED}${BOLD}FAIL${RESET}  %s in %s\n" "$PARTS" "$TOTAL_TIME"
+else
+  printf "  ${GREEN}${BOLD}PASS${RESET}  %s in %s\n" "$PARTS" "$TOTAL_TIME"
+fi
+
+printf "\n"
 exit "$EXIT_CODE"

@@ -1,0 +1,8 @@
+{
+  "apex": {
+    "command": "apex",
+    "args": ["mcp"],
+    "disabled": false,
+    "autoApprove": ["apex_doctor", "apex_deploy_score"]
+  }
+}

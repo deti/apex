@@ -1,0 +1,47 @@
+{
+  "name": "APEX",
+  "description": "Autonomous code coverage analysis and security detection. Analyzes 11 languages for coverage gaps, security vulnerabilities (CWE-mapped), reverse path reachability, and deployment readiness.",
+  "url": "https://github.com/allexdav2/apex",
+  "version": "0.1.0",
+  "provider": {
+    "organization": "allexdav2"
+  },
+  "capabilities": {
+    "tools": true,
+    "streaming": false
+  },
+  "skills": [
+    {
+      "id": "coverage-analysis",
+      "name": "Coverage Analysis",
+      "description": "Identify uncovered code branches and generate gap reports"
+    },
+    {
+      "id": "security-detection",
+      "name": "Security Detection",
+      "description": "Find security vulnerabilities with CWE IDs and SARIF output"
+    },
+    {
+      "id": "reachability",
+      "name": "Reverse Path Analysis",
+      "description": "Trace from any code location back to entry points"
+    },
+    {
+      "id": "ci-gate",
+      "name": "CI Coverage Gate",
+      "description": "Enforce minimum coverage thresholds in CI/CD"
+    },
+    {
+      "id": "deploy-score",
+      "name": "Deployment Scoring",
+      "description": "Calculate deployment confidence based on coverage and security"
+    }
+  ],
+  "supportedLanguages": [
+    "python", "rust", "javascript", "typescript", "java", "kotlin",
+    "go", "c", "cpp", "ruby", "swift", "csharp"
+  ],
+  "authentication": {
+    "type": "none"
+  }
+}

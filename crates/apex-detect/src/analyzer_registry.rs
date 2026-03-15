@@ -182,14 +182,13 @@ pub fn discover_artifacts(target: &Path) -> Artifacts {
         }
 
         // Runbook files (runbooks/*.md)
-        if file_name.ends_with(".md") {
-            if path
+        if file_name.ends_with(".md")
+            && path
                 .components()
                 .any(|c| c.as_os_str() == "runbooks")
-            {
-                artifacts.runbook_files.push(path.clone());
-                continue;
-            }
+        {
+            artifacts.runbook_files.push(path.clone());
+            continue;
         }
 
         // SLO files

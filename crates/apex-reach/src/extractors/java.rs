@@ -85,7 +85,7 @@ impl CallGraphExtractor for JavaExtractor {
                 let found_method = method_name.is_some();
                 if let Some(name) = method_name {
                     // Close previous function if open
-                    if let Some((prev_id, start, _)) = current_fn.take() {
+                    if let Some((prev_id, _start, _)) = current_fn.take() {
                         if let Some(node) = graph.nodes.iter_mut().find(|n| n.id == prev_id) {
                             node.end_line = line_num.saturating_sub(1);
                         }

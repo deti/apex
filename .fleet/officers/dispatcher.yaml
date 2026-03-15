@@ -1,0 +1,51 @@
+schema_version: 1
+name: dispatcher
+title: Fleet Dispatcher
+domain: Runtime-adaptive parallel agent dispatch
+
+expertise:
+  - runtime environment probing
+  - adaptive parallelism
+  - wave-based dispatch scheduling
+  - build cache optimization
+  - resource-aware task distribution
+
+triggers:
+  - dispatch
+  - parallel
+  - fleet run
+  - agents
+
+preflight_script: scripts/fleet-preflight.sh
+
+dispatch_protocol:
+  # Step 1: Probe runtime before ANY dispatch
+  # Run: ./scripts/fleet-preflight.sh <task_count>
+  # This returns JSON with max_parallel, wave_sizes, agent_rules
+
+  # Step 2: Pre-warm shared build cache (if recommended)
+  # Run: CARGO_TARGET_DIR=/tmp/claude/shared-target cargo check --workspace
+  # This compiles all deps once, shared across agents
+
+  # Step 3: Dispatch in waves (not all at once)
+  # Wave 1: first N agents (N = max_parallel from preflight)
+  # When an agent completes: dispatch next from queue
+  # Continue until all tasks dispatched
+
+  # Step 4: Each agent inherits these rules from preflight:
+  #   - batch_fixes_before_testing: true
+  #   - max_cargo_test_invocations: 3
+  #   - max_cargo_clippy_invocations: 1
+
+agent_build_rules:
+  - Batch ALL code changes first, then compile/test once at end
+  - Maximum 3 cargo test invocations per agent (fix-all → test → fix-failures → test → clippy)
+  - Never run cargo test or cargo clippy after each individual fix
+  - Use cargo check for intermediate validation (type-check only, no linking)
+
+review_checklist:
+  - Preflight script was run before dispatch
+  - Parallelism was adapted to runtime environment
+  - Agents used batch-fix-then-test pattern
+  - Build cache was shared or pre-warmed when multiple agents compile same workspace
+  - Battery and thermal state were considered

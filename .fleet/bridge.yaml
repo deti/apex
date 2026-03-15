@@ -1,7 +1,7 @@
 schema_version: 1
 fleet_name: "apex"
 auto_analyze: false
-ralph_enabled: true
+ralph_enabled: false
 
 changelog_retention_days: 30
 
