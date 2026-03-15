@@ -89,6 +89,17 @@ impl PathShimDir {
         stdout: &str,
         stderr: &str,
     ) -> io::Result<()> {
+        // Validate program name to prevent shell injection.
+        if !program
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("program name contains invalid characters: {program:?}"),
+            ));
+        }
+
         let shim_path = self.dir.path().join(program);
         let log_file = self.log_dir.join(format!("{program}.jsonl"));
 
@@ -96,7 +107,7 @@ impl PathShimDir {
         let script = format!(
             r#"#!/bin/sh
 # APEX test shim for "{program}"
-LOG_FILE="{log_file}"
+LOG_FILE='{log_file}'
 ARGS=$(printf '%s\n' "$@" | sed 's/"/\\"/g' | sed 's/.*/"&"/' | paste -sd, -)
 printf '{{"program":"{program}","args":[%s],"cwd":"%s"}}\n' "$ARGS" "$(pwd)" >> "$LOG_FILE"
 printf '%s' '{stdout_escaped}'

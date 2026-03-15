@@ -287,12 +287,38 @@ impl CallGraphExtractor for PythonExtractor {
                 let id = FnId(next_id);
                 next_id += 1;
 
-                // Determine preceding line for decorator detection.
-                let preceding = if f.start_line >= 2 {
-                    lines_vec.get((f.start_line - 2) as usize).copied()
-                } else {
-                    None
-                };
+                // Scan backwards through all contiguous decorator lines above `def`.
+                // This handles stacked decorators like:
+                //   @login_required
+                //   @app.route('/x')
+                //   def view():
+                let mut decorator_line: Option<&str> = None;
+                if f.start_line >= 2 {
+                    let mut line_idx = (f.start_line - 2) as usize;
+                    loop {
+                        if let Some(line) = lines_vec.get(line_idx) {
+                            let trimmed = line.trim();
+                            if trimmed.starts_with('@') {
+                                decorator_line = Some(line);
+                                // Check if this is an HTTP decorator — if so, stop
+                                if trimmed.starts_with("@app.route")
+                                    || trimmed.starts_with("@router.")
+                                {
+                                    break;
+                                }
+                                // Keep scanning upward
+                                if line_idx == 0 {
+                                    break;
+                                }
+                                line_idx -= 1;
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
 
                 let entry_kind = classify_entry(
                     &f.name,
@@ -301,7 +327,7 @@ impl CallGraphExtractor for PythonExtractor {
                     is_init_py,
                     has_cli_markers,
                     f.indent,
-                    preceding,
+                    decorator_line,
                 );
 
                 graph.nodes.push(FnNode {

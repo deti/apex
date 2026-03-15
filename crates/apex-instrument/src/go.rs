@@ -131,10 +131,12 @@ fn derive_relative_path(coverage_path: &str, target_root: &Path) -> String {
     }
 
     // Try progressively shorter suffixes.
+    // Guard against path traversal (e.g. `../../etc/passwd` in coverage output).
     let parts: Vec<&str> = coverage_path.split('/').collect();
     for start in 1..parts.len() {
         let suffix = parts[start..].join("/");
-        if target_root.join(&suffix).exists() {
+        let candidate = target_root.join(&suffix);
+        if candidate.starts_with(target_root) && candidate.exists() {
             return suffix;
         }
     }
