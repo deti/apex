@@ -2,6 +2,145 @@
 
 All notable changes to APEX will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+#### SDLC Intelligence Platform
+- 10 intelligence subcommands: `deploy-score`, `test-optimize`, `dead-code`, `hotpaths`, `risk`, `test-prioritize`, `test-impact`, `contracts`, `regression-check`, `verify-boundaries`
+- `apex features` — per-language feature matrix showing instrumentation, concolic, and analysis support
+- Rust per-test branch indexer — APEX can now index itself with `apex index`
+- `/apex` unified dashboard command showing deploy score, coverage, and recommended actions
+
+#### Security Analysis
+- Security-pattern detector with Rust + Python patterns and CWE ID mapping
+- Hardcoded-secret detector with regex patterns and false-positive filtering
+- Secret scan, license scan, feature-flag hygiene, and API diff detectors
+- SARIF output format with CWE mapping for all finding categories
+- CVSS scoring for security findings
+- SBOM generation, SCA dependency audit (Python pip, JS npm, Rust cargo)
+- Session security, missing-timeout, and broken-access detectors
+- STRIDE, ASVS, and SSDF framework integration into audit pipeline
+- Threat-model-aware detection to suppress false positives based on trust boundaries
+- `/apex-threat-model` interactive wizard for configuring trust classification
+
+#### Analyzers (30 new)
+- `dep-graph` — dependency graph with cycle detection and fan-in/fan-out metrics
+- `doc-coverage` — documentation coverage measurement
+- `runbook-check` — operational runbook validation
+- `slo-check` — SLO/SLA compliance verification
+- `perf-diff` — performance regression detection
+- `a11y-scan` — accessibility compliance checking
+- `bench-diff` — benchmark comparison analysis
+- `config-drift` — configuration drift detection
+- `iac-scan` — infrastructure-as-code security scanning
+- `container-scan` — container image vulnerability scanning
+- `mem-check` — memory usage analysis
+- `resource-profile` — resource utilization profiling
+- `i18n-check` — internationalization completeness checking
+- `trace-analysis` — distributed trace analysis
+- `cost-estimate` — cloud cost estimation
+- `incident-match` — incident pattern matching
+- `migration-check` — migration safety validation
+- `api-coverage` — API endpoint coverage measurement
+- `service-map` — service dependency mapping
+- `schema-check` — schema validation
+- `test-data` — test data quality analysis
+- `data-flow` — data flow tracking
+- `blast-radius` — change impact analysis
+- `compliance-export` — compliance report generation
+- `data-transform` — data transformation validation
+- 8 Rust self-analysis detectors (64 tests)
+- Bandit-compatible rule detector for Python
+
+#### Concolic Execution
+- JS/TS condition parser for concolic execution with `ConditionTree` shared IR
+- Extended Python concolic parser: string ops, `isinstance`, `in`, `len` comparisons
+- Bun runtime detection in JS runner
+
+#### Code Property Graph
+- New `apex-cpg` crate with taint analysis (inspired by Joern)
+- Sanitizer-aware taint propagation with proper blocking
+
+#### Reverse Path Analysis
+- New `apex-reach` crate — traces from uncovered regions back to entry points
+- Python and JavaScript extractors for import/export graphs
+
+#### Solver Upgrades
+- Gradient descent constraint solver (from Angora research)
+- Continuous branch distance heuristics (from EvoMaster/Korel research)
+- Priority-based target selection with solver cache
+- Portfolio solver wires gradient descent as first backend
+
+#### Test Synthesis
+- LLM-guided test refinement with CoverUp-style closed loop
+
+#### JS/TS Support
+- 5-stage JS instrumentor pipeline with V8 + Istanbul tool selection
+- V8 coverage parser with `OffsetIndex` for precise mapping
+- Source map remapping for TypeScript coverage
+- JS/TS index support — Istanbul + V8 coverage parsing (36 tests)
+- JS environment detection in `apex-lang`
+
+#### CLI
+- `apex secret-scan`, `license-scan`, `flag-hygiene`, `api-diff` subcommands
+- `apex data-flow`, `blast-radius`, `compliance-export` subcommands
+- `apex api-coverage`, `service-map`, `schema-check`, `test-data` subcommands
+
+#### Distribution
+- GitHub Releases with cross-compilation for 4 targets (linux/mac x amd64/arm64)
+- Homebrew formula: `brew install allexdav2/tap/apex`
+- npm wrapper: `npx @apex-coverage/cli run`
+- pip wrapper: `pipx install apex-coverage`
+- Nix flake: `nix run github:allexdav2/apex`
+- curl installer: `curl -sSL .../install.sh | sh`
+
+#### Infrastructure
+- Fleet meta-agent system with 6 crew agents and 5 officers
+- `AgentCluster` orchestrator wired into `apex run` as unified entrypoint
+- `FixtureRunner` for deterministic integration testing
+- Portable agents/commands via `$APEX_HOME`
+
+### Changed
+- `apex run` shifted from coverage-chasing to bug-hunting strategy
+- Workspace expanded from 14 to 16 crates (added `apex-cpg`, `apex-reach`)
+- CPG build integrated into `run_audit` pipeline
+- Test file exclusion from branch coverage measurement
+
+### Fixed
+- 35 bugs found and fixed across 2 bug-hunting rounds (16 + 19)
+- Boundary seed overflow: `val + 1` → `saturating_add(1)` in concolic engine
+- `>=`/`<=` operators generated wrong boundary values in concolic seeds
+- Concolic errors silently swallowed as `Ok(vec![])` — now propagated as `Err`
+- Empty module/func generated invalid Python in concolic test synthesis
+- Mutex poison panics across 4 crates → `unwrap_or_else(|e| e.into_inner())`
+- Heroku UUID regex matched all UUIDs in secret scanner — added context prefix
+- `PATTERN_META[idx]` potential panic → safe `.get(idx)` with bounds check
+- SQL injection regexes recompiled per call → `static LazyLock<Regex>`
+- Circular `$ref` stack overflow in API diff → visited-set cycle detection
+- `branch_key` sentinel collision: `None` vs `Some(255)` → string-based keys
+- `build_profiles` double-counted tests → `HashSet` deduplication
+- `extract_functions` false positives for Java/JS/Python → tighter patterns
+- Generic type params included in function names → truncate at `<`
+- Istanbul `i as u8` wraps for >255 arms → overflow guard
+- Source map `sourceRoot` double-joined with token paths
+- Inline base64 source map newline corruption
+- `.mjs` sidecar source map path resolution
+- Arrow function `=>` misidentified as comparison operator in JS parser
+- Self-loop cycle detection in dependency graph
+- Fan-in/fan-out missed zero-degree nodes
+- SPDX license expression case normalization (`OR`/`Or`/`or`)
+- BOM stripping in license file parsing
+- Float count parsing and non-bool condition filtering in Rust indexer
+- 41 regexes converted from per-call `Regex::new` to `static LazyLock` across 7 crates
+- Dead detectors (`MissingTimeoutDetector`, `SessionSecurityDetector`) wired into pipeline
+- Z3 solver timeout added to prevent hangs
+
+### Security
+- Hardcoded secret detection skips `#[cfg(test)]` blocks to reduce false positives
+- Threat model suppression integrated into `SecurityPatternDetector`
+- Trust classification tables for internal/external/admin boundaries
+
 ## [0.1.0] — 2026-03-12
 
 Initial release.
