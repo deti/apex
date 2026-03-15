@@ -137,58 +137,101 @@ fn find_workspace_tomls(root: &Path) -> Vec<PathBuf> {
     result
 }
 
+/// Detect all cycles using Tarjan's SCC algorithm. Every SCC with more than
+/// one node represents a cycle. This correctly finds cycles reachable from
+/// already-visited nodes (fixes Bug 14).
 fn detect_cycles(edges: &[(String, String)]) -> Vec<Vec<String>> {
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
     for (from, to) in edges {
         adj.entry(from.as_str()).or_default().push(to.as_str());
+        // Ensure destination nodes appear in the adjacency map even if they
+        // have no outgoing edges, so Tarjan visits every node.
+        adj.entry(to.as_str()).or_default();
     }
 
-    let mut cycles = Vec::new();
-    let mut visited = HashSet::new();
-    let mut stack = HashSet::new();
-    let mut path = Vec::new();
+    let mut state = TarjanState {
+        index_counter: 0,
+        stack: Vec::new(),
+        on_stack: HashSet::new(),
+        index: HashMap::new(),
+        lowlink: HashMap::new(),
+        sccs: Vec::new(),
+    };
 
-    for node in adj.keys() {
-        if !visited.contains(node) {
-            dfs_cycles(node, &adj, &mut visited, &mut stack, &mut path, &mut cycles);
+    for &node in adj.keys() {
+        if !state.index.contains_key(node) {
+            tarjan_strongconnect(node, &adj, &mut state);
         }
     }
-    cycles
+
+    // Return SCCs with more than one node (each is a cycle).
+    // Also detect self-loops (single node with an edge to itself).
+    let self_loops: HashSet<&str> = edges
+        .iter()
+        .filter(|(f, t)| f == t)
+        .map(|(f, _)| f.as_str())
+        .collect();
+
+    state
+        .sccs
+        .into_iter()
+        .filter(|scc| scc.len() > 1 || (scc.len() == 1 && self_loops.contains(scc[0].as_str())))
+        .collect()
 }
 
-// TODO(Bug 14): The current `visited` set causes DFS to skip nodes already seen
-// from a different path, which may miss cycles reachable only via those nodes.
-// A proper fix requires Tarjan's SCC algorithm or resetting `visited` per
-// root — both require more invasive restructuring.
-fn dfs_cycles<'a>(
+struct TarjanState<'a> {
+    index_counter: usize,
+    stack: Vec<&'a str>,
+    on_stack: HashSet<&'a str>,
+    index: HashMap<&'a str, usize>,
+    lowlink: HashMap<&'a str, usize>,
+    sccs: Vec<Vec<String>>,
+}
+
+fn tarjan_strongconnect<'a>(
     node: &'a str,
     adj: &HashMap<&'a str, Vec<&'a str>>,
-    visited: &mut HashSet<&'a str>,
-    stack: &mut HashSet<&'a str>,
-    path: &mut Vec<&'a str>,
-    cycles: &mut Vec<Vec<String>>,
+    state: &mut TarjanState<'a>,
 ) {
-    visited.insert(node);
-    stack.insert(node);
-    path.push(node);
+    let idx = state.index_counter;
+    state.index.insert(node, idx);
+    state.lowlink.insert(node, idx);
+    state.index_counter += 1;
+    state.stack.push(node);
+    state.on_stack.insert(node);
 
     if let Some(neighbors) = adj.get(node) {
         for &next in neighbors {
-            if !visited.contains(next) {
-                dfs_cycles(next, adj, visited, stack, path, cycles);
-            } else if stack.contains(next) {
-                // Found cycle
-                let start = path.iter().position(|&n| n == next).unwrap_or(0);
-                let cycle: Vec<String> = path[start..].iter().map(|s| s.to_string()).collect();
-                if !cycle.is_empty() {
-                    cycles.push(cycle);
+            if !state.index.contains_key(next) {
+                tarjan_strongconnect(next, adj, state);
+                let next_low = state.lowlink[next];
+                let node_low = state.lowlink.get_mut(node).unwrap();
+                if next_low < *node_low {
+                    *node_low = next_low;
+                }
+            } else if state.on_stack.contains(next) {
+                let next_idx = state.index[next];
+                let node_low = state.lowlink.get_mut(node).unwrap();
+                if next_idx < *node_low {
+                    *node_low = next_idx;
                 }
             }
         }
     }
 
-    stack.remove(node);
-    path.pop();
+    // If node is a root of an SCC, pop the SCC from the stack.
+    if state.lowlink[node] == state.index[node] {
+        let mut scc = Vec::new();
+        loop {
+            let w = state.stack.pop().unwrap();
+            state.on_stack.remove(w);
+            scc.push(w.to_string());
+            if w == node {
+                break;
+            }
+        }
+        state.sccs.push(scc);
+    }
 }
 
 #[cfg(test)]
@@ -217,6 +260,51 @@ mod tests {
     fn empty_edges_no_cycles() {
         let cycles = detect_cycles(&[]);
         assert!(cycles.is_empty());
+    }
+
+    /// Regression test for Bug 14: cycles reachable only through
+    /// already-visited nodes must still be detected.
+    #[test]
+    fn detect_cycles_through_visited_nodes() {
+        // Graph: a -> b -> c (no cycle), a -> d -> e -> d (cycle via d-e)
+        // The old DFS would visit a->b->c first, then skip d because it might
+        // be reached from a different root traversal. With Tarjan's SCC, the
+        // d<->e cycle is always found regardless of traversal order.
+        let edges = vec![
+            ("a".into(), "b".into()),
+            ("b".into(), "c".into()),
+            ("a".into(), "d".into()),
+            ("d".into(), "e".into()),
+            ("e".into(), "d".into()),
+        ];
+        let cycles = detect_cycles(&edges);
+        // Must find the d<->e cycle
+        let has_de_cycle = cycles.iter().any(|c| c.contains(&"d".to_string()) && c.contains(&"e".to_string()));
+        assert!(has_de_cycle, "Expected d<->e cycle, found: {:?}", cycles);
+    }
+
+    /// Test that a cycle reachable only from an already-visited shared node
+    /// is still detected. This is the core Bug 14 scenario.
+    #[test]
+    fn detect_cycles_shared_entry_point() {
+        // x -> y -> z -> y (cycle), x -> w (no cycle)
+        // The shared entry point x leads to both a cycle and a non-cycle path.
+        let edges = vec![
+            ("x".into(), "y".into()),
+            ("y".into(), "z".into()),
+            ("z".into(), "y".into()),
+            ("x".into(), "w".into()),
+        ];
+        let cycles = detect_cycles(&edges);
+        let has_yz_cycle = cycles.iter().any(|c| c.contains(&"y".to_string()) && c.contains(&"z".to_string()));
+        assert!(has_yz_cycle, "Expected y<->z cycle, found: {:?}", cycles);
+    }
+
+    #[test]
+    fn detect_self_loop() {
+        let edges = vec![("a".into(), "a".into())];
+        let cycles = detect_cycles(&edges);
+        assert!(!cycles.is_empty(), "Expected self-loop cycle");
     }
 
     #[test]

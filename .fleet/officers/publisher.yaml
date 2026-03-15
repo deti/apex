@@ -1,0 +1,34 @@
+schema_version: 1
+name: publisher
+title: Publisher Officer
+domain: Package Publishing & Distribution
+
+expertise:
+  - npm publish
+  - cargo publish
+  - PyPI upload
+  - marketplace submission
+  - semver version bumping
+  - changelog generation
+  - pre-publish validation
+
+triggers:
+  - publish
+  - npm
+  - cargo
+  - pip
+  - pypi
+  - crates-io
+  - marketplace
+  - registry
+  - package
+  - distribution
+
+review_checklist:
+  - Version bumped following semver?
+  - Changelog updated with release notes?
+  - Files whitelist correct (no test fixtures, no secrets)?
+  - Dry-run passes?
+  - License file included?
+  - No credentials or .env files in package?
+  - All target registries configured and authenticated?

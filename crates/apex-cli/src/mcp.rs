@@ -213,7 +213,7 @@ impl ApexMcpService {
         Parameters(params): Parameters<ReachParams>,
     ) -> Result<CallToolResult, McpError> {
         let output = run_apex_command(&[
-            "attack-surface",
+            "reach",
             "--target",
             &params.target,
             "--lang",
@@ -270,6 +270,8 @@ impl ApexMcpService {
             "deploy-score",
             "--target",
             &params.target,
+            "--lang",
+            &params.lang,
             "--output-format",
             "json",
         ])

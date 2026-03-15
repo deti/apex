@@ -1,0 +1,27 @@
+schema_version: 1
+name: documentation
+title: Documentation Officer
+domain: Technical Writing
+
+expertise:
+  - API documentation
+  - user guides
+  - architecture decision records
+  - code comments
+  - onboarding docs
+  - changelog maintenance
+
+triggers:
+  - documentation
+  - docs
+  - api-docs
+  - runbooks
+  - readme
+  - changelog
+
+review_checklist:
+  - Public APIs have doc comments
+  - README is current and accurate
+  - CHANGELOG updated with changes
+  - Architecture decisions documented (ADRs)
+  - Setup/onboarding instructions work
