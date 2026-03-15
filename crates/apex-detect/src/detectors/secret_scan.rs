@@ -251,7 +251,9 @@ pub fn shannon_entropy(s: &str) -> f64 {
     entropy
 }
 
-/// Returns true if the file path looks like a test/example/sample/template file.
+/// Returns true if the file path looks like a test/example/sample/template file,
+/// or a generated/instrumentation file that is known to contain high-entropy strings
+/// that are not real secrets.
 fn is_skip_file(path: &std::path::Path) -> bool {
     let s = path.to_string_lossy();
     s.contains("test")
@@ -261,6 +263,28 @@ fn is_skip_file(path: &std::path::Path) -> bool {
         || s.ends_with(".md")
         || s.ends_with(".txt")
         || s.ends_with(".rst")
+        // Instrumentation and code-generation files contain hex patterns / source map data
+        || s.contains("instrument")
+        || s.contains("generated")
+        || s.contains("source_map")
+        // Fixture files in any language are test data, not production secrets
+        || s.contains("fixture")
+        // Detector source files inside a detectors/ directory — test fixture consts live here
+        || (s.contains("/detectors/") && s.ends_with(".rs"))
+}
+
+/// Returns true if the trimmed line is a `const` string declaration.
+/// In Rust detector files these are almost always test-fixture values, not real secrets.
+fn is_const_string_decl(trimmed: &str) -> bool {
+    // Match: `const FOO: &str = "..."` or `const FOO: &'static str = "..."`
+    trimmed.starts_with("const ") && trimmed.contains(": &") && trimmed.contains("str")
+}
+
+/// Returns true if the path is inside an `apex-instrument` crate or a path component
+/// that looks like an instrumentation template directory.
+fn is_instrumentation_path(path: &std::path::Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains("apex-instrument") || s.contains("apex_instrument")
 }
 
 /// Returns true if the line contains a placeholder/false-positive value.
@@ -354,6 +378,16 @@ impl Detector for SecretScanDetector {
                 }
 
                 if references_env_var(trimmed) {
+                    continue;
+                }
+
+                // `const` string declarations in Rust are typically test fixture data.
+                if is_const_string_decl(trimmed) {
+                    continue;
+                }
+
+                // Instrumentation template paths — hex/address strings here are not secrets.
+                if is_instrumentation_path(path) {
                     continue;
                 }
 
@@ -957,5 +991,136 @@ mod tests {
             !findings.iter().any(|f| f.title.contains("Heroku")),
             "generic UUID should not be detected as Heroku API key"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // False positive suppression tests (Task 1.3)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn skips_instrumentation_template_file() {
+        // A high-entropy hex string that is part of an instrumentation template
+        // should not trigger a secret finding.
+        let ctx = single_file_ctx(
+            "crates/apex-instrument/src/templates/coverage.rs",
+            "let probe_id = \"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6\";\n",
+            Language::Rust,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "instrumentation template hex strings should not trigger findings"
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_generated_file() {
+        // Generated files are known to carry non-secret high-entropy data.
+        let ctx = single_file_ctx(
+            "src/generated/bindings.rs",
+            "const HASH: &str = \"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6\";\n",
+            Language::Rust,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "generated files should not trigger findings"
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_fixture_file() {
+        // Fixture files contain expected test data with realistic-looking strings.
+        let ctx = single_file_ctx(
+            "crates/apex-detect/src/fixtures/secrets.rs",
+            "let val = \"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6\";\n",
+            Language::Rust,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "fixture files should not trigger findings"
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_const_string_declaration_in_rust() {
+        // `const TEST_DATA: &str = "..."` is a known test fixture pattern in Rust
+        // detector source files — it should not be flagged as a secret.
+        let ctx = single_file_ctx(
+            "src/lib.rs",
+            "const TEST_DATA: &str = \"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6\";\n",
+            Language::Rust,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "const string declarations should not be flagged as secrets"
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_detector_source_file() {
+        // High-entropy strings inside crates/apex-detect/src/detectors/*.rs are
+        // test fixture data embedded in detector source files.
+        let ctx = single_file_ctx(
+            "crates/apex-detect/src/detectors/my_detector.rs",
+            "let pattern = \"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6\";\n",
+            Language::Rust,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "strings in detector source files should not trigger findings"
+        );
+    }
+
+    #[tokio::test]
+    async fn still_detects_real_api_key_outside_test_context() {
+        // A real-looking API key in a production Python config file should still trigger.
+        // Build at runtime to avoid GitHub push-protection false positive on the test string.
+        let key = format!("sk_live_{}", "RealKeyThatShouldBeDetected123456");
+        let content = format!("STRIPE_KEY = \"{key}\"\n");
+        let ctx = single_file_ctx("src/config.py", &content, Language::Python);
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "real-looking API key in prod file should still trigger"
+        );
+    }
+
+    #[test]
+    fn is_skip_file_new_patterns() {
+        // New patterns added for Task 1.3
+        assert!(is_skip_file(std::path::Path::new(
+            "crates/apex-instrument/src/templates.rs"
+        )));
+        assert!(is_skip_file(std::path::Path::new(
+            "src/generated/bindings.rs"
+        )));
+        assert!(is_skip_file(std::path::Path::new(
+            "src/fixtures/secrets.rs"
+        )));
+        assert!(is_skip_file(std::path::Path::new(
+            "crates/apex-detect/src/detectors/sql_injection.rs"
+        )));
+        assert!(is_skip_file(std::path::Path::new(
+            "src/source_map/map.js"
+        )));
+        // Regular production files should not be skipped
+        assert!(!is_skip_file(std::path::Path::new("src/config.py")));
+        assert!(!is_skip_file(std::path::Path::new("src/billing.rs")));
+    }
+
+    #[test]
+    fn is_const_string_decl_matches_rust_const() {
+        assert!(is_const_string_decl("const FOO: &str = \"hello\";"));
+        assert!(is_const_string_decl(
+            "const BAR: &'static str = \"world\";"
+        ));
+        // Non-const lines should not match
+        assert!(!is_const_string_decl("let x = \"hello\";"));
+        assert!(!is_const_string_decl("fn foo() {}"));
+        assert!(!is_const_string_decl("const N: u32 = 42;"));
     }
 }

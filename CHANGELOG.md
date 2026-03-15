@@ -4,6 +4,13 @@ All notable changes to APEX will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **CWE-88 argument injection** — validate git refs in `apex diff --base` to reject flag-like values starting with `-` or containing `..`
+- **Path traversal in MCP handlers** — canonicalize `params.target` in all MCP tool endpoints before subprocess dispatch
+- **Output path validation** — canonicalize `--output` paths in `audit`, `docs`, and `compliance` subcommands
+- **Secret-scan false positives** — suppress high-entropy string matches in instrumentation templates, detector source files, and `const` string declarations
+- **Dependency-audit graceful fallback** — return info-level finding instead of error when `cargo-audit`/`pip-audit`/`npm audit` are not installed
+
 ## [0.2.0] — 2026-03-16
 
 ### Added

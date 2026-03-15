@@ -11,6 +11,44 @@ use crate::context::AnalysisContext;
 use crate::finding::{Finding, FindingCategory, Fix, Severity};
 use crate::Detector;
 
+/// Returns true if the error indicates the tool binary was not found on PATH.
+///
+/// Covers:
+/// - `ApexError::Subprocess { exit_code: 127, .. }` — shell convention for "command not found"
+/// - `ApexError::Subprocess` whose stderr contains spawn-failure text from
+///   `tokio::process::Command::spawn` when the binary does not exist (e.g.
+///   "spawn cargo-audit: No such file or directory")
+fn is_tool_not_found(err: &ApexError) -> bool {
+    match err {
+        ApexError::Subprocess { exit_code, stderr } => {
+            *exit_code == 127
+                || stderr.contains("not found")
+                || stderr.contains("No such file")
+        }
+        _ => false,
+    }
+}
+
+/// Build a single Info-severity finding indicating the audit tool is not installed.
+fn tool_not_installed_finding(tool: &str, file: &str) -> Finding {
+    Finding {
+        id: Uuid::new_v4(),
+        detector: "dependency-audit".into(),
+        severity: Severity::Info,
+        category: FindingCategory::DependencyVuln,
+        file: PathBuf::from(file),
+        line: None,
+        title: format!("{tool} not installed — dependency audit skipped"),
+        description: format!("Install {tool} to enable dependency vulnerability scanning."),
+        evidence: vec![],
+        covered: true,
+        suggestion: format!("Install {tool} and re-run the detector."),
+        explanation: None,
+        fix: None,
+        cwe_ids: vec![],
+    }
+}
+
 /// Produce a pseudo line number from an advisory ID so each advisory
 /// gets a unique dedup key (file, line, category) in the pipeline.
 fn advisory_line(id: &str) -> u32 {
@@ -25,11 +63,16 @@ impl DependencyAuditDetector {
     async fn audit_cargo(&self, ctx: &AnalysisContext) -> Result<Vec<Finding>> {
         let spec = CommandSpec::new("cargo", &ctx.target_root).args(["audit", "--json"]);
 
-        let output = ctx
-            .runner
-            .run_command(&spec)
-            .await
-            .map_err(|e| ApexError::Detect(format!("cargo-audit: {e}")))?;
+        let output = match ctx.runner.run_command(&spec).await {
+            Ok(o) => o,
+            Err(e) if is_tool_not_found(&e) => {
+                return Ok(vec![tool_not_installed_finding(
+                    "cargo audit",
+                    "Cargo.toml",
+                )]);
+            }
+            Err(e) => return Err(ApexError::Detect(format!("cargo-audit: {e}"))),
+        };
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         parse_cargo_audit_output(&stdout)
@@ -39,11 +82,16 @@ impl DependencyAuditDetector {
         let spec = CommandSpec::new("pip", &ctx.target_root)
             .args(["audit", "--format", "json", "--output", "-"]);
 
-        let output = ctx
-            .runner
-            .run_command(&spec)
-            .await
-            .map_err(|e| ApexError::Detect(format!("pip-audit: {e}")))?;
+        let output = match ctx.runner.run_command(&spec).await {
+            Ok(o) => o,
+            Err(e) if is_tool_not_found(&e) => {
+                return Ok(vec![tool_not_installed_finding(
+                    "pip audit",
+                    "requirements.txt",
+                )]);
+            }
+            Err(e) => return Err(ApexError::Detect(format!("pip-audit: {e}"))),
+        };
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         parse_pip_audit_output(&stdout)
@@ -52,11 +100,16 @@ impl DependencyAuditDetector {
     async fn audit_npm(&self, ctx: &AnalysisContext) -> Result<Vec<Finding>> {
         let spec = CommandSpec::new("npm", &ctx.target_root).args(["audit", "--json"]);
 
-        let output = ctx
-            .runner
-            .run_command(&spec)
-            .await
-            .map_err(|e| ApexError::Detect(format!("npm-audit: {e}")))?;
+        let output = match ctx.runner.run_command(&spec).await {
+            Ok(o) => o,
+            Err(e) if is_tool_not_found(&e) => {
+                return Ok(vec![tool_not_installed_finding(
+                    "npm audit",
+                    "package.json",
+                )]);
+            }
+            Err(e) => return Err(ApexError::Detect(format!("npm-audit: {e}"))),
+        };
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         parse_npm_audit_output(&stdout)
@@ -788,5 +841,137 @@ warning: 2 allowed advisories were not found in the advisory database:
         let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
         assert_eq!(findings.len(), 1);
         assert!(findings[0].title.contains("lodash"));
+    }
+
+    // ── Tool-not-installed graceful fallback tests ───────────────────────────
+
+    // Local mock runner so we can inject ApexError::Subprocess (the error
+    // RealCommandRunner emits when spawn fails because the binary is absent).
+    mockall::mock! {
+        pub CmdRunner {}
+
+        #[async_trait]
+        impl apex_core::command::CommandRunner for CmdRunner {
+            async fn run_command(
+                &self,
+                spec: &apex_core::command::CommandSpec,
+            ) -> apex_core::error::Result<CommandOutput>;
+        }
+    }
+
+    fn make_ctx_with_mock(mock: MockCmdRunner, lang: Language) -> AnalysisContext {
+        AnalysisContext {
+            language: lang,
+            runner: Arc::new(mock),
+            ..AnalysisContext::test_default()
+        }
+    }
+
+    #[tokio::test]
+    async fn cargo_audit_not_installed_returns_info_finding() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_| {
+            Err(ApexError::Subprocess {
+                exit_code: -1,
+                stderr: "spawn cargo-audit: No such file or directory".into(),
+            })
+        });
+        let ctx = make_ctx_with_mock(mock, Language::Rust);
+        let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Info);
+        assert!(findings[0].title.contains("not installed"));
+        assert!(findings[0].title.contains("cargo audit"));
+    }
+
+    #[tokio::test]
+    async fn pip_audit_not_installed_returns_info_finding() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_| {
+            Err(ApexError::Subprocess {
+                exit_code: 127,
+                stderr: "pip: command not found".into(),
+            })
+        });
+        let ctx = make_ctx_with_mock(mock, Language::Python);
+        let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Info);
+        assert!(findings[0].title.contains("not installed"));
+        assert!(findings[0].title.contains("pip audit"));
+    }
+
+    #[tokio::test]
+    async fn npm_audit_not_installed_returns_info_finding() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_| {
+            Err(ApexError::Subprocess {
+                exit_code: -1,
+                stderr: "spawn npm: No such file or directory".into(),
+            })
+        });
+        let ctx = make_ctx_with_mock(mock, Language::JavaScript);
+        let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Info);
+        assert!(findings[0].title.contains("not installed"));
+        assert!(findings[0].title.contains("npm audit"));
+    }
+
+    #[tokio::test]
+    async fn cargo_audit_other_error_propagates() {
+        // A non-"not found" error (e.g. network failure) must still propagate.
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_| {
+            Err(ApexError::Subprocess {
+                exit_code: 1,
+                stderr: "error fetching advisory database: network timeout".into(),
+            })
+        });
+        let ctx = make_ctx_with_mock(mock, Language::Rust);
+        let result = DependencyAuditDetector.analyze(&ctx).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn is_tool_not_found_exit_127() {
+        let e = ApexError::Subprocess {
+            exit_code: 127,
+            stderr: "pip: command not found".into(),
+        };
+        assert!(is_tool_not_found(&e));
+    }
+
+    #[test]
+    fn is_tool_not_found_no_such_file() {
+        let e = ApexError::Subprocess {
+            exit_code: -1,
+            stderr: "spawn cargo-audit: No such file or directory".into(),
+        };
+        assert!(is_tool_not_found(&e));
+    }
+
+    #[test]
+    fn is_tool_not_found_not_found_in_stderr() {
+        let e = ApexError::Subprocess {
+            exit_code: -1,
+            stderr: "spawn npm: not found".into(),
+        };
+        assert!(is_tool_not_found(&e));
+    }
+
+    #[test]
+    fn is_tool_not_found_other_subprocess_error() {
+        let e = ApexError::Subprocess {
+            exit_code: 1,
+            stderr: "network timeout".into(),
+        };
+        assert!(!is_tool_not_found(&e));
+    }
+
+    #[test]
+    fn is_tool_not_found_detect_error() {
+        let e = ApexError::Detect("some detect error".into());
+        assert!(!is_tool_not_found(&e));
     }
 }

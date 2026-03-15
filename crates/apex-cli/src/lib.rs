@@ -1679,6 +1679,7 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
     };
 
     if let Some(path) = args.output {
+        let path = validate_output_path(&path)?;
         std::fs::write(&path, &output_text)?;
         eprintln!("Wrote audit report to {}", path.display());
     } else {
@@ -2258,6 +2259,9 @@ async fn run_diff(args: DiffArgs) -> Result<()> {
     let lang: Language = args.lang.into();
     let target_path = args.target.canonicalize()?;
 
+    // Validate user-supplied ref before passing it to git (CWE-88).
+    validate_git_ref(&args.base)?;
+
     // Load current index (HEAD)
     let head_index = load_index(&target_path)?;
 
@@ -2269,6 +2273,7 @@ async fn run_diff(args: DiffArgs) -> Result<()> {
         .args([
             "worktree",
             "add",
+            "--",
             &worktree_dir.to_string_lossy(),
             &args.base,
         ])
@@ -2613,6 +2618,7 @@ async fn run_docs(args: DocsArgs) -> Result<()> {
     };
 
     if let Some(path) = args.output {
+        let path = validate_output_path(&path)?;
         std::fs::write(&path, &output)?;
         eprintln!("Docs written to {}", path.display());
     } else {
@@ -3684,6 +3690,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
 
     // Write to file or stdout
     if let Some(out_path) = args.output {
+        let out_path = validate_output_path(&out_path)?;
         std::fs::write(&out_path, &output)?;
         println!("Compliance report written to {}", out_path.display());
     } else {
@@ -3863,6 +3870,64 @@ async fn run_test_data(args: TestDataArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Input validation helpers
+// ---------------------------------------------------------------------------
+
+/// Validate a git ref supplied by the user (e.g. `--base` flag).
+///
+/// Rejects values that could be mistaken for git flags or trigger path
+/// traversal / shell metacharacter injection:
+/// - Starts with `-` (flag injection, CWE-88)
+/// - Contains `..` (path traversal in git refs)
+/// - Contains shell metacharacters: `` ` ~ ! $ & * ( ) [ ] { } | ; < > ? \ ' " ``
+fn validate_git_ref(s: &str) -> Result<()> {
+    if s.starts_with('-') {
+        return Err(color_eyre::eyre::eyre!(
+            "invalid git ref {:?}: refs must not start with '-'",
+            s
+        ));
+    }
+    if s.contains("..") {
+        return Err(color_eyre::eyre::eyre!(
+            "invalid git ref {:?}: refs must not contain '..'",
+            s
+        ));
+    }
+    // Tilde (~) is a valid git ref character (e.g. HEAD~1) so it is NOT banned.
+    const SHELL_META: &[char] = &[
+        '`', '!', '$', '&', '*', '(', ')', '[', ']', '{', '}', '|', ';', '<', '>', '?', '\\',
+        '\'', '"', ' ', '\t', '\n',
+    ];
+    if let Some(bad) = s.chars().find(|c| SHELL_META.contains(c)) {
+        return Err(color_eyre::eyre::eyre!(
+            "invalid git ref {:?}: contains disallowed character '{}'",
+            s,
+            bad
+        ));
+    }
+    Ok(())
+}
+
+/// Validate and canonicalize a user-supplied output file path.
+///
+/// Canonicalizes the *parent* directory so that the resolved path is
+/// absolute and free of `..` components. Returns an error if the parent
+/// directory does not exist.
+fn validate_output_path(p: &std::path::Path) -> Result<PathBuf> {
+    let parent = p.parent().unwrap_or(std::path::Path::new("."));
+    let canon_parent = parent.canonicalize().map_err(|e| {
+        color_eyre::eyre::eyre!(
+            "output path {:?}: parent directory does not exist or is not accessible: {e}",
+            p
+        )
+    })?;
+    let file_name = p
+        .file_name()
+        .ok_or_else(|| color_eyre::eyre::eyre!("output path {:?}: no file name", p))?;
+    Ok(canon_parent.join(file_name))
 }
 
 // ---------------------------------------------------------------------------
@@ -4294,5 +4359,65 @@ mod tests {
             3,
             "should match .RS, .rs, and .Rs case-insensitively"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_git_ref tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_git_ref_rejects_flag_prefix() {
+        assert!(
+            validate_git_ref("--exec").is_err(),
+            "--exec should be rejected"
+        );
+        assert!(
+            validate_git_ref("-c").is_err(),
+            "-c should be rejected"
+        );
+    }
+
+    #[test]
+    fn validate_git_ref_rejects_dotdot() {
+        assert!(
+            validate_git_ref("../hack").is_err(),
+            "../hack should be rejected"
+        );
+        assert!(
+            validate_git_ref("main..evil").is_err(),
+            "double-dot should be rejected"
+        );
+    }
+
+    #[test]
+    fn validate_git_ref_accepts_valid_refs() {
+        assert!(validate_git_ref("main").is_ok());
+        assert!(validate_git_ref("HEAD~1").is_ok());
+        assert!(validate_git_ref("v0.2.0").is_ok());
+        assert!(validate_git_ref("feature/my-branch").is_ok());
+        assert!(validate_git_ref("refs/heads/main").is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_output_path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_output_path_rejects_nonexistent_parent() {
+        let p = std::path::Path::new("/nonexistent-dir-apex-test/out.txt");
+        assert!(
+            validate_output_path(p).is_err(),
+            "nonexistent parent should be rejected"
+        );
+    }
+
+    #[test]
+    fn validate_output_path_accepts_valid_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("report.txt");
+        let result = validate_output_path(&out);
+        assert!(result.is_ok(), "valid path should be accepted");
+        // Returned path should be absolute
+        assert!(result.unwrap().is_absolute());
     }
 }

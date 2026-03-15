@@ -97,6 +97,32 @@ pub struct DeployScoreParams {
 }
 
 // ---------------------------------------------------------------------------
+// Path validation
+// ---------------------------------------------------------------------------
+
+/// Validate that `target` points to an existing filesystem path and return its
+/// canonicalized, absolute form.
+///
+/// Returns an `McpError` (invalid_params) when:
+/// - the path does not exist, or
+/// - canonicalization fails for any other reason.
+///
+/// This prevents path-traversal attacks (e.g. `../../etc/passwd`) by
+/// resolving symlinks and `..` components before the path reaches the
+/// subprocess.
+pub(crate) fn validate_target_path(target: &str) -> Result<String, McpError> {
+    std::path::Path::new(target)
+        .canonicalize()
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| {
+            McpError::invalid_params(
+                format!("invalid target path '{target}': {e}"),
+                None,
+            )
+        })
+}
+
+// ---------------------------------------------------------------------------
 // Subprocess helper
 // ---------------------------------------------------------------------------
 
@@ -162,11 +188,12 @@ impl ApexMcpService {
         &self,
         Parameters(params): Parameters<RunParams>,
     ) -> Result<CallToolResult, McpError> {
+        let target = validate_target_path(&params.target)?;
         let strategy = params.strategy.as_deref().unwrap_or("baseline");
         let output = run_apex_command(&[
             "run",
             "--target",
-            &params.target,
+            &target,
             "--lang",
             &params.lang,
             "--strategy",
@@ -187,10 +214,11 @@ impl ApexMcpService {
         &self,
         Parameters(params): Parameters<DetectParams>,
     ) -> Result<CallToolResult, McpError> {
+        let target = validate_target_path(&params.target)?;
         let mut args = vec![
             "audit".to_string(),
             "--target".to_string(),
-            params.target.clone(),
+            target,
             "--lang".to_string(),
             params.lang.clone(),
         ];
@@ -232,10 +260,11 @@ impl ApexMcpService {
         &self,
         Parameters(params): Parameters<RatchetParams>,
     ) -> Result<CallToolResult, McpError> {
+        let target = validate_target_path(&params.target)?;
         let mut args = vec![
             "ratchet".to_string(),
             "--target".to_string(),
-            params.target.clone(),
+            target,
             "--lang".to_string(),
             params.lang.clone(),
         ];
@@ -266,10 +295,11 @@ impl ApexMcpService {
         &self,
         Parameters(params): Parameters<DeployScoreParams>,
     ) -> Result<CallToolResult, McpError> {
+        let target = validate_target_path(&params.target)?;
         let output = run_apex_command(&[
             "deploy-score",
             "--target",
-            &params.target,
+            &target,
             "--lang",
             &params.lang,
             "--output-format",
@@ -396,5 +426,49 @@ mod tests {
     #[test]
     fn service_can_be_constructed() {
         let _service = ApexMcpService::new();
+    }
+
+    // --- validate_target_path tests ---
+
+    #[test]
+    fn validate_target_path_rejects_nonexistent() {
+        let result = validate_target_path("/tmp/apex-mcp-test-nonexistent-path-xyzzy");
+        assert!(result.is_err(), "expected Err for nonexistent path");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("invalid target path"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn validate_target_path_rejects_traversal_string() {
+        let result = validate_target_path("../../etc/passwd_apex_test_nonexistent");
+        assert!(result.is_err(), "expected Err for traversal path");
+    }
+
+    #[test]
+    fn validate_target_path_accepts_existing_dir() {
+        let result = validate_target_path("/tmp");
+        assert!(result.is_ok(), "expected Ok for /tmp, got: {:?}", result);
+        let canonical = result.unwrap();
+        assert!(
+            canonical.starts_with('/'),
+            "canonicalized path should be absolute, got: {canonical}"
+        );
+    }
+
+    #[test]
+    fn validate_target_path_resolves_to_absolute() {
+        let tmp = std::env::temp_dir();
+        let input = tmp.to_string_lossy().to_string();
+        let result = validate_target_path(&input);
+        assert!(result.is_ok());
+        let canonical = result.unwrap();
+        assert!(
+            std::path::Path::new(&canonical).is_absolute(),
+            "result should be absolute: {canonical}"
+        );
     }
 }
