@@ -352,6 +352,30 @@ impl Language {
                 feat("fuzz", Full, "libfuzzer"),
                 feat("sandbox", Full, "process"),
             ],
+            Language::Swift => vec![
+                feat("instrumentation", Full, "xccov/llvm-cov"),
+                feat("test-runner", Full, "swift-test/xctest"),
+                feat("dep-install", Full, "spm"),
+                feat("dep-audit", Missing, ""),
+                feat("security-patterns", Full, "swift-patterns"),
+                feat("unsafe-analysis", NotApplicable, ""),
+                feat("path-normalize", Missing, ""),
+                feat("concolic", Missing, ""),
+                feat("fuzz", Missing, ""),
+                feat("sandbox", Full, "process"),
+            ],
+            Language::CSharp => vec![
+                feat("instrumentation", Full, "coverlet"),
+                feat("test-runner", Full, "dotnet-test"),
+                feat("dep-install", Full, "dotnet-restore"),
+                feat("dep-audit", Missing, ""),
+                feat("security-patterns", Full, "csharp-patterns"),
+                feat("unsafe-analysis", NotApplicable, ""),
+                feat("path-normalize", Missing, ""),
+                feat("concolic", Missing, ""),
+                feat("fuzz", Missing, ""),
+                feat("sandbox", Full, "process"),
+            ],
         }
     }
 }
