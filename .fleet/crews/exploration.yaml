@@ -22,6 +22,7 @@ partners:
   - foundation
   - runtime
   - intelligence
+  - security-detect
 
 notes: >
   Performance-critical crew. Contains optional heavy dependencies (z3, libafl)

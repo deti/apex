@@ -7,6 +7,7 @@ paths:
   - crates/apex-instrument/**
   - crates/apex-sandbox/**
   - crates/apex-index/**
+  - crates/apex-reach/**
 
 tech_stack:
   - Rust
@@ -24,6 +25,7 @@ partners:
   - foundation
   - exploration
   - intelligence
+  - security-detect
 
 notes: >
   Spans the most languages — each of apex-lang, apex-instrument, and apex-sandbox

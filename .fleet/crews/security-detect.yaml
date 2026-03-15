@@ -20,6 +20,7 @@ sdlc_concerns:
 partners:
   - foundation
   - exploration
+  - runtime
 
 notes: >
   Largest crate by test count (361+ tests in apex-detect, 80+ in apex-cpg).
