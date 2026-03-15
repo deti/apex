@@ -20,6 +20,12 @@ Current detectors have ~97% false positive rate on APEX itself because they don'
 - [ ] Build CPG for C/C++
 - [ ] Use CPG taint flows in SecurityPatternDetector (replace substring matching with reachability)
 
+## APEX Plugin Agents
+
+- [ ] Should APEX have additional agents beyond apex, apex-hunter, apex-agent? (e.g. dedicated detector agent, intel agent, per-phase agents)
+- [x] Convert apex-cycle → apex team lead, apex-hunter → teammates (Agent Teams)
+- [x] Add apex-agent — meta-agent for maintaining APEX agent definitions
+
 ## JS/TS Concolic — Not Yet Covered
 
 - [ ] Dynamic `eval()` / `new Function()` — not statically analyzable, needs runtime tracing
