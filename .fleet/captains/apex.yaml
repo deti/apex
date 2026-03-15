@@ -9,6 +9,7 @@ crews:
   - runtime
   - intelligence
   - platform
+  - mcp-integration
 
 specialists:
   - agent: "feature-dev:code-architect"
@@ -31,11 +32,12 @@ verification:
   build: "cargo check --workspace"
   test: "cargo test --workspace"
   lint: "cargo clippy --workspace -- -D warnings"
+  changelog: "git diff --name-only HEAD~1 | grep -q CHANGELOG.md"
 
 plan_dir: ".fleet/plans"
 
 dependency_order:
   wave1: [foundation]
   wave2: [security-detect, exploration, runtime]
-  wave3: [intelligence]
+  wave3: [intelligence, mcp-integration]
   wave4: [platform]

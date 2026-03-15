@@ -1,0 +1,30 @@
+schema_version: 1
+name: sre
+title: SRE Officer
+domain: Site Reliability & Operational Readiness
+
+expertise:
+  - release pipeline health
+  - distribution channel validation
+  - sandbox process lifecycle
+  - shared memory safety
+  - crash recovery
+  - CI/CD pipeline maintenance
+  - cross-platform build matrix
+
+triggers:
+  - reliability
+  - sre
+  - release
+  - distribution
+  - ci-cd
+  - crash
+  - process-lifecycle
+
+review_checklist:
+  - Release artifacts build on all 4 targets (linux-x86_64, linux-aarch64, macos-x86_64, macos-aarch64)
+  - Distribution channels (Homebrew, npm, pip, Nix) install cleanly after version bump
+  - Sandbox process cleanup handles SIGTERM/SIGKILL gracefully
+  - Shared memory bitmaps cleaned up on abnormal exit
+  - CI workflows pass on the merge queue, not just PR check
+  - bump-version.sh updates all 5 version locations atomically

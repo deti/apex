@@ -10,6 +10,7 @@ scan_paths:
   - crates/
   - tests/
   - agents/
+  - fuzz/
 
 ignore_paths:
   - target/

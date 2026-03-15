@@ -6,6 +6,7 @@ paths:
   - crates/apex-fuzz/**
   - crates/apex-symbolic/**
   - crates/apex-concolic/**
+  - fuzz/**
 
 tech_stack:
   - Rust

@@ -38,6 +38,7 @@ dispatch_protocol:
   #   - max_cargo_clippy_invocations: 1
 
 agent_build_rules:
+  - All agents MUST use git worktree isolation (never switch branches in main checkout)
   - Batch ALL code changes first, then compile/test once at end
   - Maximum 3 cargo test invocations per agent (fix-all → test → fix-failures → test → clippy)
   - Never run cargo test or cargo clippy after each individual fix

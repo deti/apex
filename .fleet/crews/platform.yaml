@@ -6,6 +6,11 @@ paths:
   - crates/apex-cli/**
   - agents/**
   - tests/**
+  - scripts/**
+  - HomebrewFormula/**
+  - npm/**
+  - python/**
+  - crates/apex-rpc/**
 
 tech_stack:
   - Rust

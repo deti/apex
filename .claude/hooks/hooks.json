@@ -2,8 +2,8 @@
   "hooks": {
     "SubagentStop": [
       {
-        "description": "Ralph — auto-continue crew agents that stop with questions instead of results",
-        "matcher": "apex-crew",
+        "description": "Ralph — auto-continue crew/officer agents that stop with questions instead of results",
+        "matcher": "crew|officer",
         "hooks": [
           {
             "type": "command",
@@ -13,7 +13,7 @@
       },
       {
         "description": "Auto-dispatch officers when crew agents complete implementation work matching SDLC concerns",
-        "matcher": "apex-crew",
+        "matcher": "crew",
         "hooks": [
           {
             "type": "prompt",
@@ -23,11 +23,23 @@
       },
       {
         "description": "Persist crew notification logs when a crew agent reports partner-impacting changes",
-        "matcher": "apex-crew",
+        "matcher": "crew",
         "hooks": [
           {
             "type": "prompt",
             "prompt": "Check the crew agent's response for FLEET_NOTIFICATION blocks (HTML comments starting with <!-- FLEET_NOTIFICATION). If none are found, do nothing — say nothing. If one or more are found: 1) Ensure .fleet/changes/ directory exists (create it if not). 2) For each notification block, extract: crew, affected_partners, severity, summary, detail. 3) Write a changelog entry to .fleet/changes/YYYY-MM-DD-<crew>-<short-slug>.md with this format:\n---\ndate: YYYY-MM-DD\ncrew: <crew>\naffected_partners: [<partners>]\nseverity: <severity>\nacknowledged_by: []\n---\n\n<detail text>\n\n4) After writing, briefly confirm: 'Fleet: logged <severity> notification from <crew>-crew affecting <partners>.' 5) If severity is breaking or major, dispatch each affected partner's crew agent with: 'You are the <partner>-crew agent. --- Notification from <crew>-crew [<severity>]: <summary>. <detail> --- Review this notification. If action is needed on your owned paths, describe what should change. If no action needed, acknowledge the change.' For minor/info severity, skip dispatch — the changelog entry is sufficient."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "description": "Check if edited file is owned by a crew and suggest partner notifications",
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check if the file that was just written/edited falls within any crew's owned paths. To do this: 1) Read .fleet/crews/*.yaml files to get all crews' paths. 2) Check if the edited file matches any crew's path globs. If it matches a crew AND the change could affect partner crews (based on the crew's partners list), suggest: 'This file is owned by <crew-name>-crew. Consider notifying partners: <partner-list>. Run /fleet notify <partner> <summary> to notify.' If the file is not owned by any crew, note: 'This file is not covered by any Fleet crew.' Be brief — one line if no action needed. If .fleet/ directory does not exist, say nothing."
           }
         ]
       }

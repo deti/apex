@@ -24,7 +24,9 @@ triggers:
 review_checklist:
   - No unsafe code without justification
   - User input validated at system boundaries
-  - Sandbox isolation maintained
+  - Sandbox isolation maintained — process cannot escape chroot/namespace
+  - Shared memory bitmaps bounds-checked and properly unmapped on exit
+  - Concolic solver inputs sanitized before SMT-LIB emission
   - No path traversal or injection vectors
   - CWE classifications accurate
   - Taint sources and sinks correctly modeled

@@ -17,6 +17,8 @@ triggers:
   - version
   - whats-new
   - breaking-changes
+  - release
+  - pr
 
 review_checklist:
   - Every user-facing change has a changelog entry

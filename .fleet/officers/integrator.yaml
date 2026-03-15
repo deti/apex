@@ -1,30 +1,26 @@
 schema_version: 1
 name: integrator
-title: Integration Officer
-domain: Module Integration & Pipeline Wiring
+title: Detector Integration Officer
+domain: Detector Registration & Pipeline Wiring (apex-detect)
 
 expertise:
   - pipeline registration
   - config defaults
-  - CLI subcommand wiring
   - detector trait compliance
-  - module exports
   - integration testing
-  - feature flag gating
+  - analyzer_registry consistency
 
 triggers:
-  - integration
-  - wiring
+  - detector
   - pipeline
   - registration
-  - cli-commands
-  - module-export
+  - finding-category
+  - config-key
 
 review_checklist:
   - Detector registered in pipeline.rs from_config() with correct config key
   - Config key added to default_enabled() in config.rs (if appropriate)
   - Module exported in detectors/mod.rs with pub use
-  - CLI subcommand added with Args struct, match arm, and handler
   - FindingCategory variant exists for the detector's finding type
   - Test counts updated in pipeline and config tests after adding new detectors
   - No duplicate config keys or name collisions with existing detectors
