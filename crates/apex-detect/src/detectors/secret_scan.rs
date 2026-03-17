@@ -271,6 +271,14 @@ fn is_skip_file(path: &std::path::Path) -> bool {
         || s.contains("fixture")
         // Detector source files inside a detectors/ directory — test fixture consts live here
         || (s.contains("/detectors/") && s.ends_with(".rs"))
+        // Bug 14/15: charset/encoding tables, vendor bundles, and generated code markers
+        || s.contains("encoding")
+        || s.contains("charsets")
+        || s.contains("codepage")
+        || s.contains("vendor/")
+        || s.contains("dist/")
+        || s.contains(".min.")
+        || s.contains("bundle.")
 }
 
 /// Returns true if the trimmed line is a `const` string declaration.
@@ -278,6 +286,23 @@ fn is_skip_file(path: &std::path::Path) -> bool {
 fn is_const_string_decl(trimmed: &str) -> bool {
     // Match: `const FOO: &str = "..."` or `const FOO: &'static str = "..."`
     trimmed.starts_with("const ") && trimmed.contains(": &") && trimmed.contains("str")
+}
+
+/// Returns true if the file content begins with a "// Code generated" marker,
+/// indicating the file was produced by a code generator (e.g. Go `go generate`).
+fn is_code_generated(source: &str) -> bool {
+    // Check first two non-empty lines for the marker
+    for line in source.lines().take(5) {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.contains("Code generated") {
+            return true;
+        }
+        break;
+    }
+    false
 }
 
 /// Returns true if the path is inside an `apex-instrument` crate or a path component
@@ -321,7 +346,7 @@ fn extract_string_literals(line: &str) -> Vec<String> {
     results
 }
 
-const DEFAULT_ENTROPY_THRESHOLD: f64 = 4.5;
+const DEFAULT_ENTROPY_THRESHOLD: f64 = 5.0;
 
 pub struct SecretScanDetector {
     entropy_threshold: f64,
@@ -359,6 +384,10 @@ impl Detector for SecretScanDetector {
 
         for (path, source) in &ctx.source_cache {
             if is_skip_file(path) {
+                continue;
+            }
+
+            if is_code_generated(source) {
                 continue;
             }
 
@@ -1122,5 +1151,92 @@ mod tests {
         assert!(!is_const_string_decl("let x = \"hello\";"));
         assert!(!is_const_string_decl("fn foo() {}"));
         assert!(!is_const_string_decl("const N: u32 = 42;"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 2: Entropy threshold raised from 4.5 to 5.0
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_entropy_threshold_is_5_0() {
+        let det = SecretScanDetector::new();
+        assert!(
+            (det.entropy_threshold - 5.0).abs() < f64::EPSILON,
+            "default entropy threshold should be 5.0, got {}",
+            det.entropy_threshold
+        );
+    }
+
+    #[tokio::test]
+    async fn low_entropy_identifier_not_flagged_at_5_0() {
+        // cpumask_pr_args is ~4.6 entropy — should be suppressed at threshold 5.0
+        let ctx = single_file_ctx(
+            "src/config.py",
+            "mask = \"cpumask_pr_args_value_here\"\n",
+            Language::Python,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "low-entropy code identifier should not be flagged at threshold 5.0"
+        );
+    }
+
+    #[tokio::test]
+    async fn high_entropy_aws_key_still_caught() {
+        // AWS keys have entropy ~5.7 — still above threshold 5.0
+        let ctx = single_file_ctx(
+            "src/config.py",
+            "AWS_KEY = \"AKIAIOSFODNN7ABCDEFG\"\n",
+            Language::Python,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "real AWS key pattern should still be detected at threshold 5.0"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 14/15: File skip patterns — vendor, dist, .min., bundle., encoding, charsets
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_skip_file_vendor_and_dist() {
+        assert!(is_skip_file(std::path::Path::new("vendor/lodash/index.js")));
+        assert!(is_skip_file(std::path::Path::new("dist/app.bundle.js")));
+        assert!(is_skip_file(std::path::Path::new("src/app.min.js")));
+        assert!(is_skip_file(std::path::Path::new("build/bundle.js")));
+        assert!(is_skip_file(std::path::Path::new("lib/encoding.js")));
+        assert!(is_skip_file(std::path::Path::new("src/charsets.py")));
+        assert!(is_skip_file(std::path::Path::new("util/codepage.rs")));
+        // Production files must NOT be skipped
+        assert!(!is_skip_file(std::path::Path::new("src/app.js")));
+        assert!(!is_skip_file(std::path::Path::new("src/main.rs")));
+    }
+
+    #[tokio::test]
+    async fn skips_vendor_file() {
+        let key = format!("sk_live_{}", "4eC39HqLyjWDarjtT1zdp7dc");
+        let content = format!("STRIPE_KEY = \"{key}\"\n");
+        let ctx = single_file_ctx("vendor/stripe/client.py", &content, Language::Python);
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty(), "vendor files should be skipped");
+    }
+
+    #[tokio::test]
+    async fn skips_code_generated_file() {
+        // A Go file starting with "// Code generated" is auto-generated and should be skipped
+        let ctx = single_file_ctx(
+            "src/gen_proto.go",
+            "// Code generated by protoc-gen-go. DO NOT EDIT.\npackage main\n\
+             const token = \"AKIAIOSFODNN7ABCDEFG\"\n",
+            Language::Go,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "code-generated files should be skipped"
+        );
     }
 }

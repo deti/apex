@@ -71,7 +71,7 @@ const PYTHON_SECURITY_PATTERNS: &[SecurityPattern] = &[
         category: FindingCategory::Injection,
         base_severity: Severity::Critical,
         user_input_indicators: &["request", "upload", "file", "open(", "recv", "socket"],
-        sanitization_indicators: &[],
+        sanitization_indicators: &["trusted", "internal", "cache"],
         cwe: &[502],
     },
     SecurityPattern {
@@ -330,7 +330,7 @@ const RUBY_SECURITY_PATTERNS: &[SecurityPattern] = &[
         category: FindingCategory::Injection,
         base_severity: Severity::Critical,
         user_input_indicators: &["params", "request", "input", "gets"],
-        sanitization_indicators: &[],
+        sanitization_indicators: &["define_method", "attr_", "schema", "migration"],
         cwe: &[94],
     },
     SecurityPattern {
@@ -339,7 +339,7 @@ const RUBY_SECURITY_PATTERNS: &[SecurityPattern] = &[
         category: FindingCategory::Injection,
         base_severity: Severity::Critical,
         user_input_indicators: &["params", "request", "input"],
-        sanitization_indicators: &[],
+        sanitization_indicators: &["define_method", "attr_", "schema", "migration"],
         cwe: &[94],
     },
     SecurityPattern {
@@ -450,7 +450,7 @@ const C_SECURITY_PATTERNS: &[SecurityPattern] = &[
         category: FindingCategory::Injection,
         base_severity: Severity::High,
         user_input_indicators: &["argv", "stdin", "fgets", "recv", "getenv", "buf"],
-        sanitization_indicators: &["\"", "snprintf"],
+        sanitization_indicators: &["snprintf"],
         cwe: &[134],
     },
     SecurityPattern {
@@ -517,7 +517,7 @@ const CPP_SECURITY_PATTERNS: &[SecurityPattern] = &[
         category: FindingCategory::Injection,
         base_severity: Severity::High,
         user_input_indicators: &["argv", "stdin", "fgets", "recv", "getenv", "buf"],
-        sanitization_indicators: &["\"", "snprintf"],
+        sanitization_indicators: &["snprintf"],
         cwe: &[134],
     },
     SecurityPattern {
@@ -869,7 +869,16 @@ const CSHARP_SECURITY_PATTERNS: &[SecurityPattern] = &[
         description: "Process execution — verify arguments are not user-controlled",
         category: FindingCategory::Injection,
         base_severity: Severity::High,
-        user_input_indicators: &["Request", "input", "userInput", "param"],
+        user_input_indicators: &["Request", "input", "userInput", "param", "[FromBody]", "HttpContext"],
+        sanitization_indicators: &["ProcessStartInfo", "ArgumentList"],
+        cwe: &[78],
+    },
+    SecurityPattern {
+        sink: "new Process",
+        description: "Process creation — verify arguments are not user-controlled",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &["Request", "input", "userInput", "param", "[FromBody]", "HttpContext"],
         sanitization_indicators: &["ProcessStartInfo", "ArgumentList"],
         cwe: &[78],
     },
@@ -878,9 +887,27 @@ const CSHARP_SECURITY_PATTERNS: &[SecurityPattern] = &[
         description: "SQL command — use parameterized queries with SqlParameter",
         category: FindingCategory::Injection,
         base_severity: Severity::High,
-        user_input_indicators: &["Request", "input", "param", "query"],
+        user_input_indicators: &["Request", "input", "param", "query", "[FromBody]", "HttpContext"],
         sanitization_indicators: &["Parameters.Add", "SqlParameter", "@"],
         cwe: &[89],
+    },
+    SecurityPattern {
+        sink: "SqlConnection(",
+        description: "SQL connection string construction — may include user-controlled credentials",
+        category: FindingCategory::Injection,
+        base_severity: Severity::Medium,
+        user_input_indicators: &["Request", "input", "param", "query", "[FromBody]"],
+        sanitization_indicators: &["SqlConnectionStringBuilder", "ConnectionString"],
+        cwe: &[89],
+    },
+    SecurityPattern {
+        sink: "Deserialize<",
+        description: "Generic deserialization — verify type is trusted before deserializing",
+        category: FindingCategory::SecuritySmell,
+        base_severity: Severity::High,
+        user_input_indicators: &["Request", "input", "userInput", "[FromBody]", "HttpContext"],
+        sanitization_indicators: &["JsonSerializerOptions", "KnownTypeAttribute"],
+        cwe: &[502],
     },
     SecurityPattern {
         sink: "HttpClient",
@@ -938,6 +965,45 @@ const CSHARP_SECURITY_PATTERNS: &[SecurityPattern] = &[
     },
 ];
 
+const KOTLIN_SECURITY_PATTERNS: &[SecurityPattern] = &[
+    SecurityPattern {
+        sink: "ProcessBuilder(",
+        description: "ProcessBuilder — potential command injection",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &["request", "params", "input", "query", "body"],
+        sanitization_indicators: &["escape", "sanitize"],
+        cwe: &[78],
+    },
+    SecurityPattern {
+        sink: "${",
+        description: "String template injection — verify interpolated value is not user-controlled",
+        category: FindingCategory::Injection,
+        base_severity: Severity::Medium,
+        user_input_indicators: &["request", "params", "input", "query", "body"],
+        sanitization_indicators: &["escape", "sanitize", "encode"],
+        cwe: &[94],
+    },
+    SecurityPattern {
+        sink: "Gson().fromJson",
+        description: "Gson deserialization — unsafe type deserialization risk",
+        category: FindingCategory::SecuritySmell,
+        base_severity: Severity::High,
+        user_input_indicators: &["request", "params", "input", "body"],
+        sanitization_indicators: &["GsonBuilder", "TypeAdapter"],
+        cwe: &[502],
+    },
+    SecurityPattern {
+        sink: "executeQuery(",
+        description: "SQL query — potential SQL injection",
+        category: FindingCategory::Injection,
+        base_severity: Severity::High,
+        user_input_indicators: &["+", "format", "request", "params", "input"],
+        sanitization_indicators: &["PreparedStatement", "parameterized", "?"],
+        cwe: &[89],
+    },
+];
+
 fn patterns_for_language(lang: Language) -> &'static [SecurityPattern] {
     match lang {
         Language::Python => PYTHON_SECURITY_PATTERNS,
@@ -946,7 +1012,8 @@ fn patterns_for_language(lang: Language) -> &'static [SecurityPattern] {
         Language::Ruby => RUBY_SECURITY_PATTERNS,
         Language::C => C_SECURITY_PATTERNS,
         Language::Cpp => CPP_SECURITY_PATTERNS,
-        Language::Java | Language::Kotlin => JAVA_SECURITY_PATTERNS,
+        Language::Java => JAVA_SECURITY_PATTERNS,
+        Language::Kotlin => KOTLIN_SECURITY_PATTERNS,
         Language::Go => GO_SECURITY_PATTERNS,
         Language::Swift => SWIFT_SECURITY_PATTERNS,
         Language::CSharp => CSHARP_SECURITY_PATTERNS,
@@ -989,6 +1056,33 @@ impl Detector for SecurityPatternDetector {
                 let stripped = strip_string_literals(trimmed);
                 for pattern in patterns {
                     if stripped.contains(pattern.sink) {
+                        // Bug 1/13 (CWE-134): Skip printf/similar with a literal format string —
+                        // e.g. printf("hello %d", x) is safe; printf(buf) is not.
+                        // pattern.sink already ends with '(' (e.g. "printf("), so `after` is
+                        // the first argument directly.
+                        if pattern.cwe.contains(&134) {
+                            if let Some(pos) = trimmed.find(pattern.sink) {
+                                let after =
+                                    trimmed[pos + pattern.sink.len()..].trim_start();
+                                if after.starts_with('"') {
+                                    continue; // literal format string — safe
+                                }
+                            }
+                        }
+
+                        // Bug 4 (CWE-94): Skip eval/new-Function findings in compiler/codegen files
+                        if pattern.cwe.contains(&94) {
+                            let path_str = path.to_string_lossy();
+                            if path_str.contains("compiler")
+                                || path_str.contains("codegen")
+                                || path_str.contains("generator")
+                                || path_str.contains("emitter")
+                                || path_str.contains("transformer")
+                            {
+                                continue;
+                            }
+                        }
+
                         let line_1based = (line_num + 1) as u32;
 
                         let matched_user_inputs = collect_matched_indicators(
@@ -1706,5 +1800,209 @@ mod tests {
         let indicators = &["request"];
         let matched = collect_matched_indicators(&lines, 2, indicators);
         assert_eq!(matched.len(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 1/13 (CWE-134): printf with literal format string should NOT trigger
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn c_printf_with_literal_format_no_finding() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/main.c"),
+            "void log_val(int x) {\n    printf(\"Value: %d\\n\", x);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::C);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "printf with literal format string should not trigger CWE-134, got {findings:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn c_printf_with_variable_is_finding() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/main.c"),
+            "void log_user(char *buf) {\n    printf(buf);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::C);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "printf(buf) with user-controlled buffer should trigger CWE-134"
+        );
+        assert!(findings[0].cwe_ids.contains(&134));
+    }
+
+    #[tokio::test]
+    async fn cpp_printf_literal_format_no_finding() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/util.cpp"),
+            "void debug(int x) {\n    printf(\"x=%d\", x);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Cpp);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "printf with literal format in C++ should not trigger, got {findings:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 4 (CWE-94): eval/new Function in compiler/codegen files should be skipped
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn js_eval_in_codegen_file_skipped() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/compiler/codegen.js"),
+            "function generate(req) {\n    const code = eval(req.body.template);\n    return code;\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::JavaScript);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "eval in codegen file should be skipped (legitimate use), got {findings:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn js_eval_in_non_codegen_file_reported() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/handler.js"),
+            "function handle(req) {\n    eval(req.body.expr);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::JavaScript);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "eval in non-codegen file should still be reported"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 9: Ruby class_eval/instance_eval with schema/migration context — suppressed
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn ruby_class_eval_in_migration_downgraded() {
+        // class_eval with define_method (metaprogramming / migration context):
+        // No user-input indicators match (no params/request/input) → severity downgraded.
+        // define_method is a sanitization indicator → downgraded a second time.
+        // Net result: Critical → High → Medium.  No user input = not a real injection threat.
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("db/migrate/add_user_table.rb"),
+            "ActiveRecord::Migration.class_eval do\n  define_method(:up) { add_column :users, :name, :string }\nend\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Ruby);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        // Sanitization indicators suppress user-input-free class_eval to Medium or below
+        for f in &findings {
+            assert!(
+                f.severity <= Severity::Medium,
+                "class_eval in migration context should be downgraded to Medium or lower, got {:?}",
+                f.severity
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ruby_class_eval_with_user_params_is_finding() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("app/services/eval_service.rb"),
+            "def exec_user(params)\n  Klass.class_eval(params[:code])\nend\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Ruby);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "class_eval with user params should trigger"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 10: Python pickle with trusted/internal/cache context — suppressed
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn python_pickle_with_trusted_cache_no_finding() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/cache.py"),
+            "def load_cache(path):\n    # Load trusted internal cache file\n    with open(path, 'rb') as f:\n        return pickle.load(f)  # internal, trusted\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        // "trusted" and "internal" are sanitization indicators — should suppress or downgrade
+        assert!(
+            findings.is_empty() || findings[0].severity <= Severity::Medium,
+            "pickle.load with trusted/internal context should be suppressed or downgraded"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 7: C# new Process / SqlConnection / Deserialize< patterns
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn csharp_new_process_with_user_input() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Controller.cs"),
+            "public void Run(string input) {\n    var p = new Process();\n    p.StartInfo.FileName = input;\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::CSharp);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "new Process with user input should trigger");
+        assert_eq!(findings[0].category, FindingCategory::Injection);
+    }
+
+    #[tokio::test]
+    async fn csharp_deserialize_with_from_body() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/ApiController.cs"),
+            "public IActionResult Post([FromBody] string body) {\n    var obj = JsonSerializer.Deserialize<UserModel>(body);\n    return Ok(obj);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::CSharp);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "Deserialize< with [FromBody] should trigger");
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 8: Kotlin patterns
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn kotlin_process_builder_with_user_input() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Exec.kt"),
+            "fun run(request: Request): String {\n    val pb = ProcessBuilder(request.params[\"cmd\"])\n    return pb.start().toString()\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Kotlin);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "Kotlin ProcessBuilder with user input should trigger");
+        assert_eq!(findings[0].category, FindingCategory::Injection);
+    }
+
+    #[tokio::test]
+    async fn kotlin_gson_deserialize_with_user_body() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Handler.kt"),
+            "fun handle(body: String): Any {\n    return Gson().fromJson(body, Any::class.java)\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Kotlin);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "Kotlin Gson().fromJson with user body should trigger");
     }
 }

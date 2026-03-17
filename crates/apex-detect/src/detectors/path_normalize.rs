@@ -337,9 +337,28 @@ impl Detector for PathNormalizationDetector {
     async fn analyze(&self, ctx: &AnalysisContext) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
 
+        // Bug 8: Skip path normalization checks for compiler/toolchain/sdk and vendor trees
+        let root_str = ctx.target_root.to_string_lossy();
+        if root_str.contains("compiler")
+            || root_str.contains("toolchain")
+            || root_str.contains("sdk")
+        {
+            return Ok(findings);
+        }
+
         for (path, source) in &ctx.source_cache {
             // Skip test files.
             if is_test_file(path) {
+                continue;
+            }
+
+            // Bug 8: Skip vendor and third_party paths
+            let path_str = path.to_string_lossy();
+            if path_str.contains("vendor/")
+                || path_str.contains("third_party/")
+                || path_str.contains("vendor\\")
+                || path_str.contains("third_party\\")
+            {
                 continue;
             }
 
@@ -615,5 +634,45 @@ def test_open():
         let ctx = make_ctx_with_source("tests/test_app.py", src, Language::Python);
         let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
         assert!(findings.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 8: vendor/ and third_party/ paths should be skipped
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn skips_vendor_path() {
+        let src = "\
+def load(path):
+    return open(path).read()
+";
+        let ctx = make_ctx_with_source("vendor/flask/app.py", src, Language::Python);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty(), "vendor/ files should be skipped");
+    }
+
+    #[tokio::test]
+    async fn skips_third_party_path() {
+        let src = "\
+def load(path):
+    return open(path).read()
+";
+        let ctx = make_ctx_with_source("third_party/lib/util.py", src, Language::Python);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty(), "third_party/ files should be skipped");
+    }
+
+    #[tokio::test]
+    async fn non_vendor_path_still_detected() {
+        let src = "\
+def load(path):
+    return open(path).read()
+";
+        let ctx = make_ctx_with_source("src/files.py", src, Language::Python);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "non-vendor production file should still be detected"
+        );
     }
 }

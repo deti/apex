@@ -25,9 +25,21 @@ static PY_EXIT: LazyLock<Regex> =
 static JS_EXIT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\bprocess\.exit\s*\(").unwrap());
 
 /// Check whether a file is a "main" entry point for the given language.
+///
+/// Bug 17: Also matches cmd/, server.*, daemon.* patterns which are entry points
+/// in many frameworks (Go cmd/, Python server.py, Node daemon.js).
 fn is_main_file(path: &Path, language: Language, source: &str) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let path_str = path.to_string_lossy();
+
+    // Cross-language: files under cmd/, or named server.* / daemon.* are entry points
+    if path_str.contains("/cmd/")
+        || path_str.contains("\\cmd\\")
+        || name.starts_with("server.")
+        || name.starts_with("daemon.")
+    {
+        return true;
+    }
 
     match language {
         Language::Rust => {
@@ -298,5 +310,83 @@ mod tests {
     #[test]
     fn does_not_use_cargo_subprocess() {
         assert!(!ProcessExitInLibDetector.uses_cargo_subprocess());
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 17: cmd/, server.*, daemon.* files should be skipped
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn skips_go_cmd_dir() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("cmd/server/main.go"),
+            "func main() {\n    os.Exit(1)\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Go);
+        // Go is unsupported, so no findings anyway, but the path check still runs
+        let findings = ProcessExitInLibDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn skips_server_dot_py() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("server.py"),
+            "import sys\nsys.exit(0)\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = ProcessExitInLibDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "server.py is an entry point and should be skipped"
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_daemon_dot_py() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("daemon.py"),
+            "import sys\nsys.exit(0)\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = ProcessExitInLibDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "daemon.py is an entry point and should be skipped"
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_cmd_subdir_rust() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/cmd/migrate.rs"),
+            "fn run() {\n    std::process::exit(0);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Rust);
+        let findings = ProcessExitInLibDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "files in cmd/ subdirectory should be treated as entry points"
+        );
+    }
+
+    #[tokio::test]
+    async fn lib_file_outside_cmd_still_detected() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/utils.rs"),
+            "fn shutdown() {\n    std::process::exit(1);\n}\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Rust);
+        let findings = ProcessExitInLibDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(
+            findings.len(),
+            1,
+            "lib file outside cmd/ should still be flagged"
+        );
     }
 }

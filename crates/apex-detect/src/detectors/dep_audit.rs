@@ -114,6 +114,85 @@ impl DependencyAuditDetector {
         let stdout = String::from_utf8_lossy(&output.stdout);
         parse_npm_audit_output(&stdout)
     }
+
+    /// Audit Rust Cargo.lock directly using `cargo audit --json`.
+    /// This is an alias for `audit_cargo` but named to reflect the lockfile source.
+    async fn audit_cargo_lock(&self, ctx: &AnalysisContext) -> Result<Vec<Finding>> {
+        self.audit_cargo(ctx).await
+    }
+
+    /// Audit Go modules via `go list -m -json all` + advisory lookup.
+    ///
+    /// Currently a stub — returns an Info finding if go.sum is detected without
+    /// the `govulncheck` tool installed.  Full implementation requires govulncheck.
+    async fn audit_go(&self, ctx: &AnalysisContext) -> Result<Vec<Finding>> {
+        let spec = CommandSpec::new("govulncheck", &ctx.target_root).args(["./..."]);
+
+        match ctx.runner.run_command(&spec).await {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // govulncheck outputs one JSON object per vulnerability; count findings.
+                let mut findings = Vec::new();
+                for line in stdout.lines() {
+                    let parse_result: std::result::Result<serde_json::Value, serde_json::Error> =
+                        serde_json::from_str(line);
+                    if let Ok(v) = parse_result {
+                        if v.get("vulnerability").is_some() {
+                            let id = v["vulnerability"]["id"].as_str().unwrap_or("unknown");
+                            let pkg = v["vulnerability"]["modules"]
+                                .as_array()
+                                .and_then(|a| a.first())
+                                .and_then(|m| m["module"].as_str())
+                                .unwrap_or("unknown");
+                            findings.push(Finding {
+                                id: Uuid::new_v4(),
+                                detector: "dependency-audit".into(),
+                                severity: Severity::High,
+                                category: FindingCategory::DependencyVuln,
+                                file: PathBuf::from("go.sum"),
+                                line: Some(advisory_line(id)),
+                                title: format!("{pkg} ({id})"),
+                                description: format!("govulncheck reported {id} in {pkg}"),
+                                evidence: vec![],
+                                covered: true,
+                                suggestion: format!("Review and upgrade {pkg}"),
+                                explanation: None,
+                                fix: None,
+                                cwe_ids: vec![1395],
+                            });
+                        }
+                    }
+                }
+                Ok(findings)
+            }
+            Err(e) if is_tool_not_found(&e) => Ok(vec![tool_not_installed_finding(
+                "govulncheck",
+                "go.sum",
+            )]),
+            Err(e) => Err(ApexError::Detect(format!("govulncheck: {e}"))),
+        }
+    }
+
+    /// Audit Maven pom.xml via `mvn dependency-check:check` (OWASP dependency-check).
+    ///
+    /// Currently a stub — returns an Info finding if the tool is not installed.
+    async fn audit_maven(&self, ctx: &AnalysisContext) -> Result<Vec<Finding>> {
+        let spec = CommandSpec::new("mvn", &ctx.target_root)
+            .args(["dependency-check:check", "-DfailBuildOnCVSS=0", "-q"]);
+
+        match ctx.runner.run_command(&spec).await {
+            Ok(_output) => {
+                // Minimal stub: in a full implementation we would parse the XML report.
+                // For now, return empty (no findings produced by the stub).
+                Ok(vec![])
+            }
+            Err(e) if is_tool_not_found(&e) => Ok(vec![tool_not_installed_finding(
+                "mvn dependency-check",
+                "pom.xml",
+            )]),
+            Err(e) => Err(ApexError::Detect(format!("mvn dependency-check: {e}"))),
+        }
+    }
 }
 
 #[async_trait]
@@ -128,9 +207,11 @@ impl Detector for DependencyAuditDetector {
 
     async fn analyze(&self, ctx: &AnalysisContext) -> Result<Vec<Finding>> {
         match ctx.language {
-            Language::Rust => self.audit_cargo(ctx).await,
+            Language::Rust => self.audit_cargo_lock(ctx).await,
             Language::Python => self.audit_pip(ctx).await,
             Language::JavaScript => self.audit_npm(ctx).await,
+            Language::Go => self.audit_go(ctx).await,
+            Language::Java | Language::Kotlin => self.audit_maven(ctx).await,
             _ => Ok(vec![]),
         }
     }
@@ -973,5 +1054,79 @@ warning: 2 allowed advisories were not found in the advisory database:
     fn is_tool_not_found_detect_error() {
         let e = ApexError::Detect("some detect error".into());
         assert!(!is_tool_not_found(&e));
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 20: audit_cargo_lock, audit_go, audit_maven stubs
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn analyze_go_govulncheck_not_installed_returns_info() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_| {
+            Err(ApexError::Subprocess {
+                exit_code: 127,
+                stderr: "govulncheck: command not found".into(),
+            })
+        });
+        let ctx = make_ctx_with_mock(mock, Language::Go);
+        let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Info);
+        assert!(findings[0].title.contains("not installed"));
+    }
+
+    #[tokio::test]
+    async fn analyze_java_maven_not_installed_returns_info() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_| {
+            Err(ApexError::Subprocess {
+                exit_code: 127,
+                stderr: "mvn: command not found".into(),
+            })
+        });
+        let ctx = make_ctx_with_mock(mock, Language::Java);
+        let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Info);
+        assert!(findings[0].title.contains("not installed"));
+    }
+
+    #[tokio::test]
+    async fn analyze_kotlin_maven_not_installed_returns_info() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_| {
+            Err(ApexError::Subprocess {
+                exit_code: 127,
+                stderr: "mvn: command not found".into(),
+            })
+        });
+        let ctx = make_ctx_with_mock(mock, Language::Kotlin);
+        let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Info);
+    }
+
+    #[tokio::test]
+    async fn analyze_go_govulncheck_success_no_output() {
+        // govulncheck ran but found no vulnerabilities (empty output)
+        let runner = FixtureRunner::new()
+            .on("govulncheck", CommandOutput::success(b"".to_vec()));
+        let ctx = make_ctx_with_lang(runner, Language::Go);
+        let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[tokio::test]
+    async fn audit_cargo_lock_delegates_to_cargo_audit() {
+        // cargo-lock audit delegates to cargo audit JSON output
+        let audit_json = r#"{"vulnerabilities": {"found": 0, "list": []}}"#;
+        let runner = FixtureRunner::new().on(
+            "cargo",
+            CommandOutput::success(audit_json.as_bytes().to_vec()),
+        );
+        let ctx = make_ctx_with_lang(runner, Language::Rust);
+        let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty());
     }
 }

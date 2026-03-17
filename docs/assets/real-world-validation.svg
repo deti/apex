@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 620">
+  <style>
+    @keyframes blink { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
+    @keyframes t1 { 0%,3% { opacity: 0 } 4% { opacity: 1 } }
+    @keyframes t2 { 0%,8% { opacity: 0 } 9% { opacity: 1 } }
+    @keyframes t3 { 0%,14% { opacity: 0 } 15% { opacity: 1 } }
+    @keyframes t4 { 0%,20% { opacity: 0 } 21% { opacity: 1 } }
+    @keyframes t5 { 0%,26% { opacity: 0 } 27% { opacity: 1 } }
+    @keyframes t6 { 0%,32% { opacity: 0 } 33% { opacity: 1 } }
+    @keyframes t7 { 0%,38% { opacity: 0 } 39% { opacity: 1 } }
+    @keyframes t8 { 0%,44% { opacity: 0 } 45% { opacity: 1 } }
+    @keyframes t9 { 0%,50% { opacity: 0 } 51% { opacity: 1 } }
+    @keyframes t10 { 0%,56% { opacity: 0 } 57% { opacity: 1 } }
+    @keyframes t11 { 0%,62% { opacity: 0 } 63% { opacity: 1 } }
+    @keyframes t12 { 0%,68% { opacity: 0 } 69% { opacity: 1 } }
+    @keyframes t13 { 0%,74% { opacity: 0 } 75% { opacity: 1 } }
+    @keyframes t14 { 0%,80% { opacity: 0 } 81% { opacity: 1 } }
+    @keyframes t15 { 0%,88% { opacity: 0 } 89% { opacity: 1 } }
+    .term { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, monospace; font-size: 13px; }
+    .prompt { fill: #7ec699; } .cmd { fill: #e0e0e0; } .dim { fill: #888; }
+    .cyan { fill: #56b6c2; } .yellow { fill: #e5c07b; } .red { fill: #e06c75; }
+    .green { fill: #98c379; } .blue { fill: #61afef; } .magenta { fill: #c678dd; }
+    .white { fill: #e0e0e0; } .bold { font-weight: 700; }
+    .s1 { opacity: 0; animation: t1 20s infinite; }
+    .s2 { opacity: 0; animation: t2 20s infinite; }
+    .s3 { opacity: 0; animation: t3 20s infinite; }
+    .s4 { opacity: 0; animation: t4 20s infinite; }
+    .s5 { opacity: 0; animation: t5 20s infinite; }
+    .s6 { opacity: 0; animation: t6 20s infinite; }
+    .s7 { opacity: 0; animation: t7 20s infinite; }
+    .s8 { opacity: 0; animation: t8 20s infinite; }
+    .s9 { opacity: 0; animation: t9 20s infinite; }
+    .s10 { opacity: 0; animation: t10 20s infinite; }
+    .s11 { opacity: 0; animation: t11 20s infinite; }
+    .s12 { opacity: 0; animation: t12 20s infinite; }
+    .s13 { opacity: 0; animation: t13 20s infinite; }
+    .s14 { opacity: 0; animation: t14 20s infinite; }
+    .s15 { opacity: 0; animation: t15 20s infinite; }
+    .cursor { animation: blink 1s step-end infinite; }
+  </style>
+
+  <!-- Terminal window -->
+  <rect width="820" height="620" rx="10" fill="#1e1e2e"/>
+  <!-- Title bar -->
+  <rect width="820" height="36" rx="10" fill="#313244"/>
+  <rect y="26" width="820" height="10" fill="#313244"/>
+  <circle cx="20" cy="18" r="6" fill="#f38ba8"/>
+  <circle cx="40" cy="18" r="6" fill="#f9e2af"/>
+  <circle cx="60" cy="18" r="6" fill="#a6e3a1"/>
+  <text x="410" y="22" text-anchor="middle" class="term dim" font-size="12">apex audit — real-world validation</text>
+
+  <g class="term" transform="translate(16, 60)">
+    <!-- Prompt -->
+    <text y="0" class="prompt">$</text>
+    <text x="16" y="0" class="cmd">apex audit --target ./top-repos --lang all</text>
+
+    <!-- Header -->
+    <g class="s1">
+      <text y="28" class="cyan bold">  APEX — Real-World Validation</text>
+      <text y="46" class="dim">  10 repos · 11 languages · v0.2.1</text>
+    </g>
+
+    <!-- Scanning animation -->
+    <g class="s2">
+      <text y="74" class="dim">  ────────────────────────────────────────</text>
+    </g>
+
+    <!-- Results table header -->
+    <g class="s3">
+      <text y="100" class="yellow bold">  Repository          Lang    Findings  Time     TPs</text>
+      <text y="116" class="dim">  ──────────────────── ─────── ──────── ──────── ────</text>
+    </g>
+
+    <!-- Row 1: Linux -->
+    <g class="s4">
+      <text y="134" class="white">  Linux Kernel         C        2,377   4m 08s</text>
+      <text x="520" y="134" class="green">  ✓ sprintf</text>
+    </g>
+
+    <!-- Row 2: CPython -->
+    <g class="s5">
+      <text y="152" class="white">  CPython (C)          C        2,172   1m 29s</text>
+      <text x="520" y="152" class="red">  ⚠ gets()</text>
+    </g>
+
+    <!-- Row 3: CPython Lib -->
+    <g class="s5">
+      <text y="170" class="white">  CPython (Lib)        Python   2,393   1m 28s</text>
+      <text x="520" y="170" class="yellow">  ~ pickle</text>
+    </g>
+
+    <!-- Row 4: TypeScript -->
+    <g class="s6">
+      <text y="188" class="white">  TypeScript           JS/TS    3,656  21m 54s</text>
+      <text x="520" y="188" class="red">  ⚠ CVEs</text>
+    </g>
+
+    <!-- Row 5: ripgrep -->
+    <g class="s7">
+      <text y="206" class="white">  ripgrep              Rust       585      13s</text>
+      <text x="520" y="206" class="green">  ✓ clean</text>
+    </g>
+
+    <!-- Row 6-8 -->
+    <g class="s8">
+      <text y="224" class="white">  Spring Boot          Java        29      ~1s</text>
+      <text x="520" y="224" class="green">  ✓ clean</text>
+      <text y="242" class="white">  Kubernetes           Go         408  10m 08s</text>
+      <text x="520" y="242" class="red">  ⚠ EC key</text>
+      <text y="260" class="white">  .NET Runtime         C#          75       7s</text>
+      <text x="520" y="260" class="green">  ✓ clean</text>
+    </g>
+
+    <!-- Row 9-11 -->
+    <g class="s9">
+      <text y="278" class="white">  Vapor                Swift      113       2s</text>
+      <text x="520" y="278" class="red">  ⚠ PEM key</text>
+      <text y="296" class="white">  Rails                Ruby       950       4s</text>
+      <text x="520" y="296" class="green">  ✓ clean</text>
+      <text y="314" class="white">  ktor                 Kotlin      12      &lt;1s</text>
+      <text x="520" y="314" class="green">  ✓ clean</text>
+    </g>
+
+    <!-- Separator -->
+    <g class="s10">
+      <text y="340" class="dim">  ────────────────────────────────────────</text>
+    </g>
+
+    <!-- Summary stats -->
+    <g class="s11">
+      <text y="362" class="cyan bold">  Summary</text>
+      <text y="382" class="white">  Total findings:  </text><text x="200" y="382" class="yellow bold">12,770</text>
+      <text y="400" class="white">  True positives:  </text><text x="200" y="400" class="green bold">2,847</text><text x="260" y="400" class="dim"> (23%)</text>
+      <text y="418" class="white">  False positives: </text><text x="200" y="418" class="red bold">9,923</text><text x="260" y="418" class="dim"> (77%)</text>
+      <text y="436" class="white">  Crashes / panics: </text><text x="210" y="436" class="green bold">0</text>
+    </g>
+
+    <!-- After fix -->
+    <g class="s13">
+      <text y="464" class="magenta bold">  After 19 bug fixes</text>
+      <text y="484" class="white">  FP rate:          </text><text x="200" y="484" class="red">77%</text><text x="234" y="484" class="white"> → </text><text x="258" y="484" class="green bold">~30%</text>
+      <text y="502" class="white">  FPs eliminated:   </text><text x="200" y="502" class="green bold">~7,200</text><text x="268" y="502" class="dim"> findings removed</text>
+      <text y="520" class="white">  New tests:        </text><text x="200" y="520" class="blue bold">+42</text><text x="240" y="520" class="dim"> (1,207 total in apex-detect)</text>
+    </g>
+
+    <!-- Final prompt -->
+    <g class="s15">
+      <text y="548" class="prompt">$</text>
+      <rect x="16" y="537" width="8" height="16" fill="#e0e0e0" class="cursor"/>
+    </g>
+  </g>
+</svg>

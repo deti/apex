@@ -9,6 +9,16 @@ security gaps, and untested branches — then writes the tests to fix them.
 
 ---
 
+## Validated against the world's biggest codebases
+
+<p align="center">
+  <img src="docs/assets/real-world-validation.svg" alt="APEX real-world validation results" width="780">
+</p>
+
+APEX was tested against **10 top GitHub repos** (Linux, CPython, TypeScript, ripgrep, Spring Boot, Kubernetes, .NET, Vapor, Rails, ktor) covering **11 languages**. Zero crashes, 12,770 findings, real CVEs and hardcoded secrets caught. [Full report →](docs/real-world-validation-summary.md)
+
+---
+
 ## What APEX finds in real projects
 
 ```

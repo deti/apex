@@ -5,7 +5,7 @@ use apex_core::error::ApexError;
 use apex_core::types::Language;
 use tracing::warn;
 
-use crate::config::{DetectConfig, DetectMode};
+use crate::config::{default_audit_enabled, detector_tag, DetectConfig, DetectMode};
 use crate::context::AnalysisContext;
 use crate::detectors::*;
 use crate::finding::{Finding, FindingCategory};
@@ -19,6 +19,21 @@ pub struct DetectorPipeline {
 impl DetectorPipeline {
     pub fn new(detectors: Vec<Box<dyn Detector>>) -> Self {
         Self { detectors }
+    }
+
+    /// Build a pipeline for audit (code-review) mode, which excludes noisy detectors
+    /// that generate false positives in a security review context.
+    pub fn from_audit_config(cfg: &DetectConfig, lang: Language) -> Self {
+        let audit_enabled = default_audit_enabled();
+        let mut audit_cfg = cfg.clone();
+        // Intersect: keep only detectors that are both in the audit set and in cfg.enabled
+        audit_cfg.enabled = cfg
+            .enabled
+            .iter()
+            .filter(|name| audit_enabled.contains(name))
+            .cloned()
+            .collect();
+        Self::from_config(&audit_cfg, lang)
     }
 
     pub fn from_config(cfg: &DetectConfig, lang: Language) -> Self {
@@ -116,6 +131,11 @@ impl DetectorPipeline {
 
         if cfg.detect_mode == DetectMode::Fast {
             detectors.retain(|d| !d.uses_cargo_subprocess());
+        }
+
+        // Bug 19: Tag filter — retain only detectors matching the requested tag
+        if let Some(tag) = cfg.tag_filter {
+            detectors.retain(|d| detector_tag(d.name()) == tag);
         }
 
         Self { detectors }
@@ -1158,6 +1178,85 @@ mod tests {
 
         // After sort: Critical (rank 0) comes before High/Medium (rank 1/2)
         assert_eq!(report.findings[0].severity, Severity::Critical);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 3: from_audit_config excludes noisy detectors
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn from_audit_config_excludes_panic_and_noise() {
+        let cfg = DetectConfig::default();
+        let pipeline = DetectorPipeline::from_audit_config(&cfg, Language::Rust);
+        let names: Vec<&str> = pipeline.detectors.iter().map(|d| d.name()).collect();
+        assert!(
+            !names.contains(&"panic-pattern"),
+            "audit mode should exclude panic-pattern"
+        );
+        assert!(
+            !names.contains(&"mixed-bool-ops"),
+            "audit mode should exclude mixed-bool-ops"
+        );
+        assert!(
+            !names.contains(&"static-analysis"),
+            "audit mode should exclude static-analysis"
+        );
+    }
+
+    #[test]
+    fn from_audit_config_keeps_security_detectors() {
+        let cfg = DetectConfig::default();
+        let pipeline = DetectorPipeline::from_audit_config(&cfg, Language::Rust);
+        let names: Vec<&str> = pipeline.detectors.iter().map(|d| d.name()).collect();
+        assert!(
+            names.contains(&"security-pattern"),
+            "audit mode should keep security-pattern"
+        );
+        assert!(
+            names.contains(&"secret-scan"),
+            "audit mode should keep secret-scan"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 19: tag_filter in from_config
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn from_config_tag_filter_security() {
+        use crate::config::DetectorTag;
+        let mut cfg = DetectConfig::default();
+        cfg.tag_filter = Some(DetectorTag::Security);
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        // All detectors in the pipeline should have Security tag
+        for d in &pipeline.detectors {
+            assert_eq!(
+                crate::config::detector_tag(d.name()),
+                DetectorTag::Security,
+                "detector {} should have Security tag",
+                d.name()
+            );
+        }
+    }
+
+    #[test]
+    fn from_config_tag_filter_quality() {
+        use crate::config::DetectorTag;
+        let mut cfg = DetectConfig::default();
+        cfg.tag_filter = Some(DetectorTag::Quality);
+        let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
+        for d in &pipeline.detectors {
+            assert_eq!(
+                crate::config::detector_tag(d.name()),
+                DetectorTag::Quality,
+                "detector {} should have Quality tag",
+                d.name()
+            );
+        }
+        assert!(
+            !pipeline.detectors.is_empty(),
+            "Quality tag should include some detectors"
+        );
     }
 
     #[test]

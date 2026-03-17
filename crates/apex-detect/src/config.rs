@@ -32,6 +32,25 @@ fn default_enabled() -> Vec<String> {
     ]
 }
 
+/// Detectors excluded from audit mode — they generate too much noise without
+/// meaningful security signal in a code-review context.
+const AUDIT_EXCLUDED_DETECTORS: &[&str] = &[
+    "panic",
+    "mixed-bool-ops",
+    "static",
+    "duplicated-fn",
+    "process-exit-in-lib",
+];
+
+/// Returns the default enabled detector set with noisy detectors removed for
+/// audit (code-review) mode.
+pub fn default_audit_enabled() -> Vec<String> {
+    default_enabled()
+        .into_iter()
+        .filter(|name| !AUDIT_EXCLUDED_DETECTORS.contains(&name.as_str()))
+        .collect()
+}
+
 fn default_severity() -> String {
     "low".into()
 }
@@ -42,6 +61,29 @@ fn default_replay_top_percent() -> u8 {
 
 fn default_sanitizers() -> Vec<String> {
     vec!["address".into(), "undefined".into()]
+}
+
+/// Tag a detector belongs to, used for `--tag` filtering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DetectorTag {
+    /// Detectors that find security vulnerabilities (injection, secrets, etc.)
+    Security,
+    /// Detectors that find code quality issues (duplicates, bool ops, etc.)
+    Quality,
+    /// Detectors that audit software dependencies for vulnerabilities
+    Dependency,
+}
+
+/// Map from detector name to its tag. Used for `--tag` filtering.
+pub fn detector_tag(name: &str) -> DetectorTag {
+    match name {
+        "panic" | "mixed-bool-ops" | "duplicated-fn" | "process-exit-in-lib"
+        | "partial-cmp-unwrap" | "substring-security" | "vecdeque-partial"
+        | "unsafe-send-sync" | "discarded-async-result" | "static" => DetectorTag::Quality,
+        "deps" | "license-scan" => DetectorTag::Dependency,
+        _ => DetectorTag::Security,
+    }
 }
 
 /// Controls which detectors run.
@@ -75,6 +117,9 @@ pub struct DetectConfig {
     pub properties: Vec<PropertyConfig>,
     #[serde(default)]
     pub detect_mode: DetectMode,
+    /// Optional tag filter — if set, only detectors with this tag are enabled.
+    #[serde(default)]
+    pub tag_filter: Option<DetectorTag>,
 }
 
 impl Default for DetectConfig {
@@ -89,6 +134,7 @@ impl Default for DetectConfig {
             diff: DiffConfig::default(),
             properties: Vec::new(),
             detect_mode: DetectMode::default(),
+            tag_filter: None,
         }
     }
 }
@@ -310,5 +356,96 @@ detect_mode = "Fast"
         let cfg2: DetectConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(cfg2.enabled.len(), 27);
         assert_eq!(cfg2.severity_threshold, "low");
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 3: default_audit_enabled() excludes noisy detectors
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn audit_enabled_excludes_noisy_detectors() {
+        let audit = default_audit_enabled();
+        assert!(
+            !audit.contains(&"panic".to_string()),
+            "audit mode should exclude 'panic'"
+        );
+        assert!(
+            !audit.contains(&"mixed-bool-ops".to_string()),
+            "audit mode should exclude 'mixed-bool-ops'"
+        );
+        assert!(
+            !audit.contains(&"static".to_string()),
+            "audit mode should exclude 'static'"
+        );
+        assert!(
+            !audit.contains(&"duplicated-fn".to_string()),
+            "audit mode should exclude 'duplicated-fn'"
+        );
+        assert!(
+            !audit.contains(&"process-exit-in-lib".to_string()),
+            "audit mode should exclude 'process-exit-in-lib'"
+        );
+    }
+
+    #[test]
+    fn audit_enabled_keeps_security_detectors() {
+        let audit = default_audit_enabled();
+        assert!(audit.contains(&"security".to_string()));
+        assert!(audit.contains(&"secret-scan".to_string()));
+        assert!(audit.contains(&"deps".to_string()));
+    }
+
+    #[test]
+    fn audit_enabled_is_subset_of_default() {
+        let default = default_enabled();
+        let audit = default_audit_enabled();
+        for name in &audit {
+            assert!(
+                default.contains(name),
+                "audit-enabled detector '{}' is not in default set",
+                name
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug 19: DetectorTag and tag_filter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detector_tag_security() {
+        assert_eq!(super::detector_tag("security"), super::DetectorTag::Security);
+        assert_eq!(
+            super::detector_tag("secret-scan"),
+            super::DetectorTag::Security
+        );
+    }
+
+    #[test]
+    fn detector_tag_quality() {
+        assert_eq!(super::detector_tag("panic"), super::DetectorTag::Quality);
+        assert_eq!(
+            super::detector_tag("mixed-bool-ops"),
+            super::DetectorTag::Quality
+        );
+        assert_eq!(
+            super::detector_tag("duplicated-fn"),
+            super::DetectorTag::Quality
+        );
+    }
+
+    #[test]
+    fn detector_tag_dependency() {
+        assert_eq!(super::detector_tag("deps"), super::DetectorTag::Dependency);
+        assert_eq!(
+            super::detector_tag("license-scan"),
+            super::DetectorTag::Dependency
+        );
+    }
+
+    #[test]
+    fn tag_filter_defaults_to_none() {
+        let cfg = DetectConfig::default();
+        assert!(cfg.tag_filter.is_none());
     }
 }
