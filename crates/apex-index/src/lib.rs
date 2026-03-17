@@ -7,6 +7,8 @@ pub mod flaky;
 pub mod flaky_repair;
 pub mod go;
 pub mod impact;
+pub mod java;
+pub mod kotlin;
 pub mod prioritize;
 pub mod python;
 pub mod ruby;
@@ -16,4 +18,5 @@ pub mod swift;
 pub mod types;
 
 pub use flaky::{FlakyDetector, FlakyReport};
+pub use kotlin::build_kotlin_index;
 pub use types::{BranchIndex, BranchProfile, TestTrace};
