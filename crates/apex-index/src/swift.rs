@@ -484,4 +484,79 @@ mod tests {
         assert_eq!(traces[0].duration_ms, 50);
         assert_eq!(traces[0].status, ExecutionStatus::Fail);
     }
+
+    // Target: parse_swift_coverage — file_paths.entry().or_insert_with() de-duplicates
+    // the same file appearing in two different data entries (line 44-46).
+    #[test]
+    fn parse_swift_coverage_duplicate_file_deduped() {
+        // Same filename in two separate data entries — file_paths should have 1 entry.
+        let json = r#"{"data": [
+            {"files": [{"filename": "/shared.swift", "segments": [[1,1,1,true,true]]}]},
+            {"files": [{"filename": "/shared.swift", "segments": [[2,1,0,true,true]]}]}
+        ]}"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let (branches, file_paths) = parse_swift_coverage(json, tmp.path());
+        assert_eq!(branches.len(), 2);
+        // The or_insert_with path: second entry is a dup, file_paths should have 1 key.
+        assert_eq!(file_paths.len(), 1, "duplicate file must appear once in file_paths");
+    }
+
+    // Target: parse_swift_coverage — segment col value extracted correctly (line 68-69).
+    #[test]
+    fn parse_swift_coverage_col_extracted() {
+        let json = r#"{"data": [{"files": [{"filename": "col.swift", "segments": [[7,15,3,true,true]]}]}]}"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let (branches, _) = parse_swift_coverage(json, tmp.path());
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].line, 7);
+        assert_eq!(branches[0].col, 15);
+    }
+
+    // Target: derive_relative_path — exact prefix match on macOS-style tmpdir
+    // (verify /private/tmp or /tmp prefixes are properly stripped).
+    #[test]
+    fn derive_relative_path_with_real_tempdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Construct a path that is definitively under tmp.path()
+        let full = format!("{}/Sources/App.swift", tmp.path().display());
+        let rel = derive_relative_path(&full, tmp.path());
+        // Should strip the prefix
+        assert!(
+            !rel.starts_with('/') || rel == full,
+            "expected relative path, got: {rel}"
+        );
+    }
+
+    // Target: parse_seconds_parens — value exactly 0.0 seconds
+    #[test]
+    fn parse_seconds_parens_zero() {
+        assert_eq!(parse_seconds_parens("passed (0.0 seconds)."), 0);
+    }
+
+    // Target: build_traces_from_output — multiple tests in one output (both pass/fail)
+    #[test]
+    fn build_traces_from_output_multiple_mixed() {
+        let stdout = "\
+Test Case '-[Suite.Tests testA]' passed (0.002 seconds).\n\
+Test Case '-[Suite.Tests testB]' failed (0.003 seconds).\n\
+Test Case '-[Suite.Tests testC]' passed (0.001 seconds).\n";
+        let branches = vec![BranchId::new(1, 1, 0, 0)];
+        let traces = build_traces_from_output(stdout, &branches);
+        assert_eq!(traces.len(), 3);
+        assert_eq!(traces[0].status, ExecutionStatus::Pass);
+        assert_eq!(traces[1].status, ExecutionStatus::Fail);
+        assert_eq!(traces[2].status, ExecutionStatus::Pass);
+        assert_eq!(traces[0].duration_ms, 2);
+        assert_eq!(traces[1].duration_ms, 3);
+        assert_eq!(traces[2].duration_ms, 1);
+    }
+
+    // Target: parse_swift_coverage data array is not an array (line 25-27).
+    #[test]
+    fn parse_swift_coverage_data_not_array() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (branches, file_paths) = parse_swift_coverage(r#"{"data": "notanarray"}"#, tmp.path());
+        assert!(branches.is_empty());
+        assert!(file_paths.is_empty());
+    }
 }

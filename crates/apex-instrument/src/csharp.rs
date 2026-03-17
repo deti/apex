@@ -514,4 +514,157 @@ mod tests {
         let tag = r#"<linefilename="no-space.cs">"#;
         assert_eq!(extract_xml_attr(tag, "filename"), None);
     }
+
+    // -----------------------------------------------------------------------
+    // parse_cobertura_xml — current_file reset on </class> (line 82-83)
+    // -----------------------------------------------------------------------
+
+    // Target: line 83 — current_file set to None on </class>; subsequent <line> outside
+    // a class is not indexed (current_file.is_some() guard on line 84).
+    #[test]
+    fn parse_cobertura_current_file_cleared_after_class_close() {
+        let xml = "<coverage><packages><package><classes>\n\
+<class filename=\"A.cs\"><lines>\n\
+<line number=\"1\" hits=\"1\" />\n\
+</lines>\n\
+</class>\n\
+<line number=\"99\" hits=\"5\" />\n\
+<class filename=\"B.cs\"><lines>\n\
+<line number=\"2\" hits=\"0\" />\n\
+</lines>\n\
+</class>\n\
+</classes></package></packages></coverage>";
+        let tmp = tempfile::tempdir().unwrap();
+        let (all, _, _) = parse_cobertura_xml(xml, tmp.path());
+        // Lines 1 and 2 from A.cs and B.cs — each produces 2 branches (covered+uncovered)
+        // Line 99 is outside any class and must be ignored.
+        assert_eq!(all.len(), 4, "lines outside <class> must be ignored");
+        let lines: Vec<u32> = all.iter().map(|b| b.line).collect();
+        assert!(!lines.contains(&99), "orphan line 99 must not be indexed");
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_cobertura_xml — all_branches always paired (lines 98-108)
+    // -----------------------------------------------------------------------
+
+    // Target: lines 98-108 — each valid <line> always pushes exactly 2 BranchIds
+    // (branch_covered dir=0 and branch_uncovered dir=1) to all_branches.
+    #[test]
+    fn parse_cobertura_all_branches_always_paired() {
+        let xml = r#"<coverage><packages><package><classes>
+<class filename="P.cs"><lines>
+<line number="5" hits="10" />
+<line number="6" hits="0" />
+</lines></class>
+</classes></package></packages></coverage>"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let (all, executed, _) = parse_cobertura_xml(xml, tmp.path());
+        // 2 lines → 4 branches (2 per line: dir=0 and dir=1)
+        assert_eq!(all.len(), 4);
+        // Directions: [0,1] for line 5 and [0,1] for line 6 (order may vary slightly)
+        let dirs: Vec<u8> = all.iter().map(|b| b.direction).collect();
+        assert_eq!(dirs.iter().filter(|&&d| d == 0).count(), 2);
+        assert_eq!(dirs.iter().filter(|&&d| d == 1).count(), 2);
+        // executed: hits>0 → dir=0, hits=0 → dir=1
+        assert_eq!(executed.len(), 2);
+        assert!(executed.iter().any(|b| b.direction == 0 && b.line == 5));
+        assert!(executed.iter().any(|b| b.direction == 1 && b.line == 6));
+    }
+
+    // -----------------------------------------------------------------------
+    // find_coverage_xml — file in root TestResults (not a subdir) is skipped
+    // -----------------------------------------------------------------------
+
+    // Target: lines 197-210 — path.is_dir() guard skips regular files in TestResults.
+    #[test]
+    fn find_coverage_xml_skips_files_in_test_results() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tr = tmp.path().join("TestResults");
+        std::fs::create_dir(&tr).unwrap();
+        // Place a coverage.cobertura.xml directly in TestResults (not in a subdir).
+        std::fs::write(tr.join("coverage.cobertura.xml"), "<cov/>").unwrap();
+        // It's a file, not a subdir, so is_dir() = false → skipped.
+        let result = find_coverage_xml(tmp.path());
+        assert!(result.is_err(), "file at TestResults root must be skipped");
+    }
+
+    // Target: lines 200-209 — happy path: valid coverage XML found under subdir.
+    #[test]
+    fn find_coverage_xml_happy_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tr = tmp.path().join("TestResults");
+        std::fs::create_dir(&tr).unwrap();
+        let run_dir = tr.join("guid-run-001");
+        std::fs::create_dir(&run_dir).unwrap();
+        let xml = run_dir.join("coverage.cobertura.xml");
+        std::fs::write(&xml, "<coverage/>").unwrap();
+
+        let result = find_coverage_xml(tmp.path());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), xml);
+    }
+
+    // Target: error when TestResults dir missing (line 187-190).
+    #[test]
+    fn find_coverage_xml_no_test_results_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = find_coverage_xml(tmp.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("TestResults"),
+            "error must mention TestResults: {err}"
+        );
+    }
+
+    // Target: error when TestResults has no XML (line 213-215).
+    #[test]
+    fn find_coverage_xml_empty_test_results_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("TestResults")).unwrap();
+        let err = find_coverage_xml(tmp.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("coverage.cobertura.xml"),
+            "error must mention the xml filename: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // derive_relative_path — both branches (strip_prefix success and fallback)
+    // -----------------------------------------------------------------------
+
+    // Target: lines 127-128 — strip_prefix succeeds.
+    #[test]
+    fn derive_relative_path_strips_prefix_new() {
+        let root = std::path::Path::new("/project/src");
+        let result = derive_relative_path("/project/src/Foo.cs", root);
+        assert_eq!(result, "Foo.cs");
+    }
+
+    // Target: lines 130 — strip_prefix fails, returns original.
+    #[test]
+    fn derive_relative_path_fallback_to_original() {
+        let root = std::path::Path::new("/project/src");
+        let result = derive_relative_path("relative/file.cs", root);
+        assert_eq!(result, "relative/file.cs");
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_xml_attr — more edge cases
+    // -----------------------------------------------------------------------
+
+    // Target: extract_xml_attr — attribute value with space inside.
+    #[test]
+    fn extract_xml_attr_value_with_space() {
+        let tag = r#" <class filename="My Files/Test.cs" name="Test">"#;
+        assert_eq!(
+            extract_xml_attr(tag, "filename"),
+            Some("My Files/Test.cs".to_string())
+        );
+    }
+
+    // Target: extract_xml_attr — empty value.
+    #[test]
+    fn extract_xml_attr_empty_value_new() {
+        let tag = r#"<line number="" hits="0" />"#;
+        assert_eq!(extract_xml_attr(tag, "number"), Some(String::new()));
+    }
 }

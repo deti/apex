@@ -459,4 +459,87 @@ example.com/foo/handler.go:5.14,8.2 2 1
         let (branches, _) = parse_go_coverage(input, tmp.path());
         assert!(branches.is_empty(), "u16 column overflow must be skipped");
     }
+
+    // Target: file_paths.entry().or_insert_with() — same file gets only one entry
+    // (lines 58-60: the or_insert_with branch on repeated file_id).
+    #[test]
+    fn parse_go_coverage_file_deduped_in_file_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = "mode: atomic\n\
+pkg/main.go:1.1,2.2 1 1\n\
+pkg/main.go:3.1,4.2 1 0\n\
+pkg/main.go:5.1,6.2 1 2\n";
+        let (branches, file_paths) = parse_go_coverage(input, tmp.path());
+        assert_eq!(branches.len(), 3);
+        // All three lines belong to the same file — file_paths should have exactly 1 key.
+        assert_eq!(file_paths.len(), 1, "same file must appear once in file_paths");
+    }
+
+    // Target: parse_go_coverage — count=0 produces direction=1 (line 66).
+    #[test]
+    fn parse_go_coverage_count_zero_direction_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let input = "mode: atomic\npkg/x.go:10.5,15.10 2 0\n";
+        let (branches, _) = parse_go_coverage(input, tmp.path());
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].direction, 1, "count=0 must yield direction=1");
+    }
+
+    // Target: build_traces_from_verbose — PASS line with branches propagated (lines 167-172).
+    #[test]
+    fn build_traces_from_verbose_pass_branches_propagated() {
+        let branches = vec![BranchId::new(5, 1, 0, 0), BranchId::new(5, 2, 0, 1)];
+        let stdout = "--- PASS: TestSomething (0.100s)\n";
+        let traces = build_traces_from_verbose(stdout, &branches);
+        assert_eq!(traces.len(), 1);
+        assert_eq!(traces[0].branches.len(), 2);
+        assert_eq!(traces[0].duration_ms, 100);
+    }
+
+    // Target: build_traces_from_verbose — FAIL line has duration_ms=0 (lines 174-182).
+    #[test]
+    fn build_traces_from_verbose_fail_zero_duration() {
+        let stdout = "--- FAIL: TestBroken (0.050s)\n";
+        let traces = build_traces_from_verbose(stdout, &[]);
+        assert_eq!(traces.len(), 1);
+        assert_eq!(traces[0].duration_ms, 0, "FAIL traces always have duration_ms=0");
+        assert_eq!(traces[0].status, ExecutionStatus::Fail);
+    }
+
+    // Target: build_traces_from_verbose — multiple PASS and FAIL lines (full loop).
+    #[test]
+    fn build_traces_from_verbose_multiple_results() {
+        let stdout = "\
+=== RUN   TestA\n\
+--- PASS: TestA (0.001s)\n\
+=== RUN   TestB\n\
+--- FAIL: TestB (0.002s)\n\
+=== RUN   TestC\n\
+--- PASS: TestC (0.003s)\n";
+        let traces = build_traces_from_verbose(stdout, &[]);
+        assert_eq!(traces.len(), 3);
+        assert_eq!(traces[0].test_name, "TestA");
+        assert_eq!(traces[0].status, ExecutionStatus::Pass);
+        assert_eq!(traces[1].test_name, "TestB");
+        assert_eq!(traces[1].status, ExecutionStatus::Fail);
+        assert_eq!(traces[2].test_name, "TestC");
+        assert_eq!(traces[2].status, ExecutionStatus::Pass);
+    }
+
+    // Target: parse_duration_parens — whitespace trimming (line 190).
+    #[test]
+    fn parse_duration_parens_with_surrounding_whitespace() {
+        assert_eq!(parse_duration_parens("  (0.01s)  "), 10);
+    }
+
+    // Target: derive_relative_path — empty suffix from split (edge: single-component path)
+    #[test]
+    fn derive_relative_path_single_component() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A path with no '/' slashes — split produces ["file.go"], loop starts at 1..1
+        // which is empty, so falls through to return original.
+        let result = derive_relative_path("file.go", tmp.path());
+        // No match in suffix loop since start=1..1 is empty
+        assert_eq!(result, "file.go");
+    }
 }

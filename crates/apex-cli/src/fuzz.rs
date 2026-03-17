@@ -927,4 +927,245 @@ mod tests {
         // Branch was never covered (zero iters)
         assert_eq!(oracle.coverage_percent(), 0.0);
     }
+
+    // ------------------------------------------------------------------
+    // Round 2: Cover fuzz loop body (lines 68-97) and coverage-target
+    // early-exit path (lines 70-72).
+    // ------------------------------------------------------------------
+
+    /// Target: lines 68-83 — the fuzz loop body entered when max_iters > 0
+    /// and there are uncovered branches.
+    ///
+    /// With max_iters = 1 and a nonexistent binary, the loop enters, calls
+    /// suggest_inputs (line 79), iterates over seeds (line 82), and then
+    /// sandbox.run() fails because the binary does not exist. The `?` at
+    /// line 83 propagates the error up, so run_fuzz_strategy returns Err.
+    ///
+    /// Classification: WRONG — the function returns Ok(()) with zero iters
+    /// when the sandbox would fail on the first iter, masking the error.
+    /// Confirmed by this test: calling with iters=1 correctly returns Err.
+    #[test]
+    fn run_fuzz_strategy_sandbox_error_propagates_on_first_iter() {
+        // Target: lines 68-83 (fuzz loop body, suggest_inputs, seed loop)
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = BranchId::new(200, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        // Branch uncovered → loop will not exit early at line 74
+
+        let target = Target {
+            root: std::path::PathBuf::from("/tmp"),
+            language: Language::C,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![b.clone()],
+            executed_branch_ids: vec![],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: std::path::PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // With max_iters = 1, the loop body executes once. suggest_inputs
+        // returns 8 random seeds (corpus was just seeded with [0u8]).
+        // sandbox.run() will fail for the nonexistent binary, propagating Err.
+        let result = rt.block_on(run_fuzz_strategy(
+            oracle.clone(),
+            &instrumented,
+            0.9,
+            1, // ONE iteration → enters loop body
+            vec!["/nonexistent_apex_test_binary_xyz_12345".into()],
+            &cfg,
+        ));
+        // The sandbox will fail to spawn the nonexistent binary, and the
+        // error propagates via `?` at line 83.
+        assert!(
+            result.is_err(),
+            "expected Err from sandbox failure, got Ok"
+        );
+    }
+
+    /// Target: lines 70-72 — coverage target already reached at the start of
+    /// the fuzz loop. The loop enters on iter=0, checks pct/100.0 >= target,
+    /// and breaks immediately with the "coverage target reached" log.
+    ///
+    /// This exercises the first `if` inside the loop body, which is distinct
+    /// from the pre-loop empty-oracle check.
+    #[test]
+    fn run_fuzz_strategy_coverage_target_reached_mid_loop() {
+        // Target: lines 68-72 (loop enter, pct check, break)
+        // Set coverage_target = 0.0 so that 0% >= 0% triggers the break.
+        // But oracle must have uncovered branches so the pre-loop check at
+        // line 74 does NOT trigger first (empty-oracle breaks at line 74).
+        // Actually with coverage_target=0.0 and pct=0.0: 0.0/100.0 >= 0.0 is
+        // TRUE → breaks at line 72 before the empty check at line 74.
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = BranchId::new(300, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        // Branch is uncovered but target is 0.0 → 0% >= 0% breaks the loop
+
+        let target = Target {
+            root: std::path::PathBuf::from("/tmp"),
+            language: Language::C,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![b.clone()],
+            executed_branch_ids: vec![],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: std::path::PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(run_fuzz_strategy(
+            oracle.clone(),
+            &instrumented,
+            0.0, // already met → breaks at line 70-72
+            10,  // would iterate if not for target check
+            vec!["/nonexistent_apex_test_binary_xyz_12345".into()],
+            &cfg,
+        ));
+        assert!(
+            result.is_ok(),
+            "expected Ok (loop broke at coverage-target check)"
+        );
+        // No iterations completed — coverage stays at 0
+        assert_eq!(oracle.coverage_percent(), 0.0);
+    }
+
+    /// Target: lines 74-76 — all branches already covered, loop enters but
+    /// breaks at the `uncovered_branches().is_empty()` check (second guard).
+    ///
+    /// This is distinct from the coverage_target break above: here the
+    /// coverage_target is NOT met (pct < target) but there are no uncovered
+    /// branches to work on.
+    #[test]
+    fn run_fuzz_strategy_no_uncovered_branches_breaks_loop() {
+        // Target: lines 74-76 (uncovered_branches empty check inside loop)
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = BranchId::new(400, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        oracle.mark_covered(&b, SeedId::new());
+        // 100% covered → uncovered_branches().is_empty() == true
+        // But coverage_target = 0.99 > 1.0 would still have pct/100=1.0 >= 0.99
+        // so actually line 70 would break first. Use target > 1.0 to skip line 70.
+        // coverage_target = 1.1 means pct/100.0 = 1.0 < 1.1 → passes line 70 check
+        // then uncovered_branches is empty → breaks at line 74-76.
+
+        let target = Target {
+            root: std::path::PathBuf::from("/tmp"),
+            language: Language::C,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![b.clone()],
+            executed_branch_ids: vec![b],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: std::path::PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result = rt.block_on(run_fuzz_strategy(
+            oracle.clone(),
+            &instrumented,
+            1.1, // above 100% so line 70 does NOT break; line 74 does
+            10,
+            vec!["/nonexistent_apex_test_binary_xyz_12345".into()],
+            &cfg,
+        ));
+        assert!(result.is_ok());
+        assert_eq!(oracle.coverage_percent(), 100.0);
+    }
+
+    /// Bug test: run_fuzz_strategy coverage_target comparison uses
+    /// `pct / 100.0 >= coverage_target` where pct is already a percentage
+    /// (e.g. 75.0 for 75%). So coverage_target must be in [0.0, 1.0] range.
+    ///
+    /// If a caller passes coverage_target = 75.0 (thinking it's a percent),
+    /// the comparison becomes `75.0 / 100.0 >= 75.0` → `0.75 >= 75.0` → false,
+    /// and the fuzz loop never terminates early even when the target is met.
+    ///
+    /// Classification: STYLE — the API is ambiguous (0-1 fraction vs 0-100 percent).
+    #[test]
+    fn bug_fuzz_strategy_coverage_target_scale_ambiguity() {
+        // Document the expected scale: coverage_target must be 0.0..=1.0
+        // passing 0.75 means "75% coverage required"
+        let cfg = ApexConfig::default();
+        let oracle = Arc::new(CoverageOracle::new());
+        let b = BranchId::new(500, 1, 0, 0);
+        oracle.register_branches([b.clone()]);
+        oracle.mark_covered(&b, SeedId::new());
+        // 100% coverage, target = 0.75 → 100/100 = 1.0 >= 0.75 → should break at iter 0
+
+        let target = Target {
+            root: std::path::PathBuf::from("/tmp"),
+            language: Language::C,
+            test_command: Vec::new(),
+        };
+        let instrumented = apex_core::types::InstrumentedTarget {
+            target,
+            branch_ids: vec![b.clone()],
+            executed_branch_ids: vec![b],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: std::path::PathBuf::from("/tmp"),
+        };
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // With coverage_target = 0.75 (fraction) and 100% coverage:
+        // pct=100.0, 100.0/100.0 = 1.0 >= 0.75 → breaks at line 70
+        let result = rt.block_on(run_fuzz_strategy(
+            Arc::clone(&oracle),
+            &instrumented,
+            0.75,
+            100,
+            vec!["/nonexistent_apex_test_binary_xyz_12345".into()],
+            &cfg,
+        ));
+        assert!(result.is_ok(), "should exit early when target met");
+
+        // If caller passes 75.0 instead of 0.75:
+        // pct=100.0, 100.0/100.0 = 1.0 >= 75.0 → FALSE → loop does NOT break
+        // at line 70, falls through to line 74 (uncovered empty) → breaks there.
+        // So with 0 uncovered branches the result is still Ok — not wrong in
+        // this case. Document the ambiguity.
+        let oracle2 = Arc::new(CoverageOracle::new());
+        let b2 = BranchId::new(501, 1, 0, 0);
+        oracle2.register_branches([b2.clone()]);
+        oracle2.mark_covered(&b2, SeedId::new());
+        let target2 = Target {
+            root: std::path::PathBuf::from("/tmp"),
+            language: Language::C,
+            test_command: Vec::new(),
+        };
+        let instrumented2 = apex_core::types::InstrumentedTarget {
+            target: target2,
+            branch_ids: vec![b2.clone()],
+            executed_branch_ids: vec![b2],
+            file_paths: std::collections::HashMap::new(),
+            work_dir: std::path::PathBuf::from("/tmp"),
+        };
+        let result2 = rt.block_on(run_fuzz_strategy(
+            oracle2,
+            &instrumented2,
+            75.0, // scale mismatch: treated as "7500%" target, never met
+            100,
+            vec!["/nonexistent_apex_test_binary_xyz_12345".into()],
+            &cfg,
+        ));
+        // With 0 uncovered branches, loop still breaks at line 74 → Ok
+        assert!(result2.is_ok());
+    }
 }

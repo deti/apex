@@ -554,4 +554,128 @@ mod tests {
         assert!(branches.is_empty());
         assert!(file_paths.is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // extract_xml_attr — additional cases for apex-index variant
+    // -----------------------------------------------------------------------
+
+    // Target: extract_xml_attr (apex-index) — attribute needle not in tag returns None.
+    #[test]
+    fn extract_xml_attr_absent_returns_none() {
+        let tag = r#"<line number="5" hits="2" />"#;
+        assert_eq!(extract_xml_attr(tag, "name"), None);
+    }
+
+    // Target: extract_xml_attr — value contains special chars.
+    #[test]
+    fn extract_xml_attr_value_with_special_chars() {
+        let tag = r#"<class filename="src/My Program.cs" />"#;
+        assert_eq!(
+            extract_xml_attr(tag, "filename"),
+            Some("src/My Program.cs".to_string())
+        );
+    }
+
+    // Target: extract_xml_attr — attribute occurs at the very end (no trailing content).
+    #[test]
+    fn extract_xml_attr_at_end_no_trailing() {
+        let tag = r#"<line number="3" hits="0"/>"#;
+        assert_eq!(extract_xml_attr(tag, "hits"), Some("0".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_csharp_coverage — hits=0 direction and in_class=false guard
+    // -----------------------------------------------------------------------
+
+    // Target: line 53 — hits=0 produces direction=1 in BranchId.
+    #[test]
+    fn parse_csharp_coverage_zero_hits_direction_one() {
+        let xml = r#"<coverage><packages><package><classes>
+<class filename="Z.cs"><lines>
+<line number="1" hits="0" />
+</lines></class>
+</classes></package></packages></coverage>"#;
+        let tmp = tempfile::tempdir().unwrap();
+        let (branches, _) = parse_csharp_coverage(xml, tmp.path());
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].direction, 1);
+    }
+
+    // Target: in_class reset after </class> — subsequent lines not indexed.
+    #[test]
+    fn parse_csharp_coverage_in_class_reset_on_close() {
+        let xml = "<coverage><packages><package><classes>\n\
+<class filename=\"A.cs\"><lines>\n\
+<line number=\"1\" hits=\"1\" />\n\
+</lines>\n\
+</class>\n\
+<line number=\"99\" hits=\"1\" />\n\
+</classes></package></packages></coverage>";
+        let tmp = tempfile::tempdir().unwrap();
+        let (branches, _) = parse_csharp_coverage(xml, tmp.path());
+        // Only line 1 inside the class should be indexed; line 99 after </class> is dropped.
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].line, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // find_coverage_xml — multiple subdirs, picks newest
+    // -----------------------------------------------------------------------
+
+    // Target: lines 176-198 — find_coverage_xml picks newer of two valid XMLs.
+    #[test]
+    fn find_coverage_xml_two_runs_picks_newer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tr = tmp.path().join("TestResults");
+        std::fs::create_dir(&tr).unwrap();
+
+        let r1 = tr.join("run-a");
+        std::fs::create_dir(&r1).unwrap();
+        let xml1 = r1.join("coverage.cobertura.xml");
+        std::fs::write(&xml1, "<cov1/>").unwrap();
+
+        // Ensure mtime difference
+        std::thread::sleep(std::time::Duration::from_millis(15));
+
+        let r2 = tr.join("run-b");
+        std::fs::create_dir(&r2).unwrap();
+        let xml2 = r2.join("coverage.cobertura.xml");
+        std::fs::write(&xml2, "<cov2/>").unwrap();
+
+        let found = find_coverage_xml(tmp.path()).unwrap();
+        assert_eq!(found, xml2);
+    }
+
+    // Target: find_coverage_xml — subdirectory that is not a dir (a file) is skipped.
+    #[test]
+    fn find_coverage_xml_file_entry_in_test_results_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tr = tmp.path().join("TestResults");
+        std::fs::create_dir(&tr).unwrap();
+
+        // A regular file in TestResults (not a subdir) — is_dir() false → skipped.
+        std::fs::write(tr.join("notadir.xml"), "<x/>").unwrap();
+
+        let result = find_coverage_xml(tmp.path());
+        assert!(result.is_err(), "no subdir coverage XML should be an error");
+    }
+
+    // -----------------------------------------------------------------------
+    // build_traces_from_output — branches propagated
+    // -----------------------------------------------------------------------
+
+    // Target: lines 87-100 — branches slice is correctly cloned into each trace.
+    #[test]
+    fn build_traces_branches_correctly_propagated() {
+        let branches = vec![
+            BranchId::new(10, 5, 0, 0),
+            BranchId::new(10, 7, 0, 1),
+        ];
+        let stdout = "  Passed MyTest.Run\n  Failed MyTest.Fail\n";
+        let traces = build_traces_from_output(stdout, &branches);
+        assert_eq!(traces.len(), 2);
+        for trace in &traces {
+            assert_eq!(trace.branches.len(), 2);
+        }
+    }
 }
