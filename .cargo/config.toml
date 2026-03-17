@@ -4,6 +4,11 @@
 [build]
 jobs = 12                        # 75% of 16 cores — leave headroom for system + agents
 
+[env]
+# Keep profraw files out of repo root — cargo-llvm-cov and instrumented
+# test binaries write here instead of CWD.
+LLVM_PROFILE_FILE = { value = "target/profraw/bcov-%p-%m.profraw", relative = true }
+
 # Uncomment when lld is installed (brew install llvm):
 # [target.aarch64-apple-darwin]
 # linker = "clang"
