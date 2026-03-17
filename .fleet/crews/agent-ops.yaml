@@ -1,0 +1,32 @@
+schema_version: 1
+name: agent-ops
+domain: "Agent prompt engineering and lifecycle — agent .md definitions, fleet crew/officer configs, and fleet operational state"
+
+paths:
+  - .claude/agents/**
+  - .fleet/**
+
+tech_stack:
+  - Markdown agent definitions
+  - YAML fleet configs
+  - prompt engineering
+  - Agent Teams architecture
+
+sdlc_concerns:
+  - architecture
+  - qa
+
+partners:
+  - platform
+  - intelligence
+  - foundation
+  - runtime
+  - exploration
+  - security-detect
+  - mcp-integration
+
+notes: >
+  Owns the agent ecosystem — .md system prompts, fleet crew/officer YAML,
+  and fleet operational config. Changes here affect how every agent behaves.
+  Carved out from platform crew's former agents/** path. Must coordinate
+  with all partner crews when agent definitions change.
