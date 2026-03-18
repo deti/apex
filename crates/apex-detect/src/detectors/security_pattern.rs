@@ -649,8 +649,6 @@ const JAVA_SECURITY_PATTERNS: &[SecurityPattern] = &[
     },
 ];
 
-const CONTEXT_WINDOW: usize = 3;
-
 /// Indicators that are code patterns (not input sources). These should be
 /// excluded from threat model trust classification since they describe how
 /// data is used, not where it comes from.
@@ -671,8 +669,8 @@ const CODE_PATTERN_INDICATORS: &[&str] = &[
     "?",
 ];
 
-fn has_indicator(lines: &[&str], line_num: usize, indicators: &[&str]) -> bool {
-    !collect_matched_indicators(lines, line_num, indicators).is_empty()
+fn has_indicator(lines: &[&str], line_num: usize, indicators: &[&str], context_window: usize) -> bool {
+    !collect_matched_indicators(lines, line_num, indicators, context_window).is_empty()
 }
 
 /// Like `has_indicator`, but returns the matched indicator strings.
@@ -681,12 +679,13 @@ fn collect_matched_indicators<'a>(
     lines: &[&str],
     line_num: usize,
     indicators: &[&'a str],
+    context_window: usize,
 ) -> Vec<&'a str> {
     if indicators.is_empty() {
         return Vec::new();
     }
-    let start = line_num.saturating_sub(CONTEXT_WINDOW);
-    let end = (line_num + CONTEXT_WINDOW + 1).min(lines.len());
+    let start = line_num.saturating_sub(context_window);
+    let end = (line_num + context_window + 1).min(lines.len());
     let mut matched = Vec::new();
     for line in lines.iter().take(end).skip(start) {
         let line_lower = line.to_lowercase();
@@ -1085,14 +1084,20 @@ impl Detector for SecurityPatternDetector {
 
                         let line_1based = (line_num + 1) as u32;
 
+                        let context_window = ctx.config.context_window;
                         let matched_user_inputs = collect_matched_indicators(
                             &all_lines,
                             line_num,
                             pattern.user_input_indicators,
+                            context_window,
                         );
                         let has_user_input = !matched_user_inputs.is_empty();
-                        let has_sanitization =
-                            has_indicator(&all_lines, line_num, pattern.sanitization_indicators);
+                        let has_sanitization = has_indicator(
+                            &all_lines,
+                            line_num,
+                            pattern.sanitization_indicators,
+                            context_window,
+                        );
                         let indicators_defined = !pattern.user_input_indicators.is_empty();
 
                         // Threat model suppression: filter out code patterns
@@ -1786,7 +1791,7 @@ mod tests {
             "    subprocess.call(cmd, shell=True)",
         ];
         let indicators = &["request", "argv", "input"];
-        let matched = collect_matched_indicators(&lines, 2, indicators);
+        let matched = collect_matched_indicators(&lines, 2, indicators, 3);
         assert_eq!(matched, vec!["request"]);
     }
 
@@ -1798,7 +1803,7 @@ mod tests {
             "subprocess.call(x)",
         ];
         let indicators = &["request"];
-        let matched = collect_matched_indicators(&lines, 2, indicators);
+        let matched = collect_matched_indicators(&lines, 2, indicators, 3);
         assert_eq!(matched.len(), 1);
     }
 

@@ -5,6 +5,7 @@
 //! moving average.
 
 use crate::traits::Mutator;
+use apex_core::config::PsoConfig;
 use rand::RngCore;
 
 /// Per-mutator statistics.
@@ -150,20 +151,25 @@ pub struct PsoMOptScheduler {
     local_best_score: Vec<f64>,
     /// Best overall efficiency sum (for global best tracking).
     global_best_score: f64,
+    /// PSO inertia weight.
+    w: f64,
+    /// PSO cognitive coefficient (local best attraction).
+    c1: f64,
+    /// PSO social coefficient (global best attraction).
+    c2: f64,
+    /// Minimum probability floor to prevent operator starvation.
+    prob_min: f64,
 }
 
 impl PsoMOptScheduler {
-    /// PSO inertia weight.
-    const W: f64 = 0.7;
-    /// PSO cognitive coefficient (local best attraction).
-    const C1: f64 = 1.5;
-    /// PSO social coefficient (global best attraction).
-    const C2: f64 = 1.5;
-    /// Minimum probability floor to prevent operator starvation.
-    const PROB_MIN: f64 = 0.01;
-
-    /// Create a new scheduler with `num_operators` operators at uniform probability.
+    /// Create a new scheduler with `num_operators` operators at uniform probability,
+    /// using default PSO parameters.
     pub fn new(num_operators: usize) -> Self {
+        Self::with_config(num_operators, &PsoConfig::default())
+    }
+
+    /// Create a new scheduler with `num_operators` operators and explicit PSO config.
+    pub fn with_config(num_operators: usize, config: &PsoConfig) -> Self {
         let n = num_operators.max(1);
         let uniform = 1.0 / n as f64;
         PsoMOptScheduler {
@@ -175,6 +181,10 @@ impl PsoMOptScheduler {
             global_best: vec![uniform; n],
             local_best_score: vec![0.0; n],
             global_best_score: 0.0,
+            w: config.w,
+            c1: config.c1,
+            c2: config.c2,
+            prob_min: config.prob_min,
         }
     }
 
@@ -225,11 +235,11 @@ impl PsoMOptScheduler {
         for i in 0..n {
             let r1: f64 = rng.random();
             let r2: f64 = rng.random();
-            self.velocities[i] = Self::W * self.velocities[i]
-                + Self::C1 * r1 * (self.local_best[i] - self.operator_probs[i])
-                + Self::C2 * r2 * (self.global_best[i] - self.operator_probs[i]);
+            self.velocities[i] = self.w * self.velocities[i]
+                + self.c1 * r1 * (self.local_best[i] - self.operator_probs[i])
+                + self.c2 * r2 * (self.global_best[i] - self.operator_probs[i]);
             self.operator_probs[i] =
-                (self.operator_probs[i] + self.velocities[i]).clamp(Self::PROB_MIN, 1.0);
+                (self.operator_probs[i] + self.velocities[i]).clamp(self.prob_min, 1.0);
         }
 
         // Normalize so probabilities sum to 1.

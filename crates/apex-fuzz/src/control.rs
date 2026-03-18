@@ -2,17 +2,28 @@
 //! rates based on recent coverage progress.
 //! Based on the FOX paper.
 
+use apex_core::config::FoxConfig;
+
 /// Adaptive fuzzing controller that adjusts mutation and exploration rates.
 pub struct FoxController {
     pub mutation_rate: f64,
     pub exploration_rate: f64,
+    /// Learning rate for rate adaptation.
+    alpha: f64,
 }
 
 impl FoxController {
+    /// Create a new controller with default parameters.
     pub fn new() -> Self {
+        Self::with_config(&FoxConfig::default())
+    }
+
+    /// Create a new controller from explicit config.
+    pub fn with_config(config: &FoxConfig) -> Self {
         FoxController {
-            mutation_rate: 0.5,
-            exploration_rate: 0.5,
+            mutation_rate: config.mutation_rate,
+            exploration_rate: config.exploration_rate,
+            alpha: config.alpha,
         }
     }
 
@@ -26,13 +37,11 @@ impl FoxController {
 
         // On stall: increase exploration and mutation aggressiveness
         // On progress: decrease exploration (exploit current direction)
-        let alpha = 0.1; // learning rate
-
-        self.exploration_rate += alpha * (stall_pressure - progress_pressure);
+        self.exploration_rate += self.alpha * (stall_pressure - progress_pressure);
         self.exploration_rate = self.exploration_rate.clamp(0.0, 1.0);
 
-        self.mutation_rate += alpha * stall_pressure * 0.5;
-        self.mutation_rate -= alpha * progress_pressure * 0.3;
+        self.mutation_rate += self.alpha * stall_pressure * 0.5;
+        self.mutation_rate -= self.alpha * progress_pressure * 0.3;
         self.mutation_rate = self.mutation_rate.clamp(0.01, 1.0);
     }
 

@@ -850,7 +850,12 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         || !matches!(args.strategy.as_str(), "fuzz" | "concolic" | "driller");
     let analysis = if uses_agent {
         let detect_cfg = apex_detect::DetectConfig::default();
-        let file_source_cache = build_source_cache(&target_path, lang);
+        let file_source_cache = build_source_cache(
+            &target_path,
+            lang,
+            cfg.index.max_source_files,
+            cfg.index.max_source_file_bytes as u64,
+        );
 
         // Build CPG for Python projects (other languages: TODO)
         let cpg = if lang == Language::Python {
@@ -1071,6 +1076,7 @@ async fn run_agent_cluster(
         // for typical defaults and was never the user's intent.
         deadline_secs: cfg.agent.deadline_secs.or(Some(1800)),
         stall_threshold: cfg.fuzz.stall_iterations as u64,
+        // TODO: wire cfg.agent.monitor_window_size once OrchestratorConfig gains the field
     };
     cluster = cluster.with_config(orch_config);
 
@@ -1643,13 +1649,21 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
     }
     detect_cfg.severity_threshold = cfg.detect.severity_threshold.clone();
     detect_cfg.per_detector_timeout_secs = cfg.detect.per_detector_timeout_secs;
+    detect_cfg.entropy_threshold = cfg.detect.entropy_threshold;
+    detect_cfg.max_subprocess_concurrency = cfg.detect.max_subprocess_concurrency;
+    detect_cfg.context_window = cfg.detect.context_window;
     // CLI --detectors overrides config file
     if let Some(detectors) = args.detectors {
         detect_cfg.enabled = detectors;
     }
 
     // Build source cache
-    let source_cache = build_source_cache(&target_path, lang);
+    let source_cache = build_source_cache(
+        &target_path,
+        lang,
+        cfg.index.max_source_files,
+        cfg.index.max_source_file_bytes as u64,
+    );
 
     // Build CPG for Python projects (other languages: TODO)
     let cpg = if lang == Language::Python {
@@ -1753,9 +1767,16 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
     Ok(())
 }
 
+/// Default source-file limit used by commands that do not have a loaded ApexConfig.
+const DEFAULT_MAX_SOURCE_FILES: usize = 10_000;
+/// Default per-file byte limit used by commands that do not have a loaded ApexConfig.
+const DEFAULT_MAX_SOURCE_FILE_BYTES: u64 = 1_024 * 1_024; // 1 MB
+
 fn build_source_cache(
     target: &std::path::Path,
     lang: Language,
+    max_files: usize,
+    max_file_bytes: u64,
 ) -> std::collections::HashMap<PathBuf, String> {
     let extensions: &[&str] = match lang {
         Language::Rust => &["rs"],
@@ -1774,12 +1795,12 @@ fn build_source_cache(
 
     let mut cache = std::collections::HashMap::new();
 
-    if let Ok(entries) = walkdir(target, extensions) {
+    if let Ok(entries) = walkdir(target, extensions, max_files) {
         for path in entries {
-            // Skip files larger than 1 MB to avoid loading generated or binary-adjacent files.
+            // Skip files larger than the configured limit to avoid loading generated or binary-adjacent files.
             if path
                 .metadata()
-                .map(|m| m.len() > MAX_SOURCE_FILE_BYTES)
+                .map(|m| m.len() > max_file_bytes)
                 .unwrap_or(false)
             {
                 continue;
@@ -1793,14 +1814,6 @@ fn build_source_cache(
 
     cache
 }
-
-/// Maximum number of source files to collect during directory walking.
-/// Prevents APEX from being overwhelmed by massive repos (e.g. Linux kernel, 75k+ files).
-const MAX_SOURCE_FILES: usize = 10_000;
-
-/// Maximum file size (in bytes) to load into the source cache.
-/// Files larger than this are skipped to avoid reading multi-MB generated files.
-const MAX_SOURCE_FILE_BYTES: u64 = 1_024 * 1_024; // 1 MB
 
 /// Build the appropriate [`apex_core::traits::TestSynthesizer`] for the given language.
 ///
@@ -1832,9 +1845,9 @@ pub fn make_synthesizer(
     }
 }
 
-fn walkdir(root: &std::path::Path, extensions: &[&str]) -> std::io::Result<Vec<PathBuf>> {
+fn walkdir(root: &std::path::Path, extensions: &[&str], max_files: usize) -> std::io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    walk_recursive(root, extensions, &mut files)?;
+    walk_recursive(root, extensions, &mut files, max_files)?;
     Ok(files)
 }
 
@@ -1842,13 +1855,14 @@ fn walk_recursive(
     dir: &std::path::Path,
     extensions: &[&str],
     files: &mut Vec<PathBuf>,
+    max_files: usize,
 ) -> std::io::Result<()> {
-    if files.len() >= MAX_SOURCE_FILES {
+    if files.len() >= max_files {
         return Ok(());
     }
     if dir.is_dir() {
         for entry in std::fs::read_dir(dir)? {
-            if files.len() >= MAX_SOURCE_FILES {
+            if files.len() >= max_files {
                 break;
             }
             let entry = entry?;
@@ -1874,7 +1888,7 @@ fn walk_recursive(
                 {
                     continue;
                 }
-                walk_recursive(&path, extensions, files)?;
+                walk_recursive(&path, extensions, files, max_files)?;
             } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 let ext_lower = ext.to_ascii_lowercase();
                 if extensions
@@ -2214,7 +2228,7 @@ async fn run_dead_code(args: DeadCodeArgs) -> Result<()> {
 // `apex lint`
 // ---------------------------------------------------------------------------
 
-async fn run_lint(args: LintArgs, _cfg: &ApexConfig) -> Result<()> {
+async fn run_lint(args: LintArgs, cfg: &ApexConfig) -> Result<()> {
     use apex_detect::{AnalysisContext, DetectConfig, DetectorPipeline, Severity};
 
     let lang: Language = args.lang.into();
@@ -2228,7 +2242,15 @@ async fn run_lint(args: LintArgs, _cfg: &ApexConfig) -> Result<()> {
     if let Some(ref detectors) = args.detectors {
         detect_cfg.enabled = detectors.clone();
     }
-    let source_cache = build_source_cache(&target_path, lang);
+    detect_cfg.entropy_threshold = cfg.detect.entropy_threshold;
+    detect_cfg.max_subprocess_concurrency = cfg.detect.max_subprocess_concurrency;
+    detect_cfg.context_window = cfg.detect.context_window;
+    let source_cache = build_source_cache(
+        &target_path,
+        lang,
+        cfg.index.max_source_files,
+        cfg.index.max_source_file_bytes as u64,
+    );
 
     // Build CPG for Python projects (other languages: TODO)
     let cpg = if lang == Language::Python {
@@ -3240,7 +3262,12 @@ async fn run_reach(args: ReachArgs) -> Result<()> {
 
     // Build source cache
     let target_dir = file.parent().unwrap_or(std::path::Path::new("."));
-    let source_cache = build_source_cache(target_dir, lang);
+    let source_cache = build_source_cache(
+        target_dir,
+        lang,
+        DEFAULT_MAX_SOURCE_FILES,
+        DEFAULT_MAX_SOURCE_FILE_BYTES,
+    );
 
     // Build call graph
     let graph = apex_reach::extractors::build_call_graph(&source_cache, lang);
@@ -3354,7 +3381,12 @@ async fn run_secret_scan(args: SecretScanArgs) -> Result<()> {
 
     let lang: Language = args.lang.into();
     let target_path = args.target.canonicalize()?;
-    let source_cache = build_source_cache(&target_path, lang);
+    let source_cache = build_source_cache(
+        &target_path,
+        lang,
+        DEFAULT_MAX_SOURCE_FILES,
+        DEFAULT_MAX_SOURCE_FILE_BYTES,
+    );
 
     let detector = SecretScanDetector::new();
     let ctx = AnalysisContext {
@@ -3388,7 +3420,12 @@ async fn run_license_scan(args: LicenseScanArgs) -> Result<()> {
 
     let lang: Language = args.lang.into();
     let target_path = args.target.canonicalize()?;
-    let source_cache = build_source_cache(&target_path, lang);
+    let source_cache = build_source_cache(
+        &target_path,
+        lang,
+        DEFAULT_MAX_SOURCE_FILES,
+        DEFAULT_MAX_SOURCE_FILE_BYTES,
+    );
 
     let detector = match args.policy.as_str() {
         "permissive" => LicenseScanDetector::permissive(),
@@ -3425,7 +3462,12 @@ async fn run_flag_hygiene(args: FlagHygieneArgs) -> Result<()> {
 
     let lang: Language = args.lang.into();
     let target_path = args.target.canonicalize()?;
-    let source_cache = build_source_cache(&target_path, lang);
+    let source_cache = build_source_cache(
+        &target_path,
+        lang,
+        DEFAULT_MAX_SOURCE_FILES,
+        DEFAULT_MAX_SOURCE_FILE_BYTES,
+    );
 
     let detector = FlagHygieneDetector::new(args.max_age);
     let ctx = AnalysisContext {
@@ -3504,7 +3546,12 @@ async fn run_api_diff(args: ApiDiffArgs) -> Result<()> {
 async fn run_data_flow(args: DataFlowArgs) -> Result<()> {
     let lang: Language = args.lang.into();
     let target_path = args.target.canonicalize()?;
-    let source_cache = build_source_cache(&target_path, lang);
+    let source_cache = build_source_cache(
+        &target_path,
+        lang,
+        DEFAULT_MAX_SOURCE_FILES,
+        DEFAULT_MAX_SOURCE_FILE_BYTES,
+    );
 
     if lang != Language::Python {
         eprintln!("Warning: data-flow currently best supports Python. Other languages will have limited results.");
@@ -3618,7 +3665,12 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
 
     let lang: Language = args.lang.into();
     let target_path = args.target.canonicalize()?;
-    let source_cache = build_source_cache(&target_path, lang);
+    let source_cache = build_source_cache(
+        &target_path,
+        lang,
+        cfg.index.max_source_files,
+        cfg.index.max_source_file_bytes as u64,
+    );
 
     // Build CPG for Python projects
     let cpg = if lang == Language::Python {
@@ -3831,7 +3883,12 @@ async fn run_api_coverage(args: ApiCoverageArgs) -> Result<()> {
     let lang: Language = args.lang.into();
     let target_path = args.target.canonicalize()?;
     let spec_json = std::fs::read_to_string(&args.spec)?;
-    let source_cache = build_source_cache(&target_path, lang);
+    let source_cache = build_source_cache(
+        &target_path,
+        lang,
+        DEFAULT_MAX_SOURCE_FILES,
+        DEFAULT_MAX_SOURCE_FILE_BYTES,
+    );
 
     let report = apex_detect::api_coverage::analyze_coverage(&spec_json, &source_cache, lang)?;
 
@@ -3880,7 +3937,12 @@ async fn run_api_coverage(args: ApiCoverageArgs) -> Result<()> {
 async fn run_service_map(args: ServiceMapArgs) -> Result<()> {
     let lang: Language = args.lang.into();
     let target_path = args.target.canonicalize()?;
-    let source_cache = build_source_cache(&target_path, lang);
+    let source_cache = build_source_cache(
+        &target_path,
+        lang,
+        DEFAULT_MAX_SOURCE_FILES,
+        DEFAULT_MAX_SOURCE_FILE_BYTES,
+    );
 
     let map = apex_detect::service_map::analyze_service_map(&source_cache);
 
@@ -4379,7 +4441,7 @@ mod tests {
     #[test]
     fn bug_walkdir_skips_venv() {
         let tmp = create_test_tree(&["src", "venv/lib"], &["src/main.py", "venv/lib/dep.py"]);
-        let files = walkdir(tmp.path(), &["py"]).unwrap();
+        let files = walkdir(tmp.path(), &["py"], DEFAULT_MAX_SOURCE_FILES).unwrap();
         let names: Vec<_> = files
             .iter()
             .map(|p| p.file_name().unwrap().to_str().unwrap())
@@ -4394,7 +4456,7 @@ mod tests {
             &["src", "__pycache__"],
             &["src/app.py", "__pycache__/app.cpython-311.pyc"],
         );
-        let files = walkdir(tmp.path(), &["py", "pyc"]).unwrap();
+        let files = walkdir(tmp.path(), &["py", "pyc"], DEFAULT_MAX_SOURCE_FILES).unwrap();
         assert_eq!(
             files.len(),
             1,
@@ -4408,7 +4470,7 @@ mod tests {
             &["src", "dist", "build"],
             &["src/lib.rs", "dist/bundle.js", "build/output.js"],
         );
-        let files = walkdir(tmp.path(), &["rs", "js"]).unwrap();
+        let files = walkdir(tmp.path(), &["rs", "js"], DEFAULT_MAX_SOURCE_FILES).unwrap();
         let names: Vec<_> = files
             .iter()
             .map(|p| p.file_name().unwrap().to_str().unwrap())
@@ -4429,7 +4491,12 @@ mod tests {
                 "src/util.mjs",
             ],
         );
-        let cache = build_source_cache(tmp.path(), Language::JavaScript);
+        let cache = build_source_cache(
+            tmp.path(),
+            Language::JavaScript,
+            DEFAULT_MAX_SOURCE_FILES,
+            DEFAULT_MAX_SOURCE_FILE_BYTES,
+        );
         assert!(
             cache.contains_key(&PathBuf::from("src/App.jsx")),
             "should include .jsx"
@@ -4454,7 +4521,12 @@ mod tests {
             &["src"],
             &["src/main.c", "src/util.cpp", "src/lib.cc", "src/types.hpp"],
         );
-        let cache = build_source_cache(tmp.path(), Language::C);
+        let cache = build_source_cache(
+            tmp.path(),
+            Language::C,
+            DEFAULT_MAX_SOURCE_FILES,
+            DEFAULT_MAX_SOURCE_FILE_BYTES,
+        );
         assert!(
             cache.contains_key(&PathBuf::from("src/main.c")),
             "should include .c"
@@ -4476,7 +4548,7 @@ mod tests {
     #[test]
     fn bug_walkdir_case_insensitive_extensions() {
         let tmp = create_test_tree(&["src"], &["src/main.RS", "src/lib.rs", "src/Mod.Rs"]);
-        let files = walkdir(tmp.path(), &["rs"]).unwrap();
+        let files = walkdir(tmp.path(), &["rs"], DEFAULT_MAX_SOURCE_FILES).unwrap();
         assert_eq!(
             files.len(),
             3,

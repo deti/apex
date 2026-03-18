@@ -96,6 +96,18 @@ pub enum DetectMode {
     Fast,
 }
 
+fn default_entropy_threshold() -> f64 {
+    5.0
+}
+
+fn default_max_subprocess_concurrency() -> usize {
+    4
+}
+
+fn default_context_window() -> usize {
+    3
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DetectConfig {
@@ -120,6 +132,15 @@ pub struct DetectConfig {
     /// Optional tag filter — if set, only detectors with this tag are enabled.
     #[serde(default)]
     pub tag_filter: Option<DetectorTag>,
+    /// Shannon entropy threshold for secret-scan high-entropy string detection. Default: 5.0.
+    #[serde(default = "default_entropy_threshold")]
+    pub entropy_threshold: f64,
+    /// Max concurrent subprocess-based detectors in the pipeline. Default: 4.
+    #[serde(default = "default_max_subprocess_concurrency")]
+    pub max_subprocess_concurrency: usize,
+    /// Lines of source context examined around each potential finding. Default: 3.
+    #[serde(default = "default_context_window")]
+    pub context_window: usize,
 }
 
 impl Default for DetectConfig {
@@ -135,6 +156,9 @@ impl Default for DetectConfig {
             properties: Vec::new(),
             detect_mode: DetectMode::default(),
             tag_filter: None,
+            entropy_threshold: default_entropy_threshold(),
+            max_subprocess_concurrency: default_max_subprocess_concurrency(),
+            context_window: default_context_window(),
         }
     }
 }
@@ -447,5 +471,44 @@ detect_mode = "Fast"
     fn tag_filter_defaults_to_none() {
         let cfg = DetectConfig::default();
         assert!(cfg.tag_filter.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // New wired config fields
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_entropy_threshold_is_5_0() {
+        let cfg = DetectConfig::default();
+        assert!(
+            (cfg.entropy_threshold - 5.0).abs() < f64::EPSILON,
+            "default entropy_threshold should be 5.0, got {}",
+            cfg.entropy_threshold
+        );
+    }
+
+    #[test]
+    fn default_max_subprocess_concurrency_is_4() {
+        let cfg = DetectConfig::default();
+        assert_eq!(cfg.max_subprocess_concurrency, 4);
+    }
+
+    #[test]
+    fn default_context_window_is_3() {
+        let cfg = DetectConfig::default();
+        assert_eq!(cfg.context_window, 3);
+    }
+
+    #[test]
+    fn new_fields_deserialize_from_toml() {
+        let toml_str = r#"
+entropy_threshold = 4.5
+max_subprocess_concurrency = 8
+context_window = 5
+"#;
+        let cfg: DetectConfig = toml::from_str(toml_str).unwrap();
+        assert!((cfg.entropy_threshold - 4.5).abs() < f64::EPSILON);
+        assert_eq!(cfg.max_subprocess_concurrency, 8);
+        assert_eq!(cfg.context_window, 5);
     }
 }

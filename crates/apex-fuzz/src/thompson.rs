@@ -2,14 +2,30 @@ use rand::RngCore;
 use rand_distr::{Beta, Distribution};
 
 /// Bayesian bandit: each seed arm has Beta(α, β) reward distribution.
-#[derive(Default)]
 pub struct ThompsonScheduler {
     arms: Vec<(Vec<u8>, f64, f64)>, // (data, alpha, beta)
+    /// Maximum value for the beta (failure) parameter — prevents permanent arm death.
+    beta_cap: f64,
+}
+
+impl Default for ThompsonScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ThompsonScheduler {
+    /// Create a new scheduler with default beta cap (50.0).
     pub fn new() -> Self {
-        Self::default()
+        Self::with_beta_cap(50.0)
+    }
+
+    /// Create a new scheduler with an explicit beta cap.
+    pub fn with_beta_cap(beta_cap: f64) -> Self {
+        ThompsonScheduler {
+            arms: Vec::new(),
+            beta_cap,
+        }
     }
 
     pub fn add_seed(&mut self, data: Vec<u8>) {
@@ -28,10 +44,10 @@ impl ThompsonScheduler {
     }
 
     /// Record that seed `idx` produced no new coverage.
-    /// Beta is capped at 50.0 to prevent permanent arm death.
+    /// Beta is capped at `beta_cap` to prevent permanent arm death.
     pub fn penalize(&mut self, idx: usize) {
         if let Some(arm) = self.arms.get_mut(idx) {
-            arm.2 = (arm.2 + 1.0).min(50.0);
+            arm.2 = (arm.2 + 1.0).min(self.beta_cap);
         }
     }
 

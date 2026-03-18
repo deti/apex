@@ -168,10 +168,10 @@ impl DetectorPipeline {
         });
         let pure_results = futures::future::join_all(pure_futs);
 
-        // Subprocess detectors run concurrently, bounded to MAX_SUBPROCESS_CONCURRENCY
-        // to avoid Cargo.lock contention and resource exhaustion.
-        const MAX_SUBPROCESS_CONCURRENCY: usize = 4;
-        let subprocess_sem = Arc::new(Semaphore::new(MAX_SUBPROCESS_CONCURRENCY));
+        // Subprocess detectors run concurrently, bounded by config to
+        // avoid Cargo.lock contention and resource exhaustion.
+        let max_subprocess_concurrency = ctx.config.max_subprocess_concurrency;
+        let subprocess_sem = Arc::new(Semaphore::new(max_subprocess_concurrency));
         let subprocess_futs = subprocess.iter().map(|d| {
             let timeout = per_detector_timeout;
             let sem = Arc::clone(&subprocess_sem);

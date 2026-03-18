@@ -187,21 +187,30 @@ pub struct CmpLogEntry {
     pub branch_id: BranchId,
 }
 
-/// Maximum entries stored per branch in the ring buffer.
+/// Default maximum entries stored per branch in the ring buffer.
 const CMPLOG_RING_MAX: usize = 256;
 
 /// Per-branch ring-buffer collection of comparison observations.
 ///
-/// Maintains at most [`CMPLOG_RING_MAX`] entries per branch. When the limit
+/// Maintains at most `ring_max` entries per branch. When the limit
 /// is exceeded the oldest entry for that branch is evicted.
 pub struct CmpLogTable {
     entries: HashMap<BranchId, VecDeque<CmpLogEntry>>,
+    /// Maximum entries stored per branch.
+    ring_max: usize,
 }
 
 impl CmpLogTable {
+    /// Create a new table with the default ring buffer size (256).
     pub fn new() -> Self {
+        Self::with_ring_max(CMPLOG_RING_MAX)
+    }
+
+    /// Create a new table with an explicit ring buffer size per branch.
+    pub fn with_ring_max(ring_max: usize) -> Self {
         Self {
             entries: HashMap::new(),
+            ring_max: ring_max.max(1),
         }
     }
 
@@ -209,7 +218,7 @@ impl CmpLogTable {
     /// branch if the ring buffer is full.
     pub fn record(&mut self, entry: CmpLogEntry) {
         let ring = self.entries.entry(entry.branch_id.clone()).or_default();
-        if ring.len() >= CMPLOG_RING_MAX {
+        if ring.len() >= self.ring_max {
             ring.pop_front();
         }
         ring.push_back(entry);

@@ -39,16 +39,34 @@ impl QueryResult {
     }
 }
 
+/// Default cap on cartesian-product rows in a query result.
+/// Prevents OOM on large CPGs with many bindings.
+pub const DEFAULT_MAX_QUERY_ROWS: usize = 100_000;
+
 /// Execute a parsed query against a CPG with the given taint rules.
 ///
 /// The query is processed in three phases:
 /// 1. **Bind** — resolve `from` clauses to sets of CPG node IDs.
 /// 2. **Filter** — apply `where` conditions to eliminate non-matching bindings.
 /// 3. **Project** — extract `select` fields from surviving bindings.
+///
+/// Use [`execute_query_with_limit`] to override the row cap from config.
 pub fn execute_query(
     exprs: &[QueryExpr],
     cpg: &Cpg,
     taint_rules: &TaintRuleSet,
+) -> Result<QueryResult> {
+    execute_query_with_limit(exprs, cpg, taint_rules, DEFAULT_MAX_QUERY_ROWS)
+}
+
+/// Like [`execute_query`] but with a caller-supplied row limit.
+///
+/// Pass `cfg.cpg.max_query_rows` here to honour the `[cpg]` section of apex.toml.
+pub fn execute_query_with_limit(
+    exprs: &[QueryExpr],
+    cpg: &Cpg,
+    taint_rules: &TaintRuleSet,
+    max_query_rows: usize,
 ) -> Result<QueryResult> {
     // Phase 1: collect bindings from `from` clauses.
     let mut bindings: HashMap<String, Vec<NodeId>> = HashMap::new();
@@ -73,7 +91,7 @@ pub fn execute_query(
     // If no select fields specified, we default to all bindings' locations.
     if select_fields.is_empty() && !bindings.is_empty() {
         // Return a row count equal to the cartesian product, projected as empty rows.
-        let rows = compute_matching_rows(cpg, &bindings, &where_conditions, taint_rules)?;
+        let rows = compute_matching_rows(cpg, &bindings, &where_conditions, taint_rules, max_query_rows)?;
         let result_rows: Vec<Vec<(String, String)>> = rows
             .iter()
             .map(|row| {
@@ -90,7 +108,7 @@ pub fn execute_query(
     }
 
     // Phase 2+3: compute matching rows and project selected fields.
-    let rows = compute_matching_rows(cpg, &bindings, &where_conditions, taint_rules)?;
+    let rows = compute_matching_rows(cpg, &bindings, &where_conditions, taint_rules, max_query_rows)?;
 
     let result_rows: Vec<Vec<(String, String)>> = rows
         .iter()
@@ -128,13 +146,13 @@ fn compute_matching_rows(
     bindings: &HashMap<String, Vec<NodeId>>,
     conditions: &[&Condition],
     rules: &TaintRuleSet,
+    max_rows: usize,
 ) -> Result<Vec<Vec<(String, NodeId)>>> {
     if bindings.is_empty() {
         return Ok(Vec::new());
     }
 
     // Build the cartesian product of all bindings (bounded to prevent OOM).
-    const MAX_ROWS: usize = 100_000;
     let vars: Vec<String> = bindings.keys().cloned().collect();
     let mut rows: Vec<Vec<(String, NodeId)>> = vec![vec![]];
 
@@ -146,11 +164,11 @@ fn compute_matching_rows(
                 let mut new_row = row.clone();
                 new_row.push((var.clone(), nid));
                 new_rows.push(new_row);
-                if new_rows.len() > MAX_ROWS {
+                if new_rows.len() > max_rows {
                     break;
                 }
             }
-            if new_rows.len() > MAX_ROWS {
+            if new_rows.len() > max_rows {
                 break;
             }
         }

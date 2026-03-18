@@ -1,3 +1,4 @@
+use apex_core::config::SemanticConfig;
 use apex_core::types::ExecutionResult;
 use apex_coverage::semantic::extract_signals;
 
@@ -18,7 +19,15 @@ impl SemanticFeedback {
 
 impl Default for SemanticFeedback {
     fn default() -> Self {
-        Self::new(1.0, 0.5)
+        let cfg = SemanticConfig::default();
+        Self::new(cfg.branch_weight, cfg.semantic_weight)
+    }
+}
+
+impl SemanticFeedback {
+    /// Create from a [`SemanticConfig`].
+    pub fn from_config(config: &SemanticConfig) -> Self {
+        Self::new(config.branch_weight, config.semantic_weight)
     }
 }
 

@@ -346,11 +346,7 @@ fn extract_string_literals(line: &str) -> Vec<String> {
     results
 }
 
-const DEFAULT_ENTROPY_THRESHOLD: f64 = 5.0;
-
-pub struct SecretScanDetector {
-    entropy_threshold: f64,
-}
+pub struct SecretScanDetector;
 
 impl Default for SecretScanDetector {
     fn default() -> Self {
@@ -360,16 +356,7 @@ impl Default for SecretScanDetector {
 
 impl SecretScanDetector {
     pub fn new() -> Self {
-        Self {
-            entropy_threshold: DEFAULT_ENTROPY_THRESHOLD,
-        }
-    }
-
-    #[cfg(test)]
-    fn with_entropy_threshold(threshold: f64) -> Self {
-        Self {
-            entropy_threshold: threshold,
-        }
+        Self
     }
 }
 
@@ -459,9 +446,10 @@ impl Detector for SecretScanDetector {
                 }
 
                 // Entropy-based detection on string literals
+                let entropy_threshold = ctx.config.entropy_threshold;
                 for literal in extract_string_literals(trimmed) {
                     let entropy = shannon_entropy(&literal);
-                    if entropy >= self.entropy_threshold {
+                    if entropy >= entropy_threshold {
                         findings.push(Finding {
                             id: Uuid::new_v4(),
                             detector: self.name().into(),
@@ -793,14 +781,14 @@ mod tests {
 
     #[tokio::test]
     async fn entropy_detects_high_entropy_string() {
-        // Use a detector with lower threshold to be sure
-        let det = SecretScanDetector::with_entropy_threshold(3.5);
-        let ctx = single_file_ctx(
+        // Lower the threshold via config to be sure this string triggers
+        let mut ctx = single_file_ctx(
             "src/config.py",
             "value = \"a1B2c3D4e5F6g7H8i9J0kL\"\n",
             Language::Python,
         );
-        let findings = det.analyze(&ctx).await.unwrap();
+        ctx.config.entropy_threshold = 3.5;
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
         assert!(
             !findings.is_empty(),
             "high entropy string should trigger finding"
@@ -811,13 +799,13 @@ mod tests {
 
     #[tokio::test]
     async fn entropy_ignores_low_entropy_string() {
-        let det = SecretScanDetector::with_entropy_threshold(4.5);
-        let ctx = single_file_ctx(
+        let mut ctx = single_file_ctx(
             "src/config.py",
             "msg = \"aaaaaaaaaaaaaaaaaaaa\"\n",
             Language::Python,
         );
-        let findings = det.analyze(&ctx).await.unwrap();
+        ctx.config.entropy_threshold = 4.5;
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
         assert!(
             findings.is_empty(),
             "low entropy string should not trigger finding"
@@ -1159,11 +1147,11 @@ mod tests {
 
     #[test]
     fn default_entropy_threshold_is_5_0() {
-        let det = SecretScanDetector::new();
+        let cfg = DetectConfig::default();
         assert!(
-            (det.entropy_threshold - 5.0).abs() < f64::EPSILON,
+            (cfg.entropy_threshold - 5.0).abs() < f64::EPSILON,
             "default entropy threshold should be 5.0, got {}",
-            det.entropy_threshold
+            cfg.entropy_threshold
         );
     }
 
