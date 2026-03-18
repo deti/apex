@@ -13,6 +13,9 @@ use std::{
 };
 use tracing::{info, warn};
 
+/// JVM build timeout: 10 minutes (Gradle/Maven may download deps on first run).
+const JVM_BUILD_TIMEOUT_MS: u64 = 600_000;
+
 type JacocoParseResult = (Vec<BranchId>, Vec<BranchId>, HashMap<u64, PathBuf>);
 
 /// FNV-1a 64-bit hash of a path string.
@@ -23,6 +26,39 @@ fn fnv1a_hash(s: &str) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+/// Check whether a Gradle build file already applies the JaCoCo plugin.
+fn gradle_has_jacoco(target: &Path) -> bool {
+    for name in &["build.gradle", "build.gradle.kts"] {
+        if let Ok(content) = std::fs::read_to_string(target.join(name)) {
+            if content.contains("jacoco") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Content for a Gradle init script that applies the JaCoCo plugin globally.
+const JACOCO_INIT_GRADLE: &str = r#"
+allprojects {
+    apply plugin: 'jacoco'
+    tasks.withType(Test) {
+        jacoco {
+            enabled = true
+        }
+    }
+}
+"#;
+
+/// Build a `CommandSpec` with JVM-friendly defaults (10-min timeout, JAVA_HOME).
+fn jvm_command(program: &str, target: &Path) -> CommandSpec {
+    let mut spec = CommandSpec::new(program, target).timeout(JVM_BUILD_TIMEOUT_MS);
+    if let Ok(java_home) = std::env::var("JAVA_HOME") {
+        spec = spec.env("JAVA_HOME", java_home);
+    }
+    spec
 }
 
 /// Run JaCoCo instrumented tests and return the path to the produced XML report.
@@ -36,66 +72,95 @@ async fn run_jacoco(target: &Path, runner: &dyn CommandRunner) -> Result<PathBuf
     );
 
     if build_tool == "gradle" {
-        let spec = CommandSpec::new("./gradlew", target).args(["jacocoTestReport", "--quiet"]);
-        let output = runner
-            .run_command(&spec)
-            .await
-            .map_err(|e| ApexError::Instrumentation(format!("spawn gradlew: {e}")))?;
-
-        if output.exit_code != 0 {
-            warn!(
-                exit = output.exit_code,
-                "gradlew jacocoTestReport returned non-zero (coverage data may still be valid)"
-            );
-        }
-
-        // Try primary Gradle report path first, then fallback.
-        let primary = target.join("build/reports/jacoco/test/jacocoTestReport.xml");
-        if primary.exists() {
-            return Ok(primary);
-        }
-        let fallback = target.join("build/reports/jacoco/jacocoTestReport.xml");
-        if fallback.exists() {
-            return Ok(fallback);
-        }
-
-        Err(ApexError::Instrumentation(
-            "JaCoCo XML report not found after gradlew jacocoTestReport; \
-             ensure the jacocoTestReport task is configured"
-                .into(),
-        ))
+        run_jacoco_gradle(target, runner).await
     } else {
-        // Maven
-        let spec = CommandSpec::new("mvn", target).args([
-            "-q",
-            "org.jacoco:jacoco-maven-plugin:0.8.11:prepare-agent",
-            "test",
-            "org.jacoco:jacoco-maven-plugin:0.8.11:report",
-            "-Djacoco.skip=false",
-        ]);
-        let output = runner
-            .run_command(&spec)
-            .await
-            .map_err(|e| ApexError::Instrumentation(format!("spawn mvn: {e}")))?;
-
-        if output.exit_code != 0 {
-            warn!(
-                exit = output.exit_code,
-                "mvn jacoco run returned non-zero (coverage data may still be valid)"
-            );
-        }
-
-        let report = target.join("target/site/jacoco/jacoco.xml");
-        if report.exists() {
-            return Ok(report);
-        }
-
-        Err(ApexError::Instrumentation(
-            "JaCoCo XML report not found at target/site/jacoco/jacoco.xml; \
-             ensure JaCoCo plugin is configured in pom.xml"
-                .into(),
-        ))
+        run_jacoco_maven(target, runner).await
     }
+}
+
+/// Gradle path: auto-inject JaCoCo via init script when the project lacks the plugin.
+async fn run_jacoco_gradle(target: &Path, runner: &dyn CommandRunner) -> Result<PathBuf> {
+    let needs_init = !gradle_has_jacoco(target);
+
+    let mut args: Vec<String> = Vec::new();
+
+    if needs_init {
+        // Write a temporary init.gradle that applies JaCoCo to all sub-projects.
+        let init_path = target.join(".apex-jacoco-init.gradle");
+        std::fs::write(&init_path, JACOCO_INIT_GRADLE).map_err(|e| {
+            ApexError::Instrumentation(format!("write init.gradle: {e}"))
+        })?;
+        info!("injecting JaCoCo via init script (project lacks jacoco plugin)");
+        args.push("--init-script".into());
+        args.push(init_path.to_string_lossy().into_owned());
+    }
+
+    args.extend(["test".into(), "jacocoTestReport".into(), "--quiet".into()]);
+
+    let spec = jvm_command("./gradlew", target).args(args);
+    let output = runner
+        .run_command(&spec)
+        .await
+        .map_err(|e| ApexError::Instrumentation(format!("spawn gradlew: {e}")))?;
+
+    // Clean up the temporary init script.
+    let _ = std::fs::remove_file(target.join(".apex-jacoco-init.gradle"));
+
+    if output.exit_code != 0 {
+        warn!(
+            exit = output.exit_code,
+            "gradlew jacocoTestReport returned non-zero (coverage data may still be valid)"
+        );
+    }
+
+    // Try primary Gradle report path first, then fallback.
+    let primary = target.join("build/reports/jacoco/test/jacocoTestReport.xml");
+    if primary.exists() {
+        return Ok(primary);
+    }
+    let fallback = target.join("build/reports/jacoco/jacocoTestReport.xml");
+    if fallback.exists() {
+        return Ok(fallback);
+    }
+
+    Err(ApexError::Instrumentation(
+        "JaCoCo XML report not found after gradlew jacocoTestReport; \
+         ensure the jacocoTestReport task is configured"
+            .into(),
+    ))
+}
+
+/// Maven path: invoke JaCoCo goals directly (no pom.xml changes needed).
+async fn run_jacoco_maven(target: &Path, runner: &dyn CommandRunner) -> Result<PathBuf> {
+    let spec = jvm_command("mvn", target).args([
+        "-q",
+        "org.jacoco:jacoco-maven-plugin:0.8.11:prepare-agent",
+        "test",
+        "org.jacoco:jacoco-maven-plugin:0.8.11:report",
+        "-Djacoco.skip=false",
+    ]);
+    let output = runner
+        .run_command(&spec)
+        .await
+        .map_err(|e| ApexError::Instrumentation(format!("spawn mvn: {e}")))?;
+
+    if output.exit_code != 0 {
+        warn!(
+            exit = output.exit_code,
+            "mvn jacoco run returned non-zero (coverage data may still be valid)"
+        );
+    }
+
+    let report = target.join("target/site/jacoco/jacoco.xml");
+    if report.exists() {
+        return Ok(report);
+    }
+
+    Err(ApexError::Instrumentation(
+        "JaCoCo XML report not found at target/site/jacoco/jacoco.xml; \
+         ensure JaCoCo plugin is configured in pom.xml"
+            .into(),
+    ))
 }
 
 /// Extract the value of an XML attribute from a tag string.
@@ -251,10 +316,12 @@ mod tests {
     use super::*;
     use apex_core::command::CommandOutput;
 
-    /// A test-only CommandRunner that returns a configurable output.
+    /// A test-only CommandRunner that returns a configurable output and records
+    /// the last spec it received (for assertion).
     struct FakeRunner {
         exit_code: i32,
         fail: bool,
+        last_spec: std::sync::Mutex<Option<CommandSpec>>,
     }
 
     impl FakeRunner {
@@ -262,6 +329,7 @@ mod tests {
             FakeRunner {
                 exit_code: 0,
                 fail: false,
+                last_spec: std::sync::Mutex::new(None),
             }
         }
 
@@ -269,6 +337,7 @@ mod tests {
             FakeRunner {
                 exit_code,
                 fail: false,
+                last_spec: std::sync::Mutex::new(None),
             }
         }
 
@@ -276,7 +345,13 @@ mod tests {
             FakeRunner {
                 exit_code: -1,
                 fail: true,
+                last_spec: std::sync::Mutex::new(None),
             }
+        }
+
+        /// Return the last CommandSpec that was passed to run_command.
+        fn last_spec(&self) -> Option<CommandSpec> {
+            self.last_spec.lock().unwrap().clone()
         }
     }
 
@@ -284,8 +359,9 @@ mod tests {
     impl CommandRunner for FakeRunner {
         async fn run_command(
             &self,
-            _spec: &CommandSpec,
+            spec: &CommandSpec,
         ) -> apex_core::error::Result<CommandOutput> {
+            *self.last_spec.lock().unwrap() = Some(spec.clone());
             if self.fail {
                 return Err(ApexError::Subprocess {
                     exit_code: -1,
@@ -896,5 +972,185 @@ mod tests {
 
         let result = inst.instrument(&target).await;
         assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // JaCoCo auto-injection tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_gradle_has_jacoco_with_plugin() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("build.gradle"),
+            "apply plugin: 'jacoco'\n",
+        )
+        .unwrap();
+        assert!(gradle_has_jacoco(tmp.path()));
+    }
+
+    #[test]
+    fn test_gradle_has_jacoco_kts_with_plugin() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("build.gradle.kts"),
+            r#"plugins { id("jacoco") }"#,
+        )
+        .unwrap();
+        assert!(gradle_has_jacoco(tmp.path()));
+    }
+
+    #[test]
+    fn test_gradle_has_jacoco_without_plugin() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("build.gradle"),
+            "apply plugin: 'java'\n",
+        )
+        .unwrap();
+        assert!(!gradle_has_jacoco(tmp.path()));
+    }
+
+    #[test]
+    fn test_gradle_has_jacoco_no_build_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!gradle_has_jacoco(tmp.path()));
+    }
+
+    #[tokio::test]
+    async fn test_gradle_injects_init_script_when_no_jacoco() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        // Gradle project WITHOUT jacoco plugin
+        std::fs::write(repo_root.join("build.gradle"), "apply plugin: 'java'\n").unwrap();
+
+        // Create the JaCoCo XML report at the primary path
+        let report_dir = repo_root.join("build/reports/jacoco/test");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::fs::write(report_dir.join("jacocoTestReport.xml"), sample_jacoco_xml()).unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaInstrumentor::with_runner(runner.clone());
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::Java,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await.unwrap();
+        assert_eq!(result.branch_ids.len(), 10);
+
+        // Verify the init-script arg was passed
+        let spec = runner.last_spec().expect("should have recorded a spec");
+        assert!(
+            spec.args.contains(&"--init-script".to_string()),
+            "expected --init-script in args: {:?}",
+            spec.args
+        );
+        // Also verify `test` comes before `jacocoTestReport`
+        let test_pos = spec.args.iter().position(|a| a == "test").unwrap();
+        let jacoco_pos = spec
+            .args
+            .iter()
+            .position(|a| a == "jacocoTestReport")
+            .unwrap();
+        assert!(test_pos < jacoco_pos);
+    }
+
+    #[tokio::test]
+    async fn test_gradle_skips_init_script_when_jacoco_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        // Gradle project WITH jacoco plugin
+        std::fs::write(
+            repo_root.join("build.gradle"),
+            "apply plugin: 'jacoco'\n",
+        )
+        .unwrap();
+
+        let report_dir = repo_root.join("build/reports/jacoco/test");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::fs::write(report_dir.join("jacocoTestReport.xml"), sample_jacoco_xml()).unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaInstrumentor::with_runner(runner.clone());
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::Java,
+            test_command: Vec::new(),
+        };
+
+        let result = inst.instrument(&target).await.unwrap();
+        assert_eq!(result.branch_ids.len(), 10);
+
+        // Verify --init-script was NOT passed
+        let spec = runner.last_spec().expect("should have recorded a spec");
+        assert!(
+            !spec.args.contains(&"--init-script".to_string()),
+            "should not inject init script when jacoco is present: {:?}",
+            spec.args
+        );
+    }
+
+    #[tokio::test]
+    async fn test_jvm_timeout_is_10_minutes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        // Maven project
+        let report_dir = repo_root.join("target/site/jacoco");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::fs::write(report_dir.join("jacoco.xml"), sample_jacoco_xml()).unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaInstrumentor::with_runner(runner.clone());
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::Java,
+            test_command: Vec::new(),
+        };
+
+        let _ = inst.instrument(&target).await.unwrap();
+
+        let spec = runner.last_spec().expect("should have recorded a spec");
+        assert_eq!(
+            spec.timeout_ms, 600_000,
+            "JVM builds should have a 10-minute timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_gradle_init_script_cleaned_up_on_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+
+        // Gradle project WITHOUT jacoco
+        std::fs::write(repo_root.join("build.gradle"), "apply plugin: 'java'\n").unwrap();
+
+        let report_dir = repo_root.join("build/reports/jacoco/test");
+        std::fs::create_dir_all(&report_dir).unwrap();
+        std::fs::write(report_dir.join("jacocoTestReport.xml"), sample_jacoco_xml()).unwrap();
+
+        let runner = Arc::new(FakeRunner::success());
+        let inst = JavaInstrumentor::with_runner(runner);
+
+        let target = Target {
+            root: repo_root.to_path_buf(),
+            language: apex_core::types::Language::Java,
+            test_command: Vec::new(),
+        };
+
+        let _ = inst.instrument(&target).await.unwrap();
+
+        // The temp init script should be cleaned up
+        assert!(
+            !repo_root.join(".apex-jacoco-init.gradle").exists(),
+            "init script should be cleaned up after run"
+        );
     }
 }

@@ -8,6 +8,18 @@ use async_trait::async_trait;
 use std::{path::Path, time::Instant};
 use tracing::info;
 
+/// JVM build timeout: 10 minutes (Gradle/Maven may download deps on first run).
+const JVM_BUILD_TIMEOUT_MS: u64 = 600_000;
+
+/// Build a `CommandSpec` with JVM-friendly defaults (10-min timeout, JAVA_HOME).
+fn jvm_command(program: &str, target: &Path) -> CommandSpec {
+    let mut spec = CommandSpec::new(program, target).timeout(JVM_BUILD_TIMEOUT_MS);
+    if let Ok(java_home) = std::env::var("JAVA_HOME") {
+        spec = spec.env("JAVA_HOME", java_home);
+    }
+    spec
+}
+
 pub struct KotlinRunner<R: CommandRunner = RealCommandRunner> {
     runner: R,
 }
@@ -97,7 +109,7 @@ impl<R: CommandRunner> LanguageRunner for KotlinRunner<R> {
         match build_tool {
             "gradle" => {
                 let cmd = gradle_command(target);
-                let spec = CommandSpec::new(cmd, target).args(["build", "-x", "test"]);
+                let spec = jvm_command(cmd, target).args(["build", "-x", "test"]);
                 let output = self
                     .runner
                     .run_command(&spec)
@@ -111,7 +123,7 @@ impl<R: CommandRunner> LanguageRunner for KotlinRunner<R> {
                 }
             }
             _ => {
-                let spec = CommandSpec::new("mvn", target).args(["compile", "-q"]);
+                let spec = jvm_command("mvn", target).args(["compile", "-q"]);
                 let output = self
                     .runner
                     .run_command(&spec)
@@ -144,7 +156,7 @@ impl<R: CommandRunner> LanguageRunner for KotlinRunner<R> {
                 let cmd = gradle_command(target);
                 let mut args: Vec<String> = vec!["test".into()];
                 args.extend(extra_args.iter().cloned());
-                let spec = CommandSpec::new(cmd, target).args(args);
+                let spec = jvm_command(cmd, target).args(args);
                 self.runner
                     .run_command(&spec)
                     .await
@@ -153,7 +165,7 @@ impl<R: CommandRunner> LanguageRunner for KotlinRunner<R> {
             _ => {
                 let mut args: Vec<String> = vec!["test".into(), "-q".into()];
                 args.extend(extra_args.iter().cloned());
-                let spec = CommandSpec::new("mvn", target).args(args);
+                let spec = jvm_command("mvn", target).args(args);
                 self.runner
                     .run_command(&spec)
                     .await
@@ -193,7 +205,7 @@ impl<R: CommandRunner> KotlinRunner<R> {
                 } else {
                     "jacocoTestReport"
                 };
-                let spec = CommandSpec::new(cmd, target).args([task]);
+                let spec = jvm_command(cmd, target).args([task]);
                 self.runner
                     .run_command(&spec)
                     .await
@@ -201,7 +213,7 @@ impl<R: CommandRunner> KotlinRunner<R> {
             }
             _ => {
                 // Maven: JaCoCo via surefire
-                let spec = CommandSpec::new("mvn", target)
+                let spec = jvm_command("mvn", target)
                     .args(["jacoco:report", "-q"]);
                 self.runner
                     .run_command(&spec)

@@ -8,6 +8,18 @@ use async_trait::async_trait;
 use std::{path::Path, time::Instant};
 use tracing::{info, warn};
 
+/// JVM build timeout: 10 minutes (Gradle/Maven may download deps on first run).
+const JVM_BUILD_TIMEOUT_MS: u64 = 600_000;
+
+/// Build a `CommandSpec` with JVM-friendly defaults (10-min timeout, JAVA_HOME).
+fn jvm_command(program: &str, target: &Path) -> CommandSpec {
+    let mut spec = CommandSpec::new(program, target).timeout(JVM_BUILD_TIMEOUT_MS);
+    if let Ok(java_home) = std::env::var("JAVA_HOME") {
+        spec = spec.env("JAVA_HOME", java_home);
+    }
+    spec
+}
+
 pub struct JavaRunner<R: CommandRunner = RealCommandRunner> {
     runner: R,
 }
@@ -59,9 +71,9 @@ impl<R: CommandRunner> LanguageRunner for JavaRunner<R> {
         let build_tool = detect_build_tool(target);
 
         let spec = if build_tool == "gradle" {
-            CommandSpec::new("./gradlew", target).args(["dependencies", "--quiet"])
+            jvm_command("./gradlew", target).args(["dependencies", "--quiet"])
         } else {
-            CommandSpec::new("mvn", target).args(["-q", "dependency:resolve", "-DskipTests"])
+            jvm_command("mvn", target).args(["-q", "dependency:resolve", "-DskipTests"])
         };
 
         let result = self
@@ -98,7 +110,7 @@ impl<R: CommandRunner> LanguageRunner for JavaRunner<R> {
             "running Java tests"
         );
 
-        let spec = CommandSpec::new(&cmd_parts[0], target).args(cmd_parts[1..].to_vec());
+        let spec = jvm_command(&cmd_parts[0], target).args(cmd_parts[1..].to_vec());
 
         let start = Instant::now();
         let output = self
