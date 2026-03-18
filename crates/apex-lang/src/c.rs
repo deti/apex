@@ -85,9 +85,14 @@ impl<R: CommandRunner> LanguageRunner for CRunner<R> {
     async fn install_deps(&self, target: &Path) -> Result<()> {
         // C projects typically ship their own deps; nothing to install.
         // For xmake projects, run `xmake build` to compile.
+        // Use generous timeouts — large C projects can take minutes.
+        let build_timeout_ms: u64 = 300_000; // 5 minutes
+
         if target.join("xmake.lua").exists() {
             info!("running xmake build");
-            let spec = CommandSpec::new("xmake", target).args(["build"]);
+            let spec = CommandSpec::new("xmake", target)
+                .args(["build"])
+                .timeout(build_timeout_ms);
             let out = self
                 .runner
                 .run_command(&spec)
@@ -102,7 +107,9 @@ impl<R: CommandRunner> LanguageRunner for CRunner<R> {
         // Run autogen/configure if present.
         if target.join("autogen.sh").exists() {
             info!("running autogen.sh");
-            let spec = CommandSpec::new("sh", target).args(["autogen.sh"]);
+            let spec = CommandSpec::new("sh", target)
+                .args(["autogen.sh"])
+                .timeout(build_timeout_ms);
             let out = self
                 .runner
                 .run_command(&spec)
@@ -115,7 +122,8 @@ impl<R: CommandRunner> LanguageRunner for CRunner<R> {
 
         if target.join("configure").exists() && !target.join("Makefile").exists() {
             info!("running ./configure");
-            let spec = CommandSpec::new("./configure", target);
+            let spec = CommandSpec::new("./configure", target)
+                .timeout(build_timeout_ms);
             let out = self
                 .runner
                 .run_command(&spec)
@@ -132,25 +140,29 @@ impl<R: CommandRunner> LanguageRunner for CRunner<R> {
     async fn run_tests(&self, target: &Path, extra_args: &[String]) -> Result<TestRunOutput> {
         let start = Instant::now();
 
+        // C projects (especially large ones like the Linux kernel) can take
+        // minutes to compile. Use generous timeouts for build steps.
+        let compile_timeout_ms: u64 = 300_000; // 5 minutes
+        let test_timeout_ms: u64 = 120_000; // 2 minutes
+
         let cmake_build_dir = target.join("build_apex");
         let (cmd, args): (&str, Vec<String>) = match Self::detect_build_system(target) {
             BuildSystem::Xmake => ("xmake", vec!["test".into()]),
             BuildSystem::CMake => {
                 // Configure
                 let cmake_build_dir_str = cmake_build_dir.to_string_lossy().into_owned();
-                let configure_spec = CommandSpec::new("cmake", target).args([
-                    "-B",
-                    &cmake_build_dir_str,
-                    "-DCMAKE_BUILD_TYPE=Debug",
-                ]);
+                let configure_spec = CommandSpec::new("cmake", target)
+                    .args(["-B", &cmake_build_dir_str, "-DCMAKE_BUILD_TYPE=Debug"])
+                    .timeout(compile_timeout_ms);
                 self.runner
                     .run_command(&configure_spec)
                     .await
                     .map_err(|e| ApexError::LanguageRunner(format!("cmake configure: {e}")))?;
 
                 // Build
-                let build_spec =
-                    CommandSpec::new("cmake", target).args(["--build", &cmake_build_dir_str]);
+                let build_spec = CommandSpec::new("cmake", target)
+                    .args(["--build", &cmake_build_dir_str])
+                    .timeout(compile_timeout_ms);
                 self.runner
                     .run_command(&build_spec)
                     .await
@@ -172,7 +184,9 @@ impl<R: CommandRunner> LanguageRunner for CRunner<R> {
         let mut full_args: Vec<String> = args;
         full_args.extend_from_slice(extra_args);
 
-        let spec = CommandSpec::new(cmd, target).args(full_args);
+        let spec = CommandSpec::new(cmd, target)
+            .args(full_args)
+            .timeout(test_timeout_ms);
         let output = self
             .runner
             .run_command(&spec)
