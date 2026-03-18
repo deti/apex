@@ -20,8 +20,8 @@ use apex_core::{
 use apex_coverage::CoverageOracle;
 use apex_fuzz::FuzzStrategy;
 use apex_instrument::{
-    JavaInstrumentor, JavaScriptInstrumentor, LlvmInstrumentor, PythonInstrumentor,
-    RustCovInstrumentor, WasmInstrumentor,
+    CCoverageInstrumentor, JavaInstrumentor, JavaScriptInstrumentor, LlvmInstrumentor,
+    PythonInstrumentor, RustCovInstrumentor, WasmInstrumentor,
 };
 use apex_lang::{CRunner, JavaRunner, JavaScriptRunner, KotlinRunner, PythonRunner, WasmRunner};
 use apex_sandbox::{ProcessSandbox, PythonTestSandbox};
@@ -1168,16 +1168,18 @@ async fn instrument(
             RustCovInstrumentor::new().instrument(&target).await?
         }
         Language::C => {
-            // LLVM SanitizerCoverage for C (needs llvm-instrument feature or pre-built binary).
+            // Try LLVM SanitizerCoverage first (best precision, needs feature flag).
             let result = LlvmInstrumentor::new().instrument(&target).await?;
-            if result.branch_ids.is_empty() {
-                warn!(
-                    "LLVM instrumentation returned no branches. \
-                     Rebuild apex with --features apex-instrument/llvm-instrument, \
-                     or pre-compile the target with SanitizerCoverage."
+            if !result.branch_ids.is_empty() {
+                result
+            } else {
+                // Fall back to gcov: compile with --coverage, run, parse .gcov files.
+                info!(
+                    "LLVM instrumentation returned no branches; \
+                     falling back to gcov coverage"
                 );
+                CCoverageInstrumentor::new().instrument(&target).await?
             }
-            result
         }
         Language::Wasm => WasmInstrumentor::new().instrument(&target).await?,
         Language::Ruby => {
