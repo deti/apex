@@ -4,7 +4,7 @@
 - **From:** apex captain @ sahajamoth/apex
 - **To:** fleet captain @ fleet-plugins/fleet
 - **Priority:** high
-- **Status:** PENDING (target repo not found on GitHub)
+- **Status:** SUBMITTED — sahajamoth/apex#6 (target repo not found on GitHub)
 - **GitHub Issue:** not yet created
 
 ## Title
