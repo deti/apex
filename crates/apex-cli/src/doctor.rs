@@ -217,17 +217,31 @@ async fn checks_python(runner: &dyn CommandRunner) -> Vec<Check> {
 }
 
 async fn checks_javascript(runner: &dyn CommandRunner) -> Vec<Check> {
+    let bun_version = version_of(runner, "bun", &["--version"]).await;
+    let bun_found = bun_version.is_some();
+
+    let bun_check = Check {
+        name: "bun",
+        description: "Bun JavaScript runtime and test runner (preferred)",
+        status: match bun_version {
+            Some(v) => Status::Ok(format!("{v} (preferred test runner)")),
+            None => Status::Warn("bun not found (optional — node --test or nyc used instead)".into()),
+        },
+    };
+
+    // When bun is present, npx/nyc are superseded; downgrade their descriptions
+    // to make it clear they are not needed.
+    let npx_desc = if bun_found {
+        "npx tool runner (optional — bun preferred)"
+    } else {
+        "npx tool runner (for nyc)"
+    };
+
     vec![
         check_required(runner, "node", "Node.js runtime", "node", &["--version"]).await,
         check_required(runner, "npm", "npm package manager", "npm", &["--version"]).await,
-        check_optional(
-            runner,
-            "npx",
-            "npx tool runner (for nyc)",
-            "npx",
-            &["--version"],
-        )
-        .await,
+        bun_check,
+        check_optional(runner, "npx", npx_desc, "npx", &["--version"]).await,
     ]
 }
 
@@ -764,9 +778,10 @@ mod tests {
     async fn checks_javascript_runs_without_panic() {
         let runner = RealCommandRunner;
         let checks = checks_javascript(&runner).await;
-        assert!(checks.len() >= 3);
+        assert!(checks.len() >= 4);
         assert!(checks.iter().any(|c| c.name == "node"));
         assert!(checks.iter().any(|c| c.name == "npm"));
+        assert!(checks.iter().any(|c| c.name == "bun"));
     }
 
     #[tokio::test]
@@ -1352,6 +1367,8 @@ mod tests {
         assert!(matches!(&node.status, Status::Fail(_)));
         let npm = checks.iter().find(|c| c.name == "npm").unwrap();
         assert!(matches!(&npm.status, Status::Fail(_)));
+        let bun = checks.iter().find(|c| c.name == "bun").unwrap();
+        assert!(matches!(&bun.status, Status::Warn(_)));
         let npx = checks.iter().find(|c| c.name == "npx").unwrap();
         assert!(matches!(&npx.status, Status::Warn(_)));
     }
@@ -1759,6 +1776,53 @@ mod tests {
         assert!(matches!(&npx.status, Status::Warn(_)));
     }
 
+    // bun
+    #[tokio::test]
+    async fn mock_bun_found() {
+        let runner = MockRunner::with_handler(|spec| {
+            if spec.program == "bun" {
+                Ok(CommandOutput::success(b"1.2.4".to_vec()))
+            } else {
+                Ok(CommandOutput::success(b"v20.0.0".to_vec()))
+            }
+        });
+        let checks = checks_javascript(&runner).await;
+        let bun = checks.iter().find(|c| c.name == "bun").unwrap();
+        match &bun.status {
+            Status::Ok(v) => {
+                assert!(v.contains("1.2.4"), "version should appear: {v}");
+                assert!(v.contains("preferred"), "preferred label should appear: {v}");
+            }
+            other => panic!("expected Ok for bun, got {other:?}"),
+        }
+        // npx description should mention bun is preferred
+        let npx = checks.iter().find(|c| c.name == "npx").unwrap();
+        assert!(
+            npx.description.contains("bun"),
+            "npx description should mention bun when bun is found: {}",
+            npx.description
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_bun_not_found() {
+        let runner = MockRunner::all_fail();
+        let checks = checks_javascript(&runner).await;
+        let bun = checks.iter().find(|c| c.name == "bun").unwrap();
+        assert!(
+            matches!(&bun.status, Status::Warn(_)),
+            "bun absent should be Warn (optional), got {:?}",
+            bun.status
+        );
+        // npx description should use the default (nyc) wording
+        let npx = checks.iter().find(|c| c.name == "npx").unwrap();
+        assert!(
+            npx.description.contains("nyc"),
+            "npx description should mention nyc when bun is absent: {}",
+            npx.description
+        );
+    }
+
     // javac
     #[tokio::test]
     async fn mock_javac_found() {
@@ -1959,6 +2023,7 @@ mod tests {
         let programs: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
         assert!(programs.contains(&"node"));
         assert!(programs.contains(&"npm"));
+        assert!(programs.contains(&"bun"));
         assert!(programs.contains(&"npx"));
     }
 
@@ -2066,6 +2131,8 @@ mod tests {
         assert!(matches!(&node.status, Status::Ok(_)));
         let npm = checks.iter().find(|c| c.name == "npm").unwrap();
         assert!(matches!(&npm.status, Status::Fail(_)));
+        let bun = checks.iter().find(|c| c.name == "bun").unwrap();
+        assert!(matches!(&bun.status, Status::Warn(_)));
         let npx = checks.iter().find(|c| c.name == "npx").unwrap();
         assert!(matches!(&npx.status, Status::Warn(_)));
     }
@@ -2165,6 +2232,7 @@ mod tests {
         // JavaScript
         assert!(programs.contains(&"node"));
         assert!(programs.contains(&"npm"));
+        assert!(programs.contains(&"bun"));
         assert!(programs.contains(&"npx"));
         // Java
         assert!(programs.contains(&"java"));
@@ -2265,6 +2333,8 @@ mod tests {
         assert!(matches!(&node.status, Status::Fail(_)));
         let npm = checks.iter().find(|c| c.name == "npm").unwrap();
         assert!(matches!(&npm.status, Status::Fail(_)));
+        let bun = checks.iter().find(|c| c.name == "bun").unwrap();
+        assert!(matches!(&bun.status, Status::Warn(_)));
         let npx = checks.iter().find(|c| c.name == "npx").unwrap();
         assert!(matches!(&npx.status, Status::Warn(_)));
     }
@@ -2332,6 +2402,8 @@ mod tests {
         assert!(matches!(&node.status, Status::Fail(_)));
         let npm = checks.iter().find(|c| c.name == "npm").unwrap();
         assert!(matches!(&npm.status, Status::Fail(_)));
+        let bun = checks.iter().find(|c| c.name == "bun").unwrap();
+        assert!(matches!(&bun.status, Status::Warn(_)));
         let npx = checks.iter().find(|c| c.name == "npx").unwrap();
         assert!(matches!(&npx.status, Status::Warn(_)));
     }
@@ -2402,10 +2474,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_checks_javascript_returns_three_checks() {
+    async fn mock_checks_javascript_returns_four_checks() {
         let runner = MockRunner::all_succeed("v1.0");
         let checks = checks_javascript(&runner).await;
-        assert_eq!(checks.len(), 3);
+        assert_eq!(checks.len(), 4);
     }
 
     #[tokio::test]

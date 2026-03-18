@@ -16,7 +16,7 @@ then writes the tests to fix them. Single binary, 11 languages, zero config.
 > ripgrep · Spring Boot · .NET Runtime · Vapor · Rails · ktor
 >
 > Found a hardcoded EC private key in Kubernetes (CWE-798).
-> Scanned the Linux kernel in 4 minutes. 0 crashes across 12,770 findings.
+> Scanned the Linux kernel in 4 minutes. 0 crashes across 12,656 findings.
 
 <p align="center">
   <img src="docs/assets/real-world-validation.svg" alt="APEX real-world validation results" width="780">
