@@ -1,0 +1,35 @@
+schema_version: 1
+name: lang-js
+domain: "End-to-end JavaScript/TypeScript language support — instrumentation (istanbul/V8/c8), jest runner, sandbox, index, synthesis, concolic, detection"
+
+paths:
+  - crates/apex-instrument/src/javascript.rs
+  - crates/apex-instrument/src/v8_coverage.rs
+  - crates/apex-lang/src/javascript.rs
+  - crates/apex-sandbox/src/javascript.rs
+  - crates/apex-index/src/javascript.rs
+  - crates/apex-synth/src/jest.rs
+  - crates/apex-concolic/src/js_conditions.rs
+  - crates/apex-reach/src/extractors/javascript.rs
+
+tech_stack:
+  - Rust
+  - JavaScript
+  - TypeScript
+  - Node.js
+  - jest
+  - istanbul
+  - c8
+
+sdlc_concerns:
+  - qa
+  - integration
+
+partners:
+  - foundation
+  - platform
+  - lang-python
+
+notes: >
+  Owns apex run --lang js pipeline. Must handle jest, vitest, mocha detection.
+  V8 coverage and istanbul coverage are two different code paths — both must work.

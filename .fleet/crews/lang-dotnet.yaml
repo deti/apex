@@ -1,0 +1,31 @@
+schema_version: 1
+name: lang-dotnet
+domain: "End-to-end C# language support — coverlet/Cobertura instrumentation, dotnet test runner, index, synthesis, concolic, fuzz harness"
+
+paths:
+  - crates/apex-instrument/src/csharp.rs
+  - crates/apex-lang/src/csharp.rs
+  - crates/apex-index/src/csharp.rs
+  - crates/apex-synth/src/xunit.rs
+  - crates/apex-concolic/src/csharp_conditions.rs
+  - crates/apex-fuzz/src/harness/csharp.rs
+  - crates/apex-reach/src/extractors/csharp.rs
+
+tech_stack:
+  - Rust
+  - C#
+  - dotnet
+  - coverlet
+  - xUnit
+
+sdlc_concerns:
+  - qa
+  - integration
+
+partners:
+  - foundation
+  - platform
+
+notes: >
+  Owns apex run --lang c-sharp pipeline. Coverlet produces Cobertura XML.
+  dotnet test --collect:"XPlat Code Coverage" is the instrumentation path.

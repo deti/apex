@@ -1,0 +1,33 @@
+schema_version: 1
+name: lang-ruby
+domain: "End-to-end Ruby language support — SimpleCov instrumentation, RSpec/Minitest runner, sandbox, index, synthesis, concolic"
+
+paths:
+  - crates/apex-instrument/src/ruby.rs
+  - crates/apex-lang/src/ruby.rs
+  - crates/apex-sandbox/src/ruby.rs
+  - crates/apex-index/src/ruby.rs
+  - crates/apex-synth/src/rspec.rs
+  - crates/apex-concolic/src/ruby_conditions.rs
+  - crates/apex-reach/src/extractors/ruby.rs
+
+tech_stack:
+  - Rust
+  - Ruby
+  - SimpleCov
+  - RSpec
+  - Minitest
+  - Bundler
+
+sdlc_concerns:
+  - qa
+  - integration
+
+partners:
+  - foundation
+  - platform
+
+notes: >
+  Owns apex run --lang ruby pipeline. SimpleCov for coverage.
+  Must detect RSpec vs Minitest. Bundler for dep management.
+  Ruby 2.6 (system) vs modern Ruby (homebrew) compatibility.

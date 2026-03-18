@@ -1,0 +1,36 @@
+schema_version: 1
+name: lang-jvm
+domain: "End-to-end Java and Kotlin language support — JaCoCo instrumentation, JUnit/Gradle runner, index, synthesis, concolic"
+
+paths:
+  - crates/apex-instrument/src/java.rs
+  - crates/apex-lang/src/java.rs
+  - crates/apex-lang/src/kotlin.rs
+  - crates/apex-index/src/java.rs
+  - crates/apex-index/src/kotlin.rs
+  - crates/apex-synth/src/junit.rs
+  - crates/apex-synth/src/kotlin.rs
+  - crates/apex-concolic/src/java_conditions.rs
+  - crates/apex-reach/src/extractors/java.rs
+
+tech_stack:
+  - Rust
+  - Java
+  - Kotlin
+  - JaCoCo
+  - Gradle
+  - Maven
+  - JUnit
+
+sdlc_concerns:
+  - qa
+  - integration
+
+partners:
+  - foundation
+  - platform
+
+notes: >
+  Owns apex run --lang java and apex run --lang kotlin pipelines.
+  Java and Kotlin share JaCoCo for coverage and JUnit for test execution.
+  Gradle wrapper download and Maven pom.xml detection are critical paths.

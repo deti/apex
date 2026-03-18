@@ -1,0 +1,42 @@
+schema_version: 1
+name: lang-c-cpp
+domain: "End-to-end C and C++ language support — gcov/sancov/llvm-cov instrumentation, make/cmake/gtest runners, index, synthesis, concolic, fuzz"
+
+paths:
+  - crates/apex-instrument/src/c_coverage.rs
+  - crates/apex-instrument/src/cpp.rs
+  - crates/apex-instrument/src/llvm.rs
+  - crates/apex-lang/src/c.rs
+  - crates/apex-lang/src/cpp.rs
+  - crates/apex-index/src/c_cpp.rs
+  - crates/apex-synth/src/c_test.rs
+  - crates/apex-synth/src/gtest.rs
+  - crates/apex-concolic/src/c_conditions.rs
+  - crates/apex-sandbox/src/shim.rs
+  - crates/apex-reach/src/extractors/c_cpp.rs
+
+tech_stack:
+  - Rust
+  - C
+  - C++
+  - clang
+  - gcc
+  - gcov
+  - llvm-cov
+  - cmake
+  - make
+
+sdlc_concerns:
+  - qa
+  - integration
+  - security
+
+partners:
+  - foundation
+  - platform
+  - exploration
+
+notes: >
+  Owns apex run --lang c and apex run --lang cpp pipelines.
+  SanitizerCoverage shim (shim.rs) is the key instrumentation mechanism.
+  Multiple compiler backends (clang vs gcc) need testing.

@@ -1,0 +1,34 @@
+schema_version: 1
+name: lang-python
+domain: "End-to-end Python language support — instrumentation, test runner, sandbox, index, synthesis, concolic, detection patterns"
+
+paths:
+  - crates/apex-instrument/src/python.rs
+  - crates/apex-lang/src/python.rs
+  - crates/apex-sandbox/src/python.rs
+  - crates/apex-index/src/python.rs
+  - crates/apex-synth/src/python.rs
+  - crates/apex-concolic/src/python.rs
+  - crates/apex-concolic/src/scripts/apex_tracer.py
+  - crates/apex-reach/src/extractors/python.rs
+
+tech_stack:
+  - Rust
+  - Python
+  - coverage.py
+  - pytest
+
+sdlc_concerns:
+  - qa
+  - integration
+
+partners:
+  - foundation
+  - platform
+  - lang-js
+
+notes: >
+  Owns the full apex run --lang python pipeline. Every file in the pipeline
+  (instrument → run tests → collect coverage → index → synthesize → concolic)
+  must work end-to-end, not just compile. Test by running apex run on a real
+  Python project.

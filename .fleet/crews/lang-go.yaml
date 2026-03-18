@@ -1,0 +1,29 @@
+schema_version: 1
+name: lang-go
+domain: "End-to-end Go language support — go test -coverprofile instrumentation, test runner, index, synthesis, concolic"
+
+paths:
+  - crates/apex-instrument/src/go.rs
+  - crates/apex-lang/src/go.rs
+  - crates/apex-index/src/go.rs
+  - crates/apex-synth/src/go.rs
+  - crates/apex-concolic/src/go_conditions.rs
+  - crates/apex-reach/src/extractors/go.rs
+
+tech_stack:
+  - Rust
+  - Go
+  - go test
+  - go cover
+
+sdlc_concerns:
+  - qa
+  - integration
+
+partners:
+  - foundation
+  - platform
+
+notes: >
+  Owns apex run --lang go pipeline. Go coverage uses coverprofile text format.
+  go.sum parsing for dep audit. govulncheck integration.

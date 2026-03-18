@@ -1,8 +1,9 @@
 schema_version: 1
 name: apex
-domain: "APEX coverage tool — Rust workspace with 15 crates spanning static analysis, fuzzing, concolic execution, RPC, and CLI"
+domain: "APEX coverage tool — Rust workspace with 16 crates spanning static analysis, fuzzing, concolic execution, RPC, and CLI"
 
 crews:
+  # Layer crews (shared infrastructure)
   - foundation
   - security-detect
   - exploration
@@ -10,6 +11,17 @@ crews:
   - intelligence
   - platform
   - mcp-integration
+  - agent-ops
+  # Language crews (end-to-end per-language pipelines)
+  - lang-python
+  - lang-js
+  - lang-rust
+  - lang-go
+  - lang-jvm
+  - lang-c-cpp
+  - lang-dotnet
+  - lang-swift
+  - lang-ruby
 
 specialists:
   - agent: "feature-dev:code-architect"
@@ -40,4 +52,5 @@ dependency_order:
   wave1: [foundation]
   wave2: [security-detect, exploration, runtime]
   wave3: [intelligence, mcp-integration]
-  wave4: [platform]
+  wave4: [lang-python, lang-js, lang-rust, lang-go, lang-jvm, lang-c-cpp, lang-dotnet, lang-swift, lang-ruby]
+  wave5: [platform, agent-ops]

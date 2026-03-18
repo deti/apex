@@ -1,0 +1,31 @@
+schema_version: 1
+name: lang-swift
+domain: "End-to-end Swift language support — xccov/llvm-cov instrumentation, swift test runner, index, synthesis, concolic, fuzz harness"
+
+paths:
+  - crates/apex-instrument/src/swift.rs
+  - crates/apex-lang/src/swift.rs
+  - crates/apex-index/src/swift.rs
+  - crates/apex-synth/src/xctest.rs
+  - crates/apex-concolic/src/swift_conditions.rs
+  - crates/apex-fuzz/src/harness/swift.rs
+  - crates/apex-reach/src/extractors/swift.rs
+
+tech_stack:
+  - Rust
+  - Swift
+  - XCTest
+  - swift-test
+  - xccov
+
+sdlc_concerns:
+  - qa
+  - integration
+
+partners:
+  - foundation
+  - platform
+
+notes: >
+  Owns apex run --lang swift pipeline. Swift Package Manager for deps.
+  xccov exports llvm-cov JSON format. libFuzzer for fuzz harness.

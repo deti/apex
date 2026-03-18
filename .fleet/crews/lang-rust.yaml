@@ -1,0 +1,32 @@
+schema_version: 1
+name: lang-rust
+domain: "End-to-end Rust language support — cargo-llvm-cov instrumentation, cargo test runner, sandbox, index, synthesis, concolic, fuzz harness"
+
+paths:
+  - crates/apex-instrument/src/rust_cov.rs
+  - crates/apex-instrument/src/rustc_wrapper.rs
+  - crates/apex-lang/src/rust_lang.rs
+  - crates/apex-sandbox/src/rust_test.rs
+  - crates/apex-index/src/rust.rs
+  - crates/apex-synth/src/rust.rs
+  - crates/apex-concolic/src/rust_conditions.rs
+  - crates/apex-reach/src/extractors/rust.rs
+
+tech_stack:
+  - Rust
+  - cargo-llvm-cov
+  - cargo-nextest
+
+sdlc_concerns:
+  - qa
+  - integration
+
+partners:
+  - foundation
+  - platform
+  - exploration
+
+notes: >
+  Owns apex run --lang rust pipeline. cargo-llvm-cov is the key dependency.
+  Must handle both workspace and single-crate targets. The Bolero harness
+  generator in synth/rust.rs bridges unit tests and fuzz targets.
