@@ -15,15 +15,12 @@ use std::sync::Mutex;
 /// A condition parser: takes source text, returns `(line_number, condition)` pairs.
 pub type ConditionParser = fn(&str) -> Vec<(u32, ConditionTree)>;
 
-/// Cached condition entries per file.
-type ConditionCache = Vec<(String, Vec<(u32, ConditionTree)>)>;
-
 /// Static concolic strategy that extracts conditions from source code and
 /// generates boundary seeds without runtime tracing.
 pub struct StaticConcolicStrategy {
     name: String,
     parser: ConditionParser,
-    cache: Mutex<ConditionCache>,
+    cache: Mutex<Vec<(String, Vec<(u32, ConditionTree)>)>>,
 }
 
 impl StaticConcolicStrategy {
@@ -65,7 +62,7 @@ impl Strategy for StaticConcolicStrategy {
     }
 
     async fn suggest_inputs(&self, ctx: &ExplorationContext) -> Result<Vec<InputSeed>> {
-        let source_path = ctx.target.root.to_string_lossy().to_string();
+        let source_path = ctx.target.path.to_string_lossy().to_string();
         let source = match std::fs::read_to_string(&source_path) {
             Ok(s) => s,
             Err(_) => return Ok(vec![]),
