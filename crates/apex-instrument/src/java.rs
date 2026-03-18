@@ -1,5 +1,6 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
+    config::InstrumentTimeouts,
     error::{ApexError, Result},
     traits::Instrumentor,
     types::{BranchId, InstrumentedTarget, Target},
@@ -12,9 +13,6 @@ use std::{
     sync::Arc,
 };
 use tracing::{info, warn};
-
-/// JVM build timeout: 10 minutes (Gradle/Maven may download deps on first run).
-const JVM_BUILD_TIMEOUT_MS: u64 = 600_000;
 
 type JacocoParseResult = (Vec<BranchId>, Vec<BranchId>, HashMap<u64, PathBuf>);
 
@@ -52,9 +50,9 @@ allprojects {
 }
 "#;
 
-/// Build a `CommandSpec` with JVM-friendly defaults (10-min timeout, JAVA_HOME).
-fn jvm_command(program: &str, target: &Path) -> CommandSpec {
-    let mut spec = CommandSpec::new(program, target).timeout(JVM_BUILD_TIMEOUT_MS);
+/// Build a `CommandSpec` with JVM-friendly defaults (configurable timeout, JAVA_HOME).
+fn jvm_command(program: &str, target: &Path, timeout_ms: u64) -> CommandSpec {
+    let mut spec = CommandSpec::new(program, target).timeout(timeout_ms);
     if let Ok(java_home) = std::env::var("JAVA_HOME") {
         spec = spec.env("JAVA_HOME", java_home);
     }
@@ -62,7 +60,11 @@ fn jvm_command(program: &str, target: &Path) -> CommandSpec {
 }
 
 /// Run JaCoCo instrumented tests and return the path to the produced XML report.
-async fn run_jacoco(target: &Path, runner: &dyn CommandRunner) -> Result<PathBuf> {
+async fn run_jacoco(
+    target: &Path,
+    runner: &dyn CommandRunner,
+    timeout_ms: u64,
+) -> Result<PathBuf> {
     let build_tool = detect_build_tool(target);
 
     info!(
@@ -72,14 +74,18 @@ async fn run_jacoco(target: &Path, runner: &dyn CommandRunner) -> Result<PathBuf
     );
 
     if build_tool == "gradle" {
-        run_jacoco_gradle(target, runner).await
+        run_jacoco_gradle(target, runner, timeout_ms).await
     } else {
-        run_jacoco_maven(target, runner).await
+        run_jacoco_maven(target, runner, timeout_ms).await
     }
 }
 
 /// Gradle path: auto-inject JaCoCo via init script when the project lacks the plugin.
-async fn run_jacoco_gradle(target: &Path, runner: &dyn CommandRunner) -> Result<PathBuf> {
+async fn run_jacoco_gradle(
+    target: &Path,
+    runner: &dyn CommandRunner,
+    timeout_ms: u64,
+) -> Result<PathBuf> {
     let needs_init = !gradle_has_jacoco(target);
 
     let mut args: Vec<String> = Vec::new();
@@ -97,7 +103,7 @@ async fn run_jacoco_gradle(target: &Path, runner: &dyn CommandRunner) -> Result<
 
     args.extend(["test".into(), "jacocoTestReport".into(), "--quiet".into()]);
 
-    let spec = jvm_command("./gradlew", target).args(args);
+    let spec = jvm_command("./gradlew", target, timeout_ms).args(args);
     let output = runner
         .run_command(&spec)
         .await
@@ -131,8 +137,12 @@ async fn run_jacoco_gradle(target: &Path, runner: &dyn CommandRunner) -> Result<
 }
 
 /// Maven path: invoke JaCoCo goals directly (no pom.xml changes needed).
-async fn run_jacoco_maven(target: &Path, runner: &dyn CommandRunner) -> Result<PathBuf> {
-    let spec = jvm_command("mvn", target).args([
+async fn run_jacoco_maven(
+    target: &Path,
+    runner: &dyn CommandRunner,
+    timeout_ms: u64,
+) -> Result<PathBuf> {
+    let spec = jvm_command("mvn", target, timeout_ms).args([
         "-q",
         "org.jacoco:jacoco-maven-plugin:0.8.11:prepare-agent",
         "test",
@@ -256,18 +266,28 @@ fn parse_jacoco_xml(
 
 pub struct JavaInstrumentor {
     runner: Arc<dyn CommandRunner>,
+    timeouts: InstrumentTimeouts,
 }
 
 impl JavaInstrumentor {
     pub fn new() -> Self {
         JavaInstrumentor {
             runner: Arc::new(RealCommandRunner),
+            timeouts: InstrumentTimeouts::default(),
         }
     }
 
     /// Create a new instrumentor with a custom command runner (for testing).
     pub fn with_runner(runner: Arc<dyn CommandRunner>) -> Self {
-        JavaInstrumentor { runner }
+        JavaInstrumentor {
+            runner,
+            timeouts: InstrumentTimeouts::default(),
+        }
+    }
+
+    pub fn with_timeouts(mut self, timeouts: InstrumentTimeouts) -> Self {
+        self.timeouts = timeouts;
+        self
     }
 }
 
@@ -280,7 +300,8 @@ impl Default for JavaInstrumentor {
 #[async_trait]
 impl Instrumentor for JavaInstrumentor {
     async fn instrument(&self, target: &Target) -> Result<InstrumentedTarget> {
-        let xml_path = run_jacoco(&target.root, self.runner.as_ref()).await?;
+        let xml_path =
+            run_jacoco(&target.root, self.runner.as_ref(), self.timeouts.jvm_build_ms).await?;
 
         let xml_content = std::fs::read_to_string(&xml_path)
             .map_err(|e| ApexError::Instrumentation(format!("read JaCoCo XML: {e}")))?;

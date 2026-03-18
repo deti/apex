@@ -1,5 +1,6 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
+    config::InstrumentTimeouts,
     error::{ApexError, Result},
     traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
@@ -8,29 +9,31 @@ use async_trait::async_trait;
 use std::{path::Path, time::Instant};
 use tracing::{debug, info};
 
-/// Timeout for `swift package resolve` — large projects (e.g. Vapor) pull many
-/// dependencies and 30 s is not enough.  5 minutes gives plenty of headroom.
-const RESOLVE_TIMEOUT_MS: u64 = 300_000;
-
-/// Timeout for `swift test` — compilation + test execution on a cold cache can
-/// easily exceed the default 30 s.  10 minutes covers large workspaces.
-const TEST_TIMEOUT_MS: u64 = 600_000;
-
 pub struct SwiftRunner<R: CommandRunner = RealCommandRunner> {
     runner: R,
+    timeouts: InstrumentTimeouts,
 }
 
 impl SwiftRunner {
     pub fn new() -> Self {
         SwiftRunner {
             runner: RealCommandRunner,
+            timeouts: InstrumentTimeouts::default(),
         }
     }
 }
 
 impl<R: CommandRunner> SwiftRunner<R> {
     pub fn with_runner(runner: R) -> Self {
-        SwiftRunner { runner }
+        SwiftRunner {
+            runner,
+            timeouts: InstrumentTimeouts::default(),
+        }
+    }
+
+    pub fn with_timeouts(mut self, timeouts: InstrumentTimeouts) -> Self {
+        self.timeouts = timeouts;
+        self
     }
 
     /// Check if a binary is on PATH and return its version string.
@@ -103,7 +106,7 @@ impl<R: CommandRunner> LanguageRunner for SwiftRunner<R> {
         let spec = CommandSpec::new("swift", target)
             .args(["package", "resolve"])
             .env("SWIFTPM_CACHE_DIR", spm_cache.to_string_lossy())
-            .timeout(RESOLVE_TIMEOUT_MS);
+            .timeout(self.timeouts.swift_resolve_ms);
         let output = self
             .runner
             .run_command(&spec)
@@ -129,7 +132,7 @@ impl<R: CommandRunner> LanguageRunner for SwiftRunner<R> {
         args.extend_from_slice(extra_args);
         let spec = CommandSpec::new("swift", target)
             .args(args)
-            .timeout(TEST_TIMEOUT_MS);
+            .timeout(self.timeouts.swift_test_ms);
         let output = self
             .runner
             .run_command(&spec)
@@ -191,6 +194,7 @@ impl<R: CommandRunner> LanguageRunner for SwiftRunner<R> {
 mod tests {
     use super::*;
     use apex_core::command::CommandOutput;
+    use apex_core::config::InstrumentTimeouts;
     use apex_core::traits::LanguageRunner;
 
     mockall::mock! {
@@ -306,7 +310,7 @@ mod tests {
             .withf(|spec| {
                 spec.program == "swift"
                     && spec.args == ["package", "resolve"]
-                    && spec.timeout_ms == RESOLVE_TIMEOUT_MS
+                    && spec.timeout_ms == InstrumentTimeouts::default().swift_resolve_ms
                     && spec
                         .env
                         .iter()
@@ -331,7 +335,7 @@ mod tests {
             .withf(|spec| {
                 spec.program == "swift"
                     && spec.args == ["test"]
-                    && spec.timeout_ms == TEST_TIMEOUT_MS
+                    && spec.timeout_ms == InstrumentTimeouts::default().swift_test_ms
             })
             .returning(|_| {
                 Ok(CommandOutput {

@@ -1,5 +1,6 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
+    config::InstrumentTimeouts,
     error::{ApexError, Result},
     hash::fnv1a_hash,
     traits::Instrumentor,
@@ -12,22 +13,16 @@ use std::{
 };
 use tracing::{debug, info, warn};
 
-/// Timeout for `swift test --enable-code-coverage` — compilation + test
-/// execution on large projects can take minutes, not seconds.
-const COV_TEST_TIMEOUT_MS: u64 = 600_000;
-
-/// Timeout for `swift test --show-codecov-path` — quick metadata query, but
-/// give it a full minute in case the build system is still settling.
-const CODECOV_PATH_TIMEOUT_MS: u64 = 60_000;
-
 pub struct SwiftInstrumentor<R: CommandRunner = RealCommandRunner> {
     runner: R,
+    timeouts: InstrumentTimeouts,
 }
 
 impl SwiftInstrumentor {
     pub fn new() -> Self {
         SwiftInstrumentor {
             runner: RealCommandRunner,
+            timeouts: InstrumentTimeouts::default(),
         }
     }
 }
@@ -40,7 +35,15 @@ impl Default for SwiftInstrumentor {
 
 impl<R: CommandRunner> SwiftInstrumentor<R> {
     pub fn with_runner(runner: R) -> Self {
-        SwiftInstrumentor { runner }
+        SwiftInstrumentor {
+            runner,
+            timeouts: InstrumentTimeouts::default(),
+        }
+    }
+
+    pub fn with_timeouts(mut self, timeouts: InstrumentTimeouts) -> Self {
+        self.timeouts = timeouts;
+        self
     }
 }
 
@@ -146,7 +149,7 @@ impl<R: CommandRunner> Instrumentor for SwiftInstrumentor<R> {
         let spec = CommandSpec::new("swift", target_root)
             .args(["test", "--enable-code-coverage"])
             .env("SWIFTPM_CACHE_DIR", spm_cache.to_string_lossy())
-            .timeout(COV_TEST_TIMEOUT_MS);
+            .timeout(self.timeouts.swift_test_ms);
 
         let output = self.runner.run_command(&spec).await.map_err(|e| {
             ApexError::Instrumentation(format!("swift test --enable-code-coverage: {e}"))
@@ -161,7 +164,7 @@ impl<R: CommandRunner> Instrumentor for SwiftInstrumentor<R> {
         // swift test --show-codecov-path gives us the JSON path
         let codecov_spec = CommandSpec::new("swift", target_root)
             .args(["test", "--show-codecov-path"])
-            .timeout(CODECOV_PATH_TIMEOUT_MS);
+            .timeout(self.timeouts.swift_codecov_ms);
         let codecov_output = self.runner.run_command(&codecov_spec).await.map_err(|e| {
             ApexError::Instrumentation(format!("swift test --show-codecov-path: {e}"))
         })?;

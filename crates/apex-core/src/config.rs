@@ -378,10 +378,14 @@ pub struct InstrumentTimeouts {
     pub c_gcov_ms: u64,
     /// C#/.NET instrumentation timeout (ms). Default: 600_000.
     pub csharp_ms: u64,
+    /// C# NuGet restore timeout (ms). Default: 300_000.
+    pub csharp_restore_ms: u64,
     /// Swift coverage test timeout (ms). Default: 600_000.
     pub swift_test_ms: u64,
     /// Swift codecov path-resolution timeout (ms). Default: 60_000.
     pub swift_codecov_ms: u64,
+    /// Swift package resolve timeout (ms). Default: 300_000.
+    pub swift_resolve_ms: u64,
     /// JVM (Java/Kotlin) build timeout (ms). Default: 600_000.
     pub jvm_build_ms: u64,
 }
@@ -393,8 +397,10 @@ impl Default for InstrumentTimeouts {
             c_test_ms: 120_000,
             c_gcov_ms: 60_000,
             csharp_ms: 600_000,
+            csharp_restore_ms: 300_000,
             swift_test_ms: 600_000,
             swift_codecov_ms: 60_000,
+            swift_resolve_ms: 300_000,
             jvm_build_ms: 600_000,
         }
     }
@@ -632,8 +638,10 @@ mod tests {
         assert_eq!(cfg.instrument.timeouts.c_test_ms, 120_000);
         assert_eq!(cfg.instrument.timeouts.c_gcov_ms, 60_000);
         assert_eq!(cfg.instrument.timeouts.csharp_ms, 600_000);
+        assert_eq!(cfg.instrument.timeouts.csharp_restore_ms, 300_000);
         assert_eq!(cfg.instrument.timeouts.swift_test_ms, 600_000);
         assert_eq!(cfg.instrument.timeouts.swift_codecov_ms, 60_000);
+        assert_eq!(cfg.instrument.timeouts.swift_resolve_ms, 300_000);
         assert_eq!(cfg.instrument.timeouts.jvm_build_ms, 600_000);
 
         // New fields — index
@@ -762,8 +770,10 @@ c_compile_ms = 180000
 c_test_ms = 90000
 c_gcov_ms = 30000
 csharp_ms = 300000
+csharp_restore_ms = 120000
 swift_test_ms = 300000
 swift_codecov_ms = 30000
+swift_resolve_ms = 120000
 jvm_build_ms = 480000
 
 [logging]
@@ -812,8 +822,10 @@ max_branches_in_prompt = 15
         assert_eq!(cfg.instrument.timeouts.c_test_ms, 90000);
         assert_eq!(cfg.instrument.timeouts.c_gcov_ms, 30000);
         assert_eq!(cfg.instrument.timeouts.csharp_ms, 300000);
+        assert_eq!(cfg.instrument.timeouts.csharp_restore_ms, 120000);
         assert_eq!(cfg.instrument.timeouts.swift_test_ms, 300000);
         assert_eq!(cfg.instrument.timeouts.swift_codecov_ms, 30000);
+        assert_eq!(cfg.instrument.timeouts.swift_resolve_ms, 120000);
         assert_eq!(cfg.instrument.timeouts.jvm_build_ms, 480000);
         assert_eq!(cfg.logging.level, "debug");
         assert_eq!(cfg.logging.format, "json");

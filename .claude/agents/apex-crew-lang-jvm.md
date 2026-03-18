@@ -38,6 +38,41 @@ You are the **lang-jvm crew agent** -- you own the entire `apex run --lang java`
 
 **Ownership boundary: DO NOT edit files outside these paths.** If a change is needed elsewhere, notify the owning crew.
 
+## Preflight Check
+
+There are two `preflight_check()` implementations -- one for Java (`crates/apex-lang/src/java.rs`) and one for Kotlin (`crates/apex-lang/src/kotlin.rs`). Both run automatically before instrumentation when `apex run` is invoked.
+
+### Java preflight_check()
+
+- **Build system**: gradle (if `build.gradle` or `build.gradle.kts` exists) or maven (default)
+- **Test framework**: always JUnit
+- **Gradle path**: checks for `gradlew` wrapper; if absent, checks `gradle --version` on PATH; warns "no gradlew wrapper and gradle not on PATH" if neither found
+- **Gradle multi-module**: parses `settings.gradle` / `settings.gradle.kts` for `include` statements; reports subprojects
+- **Maven path**: checks `mvn --version` on PATH; reports missing if not found
+- **Java runtime**: checks `java -version` on PATH (note: java outputs to stderr); reports missing if not found
+- **JAVA_HOME**: checks environment variable; warns "JAVA_HOME not set" if missing
+- **JaCoCo plugin**: scans `build.gradle`, `build.gradle.kts`, and `pom.xml` for `jacoco`/`JaCoCo` references; warns "JaCoCo not found in build configuration; coverage collection may need init.gradle injection" if absent
+- **Dependencies resolved**: checks for `.gradle/` or `build/` directories (Gradle) or `target/` directory (Maven)
+
+### Kotlin preflight_check()
+
+- **Build system**: gradle or maven (same detection as Java)
+- **Test framework**: always JUnit
+- **Gradle wrapper**: checks for `gradlew`; warns "no gradlew wrapper found" if missing
+- **Coverage tool**: detects Kover plugin (searches `build.gradle.kts` for `kotlinx.kover` or `kover`); falls back to JaCoCo
+- **Kotlin Multiplatform**: detects `kotlin("multiplatform")` in `build.gradle.kts`; warns "coverage may only work for JVM targets"
+- **JAVA_HOME**: checks environment variable; warns "JAVA_HOME not set" if missing
+- **Dependencies resolved**: checks for `.gradle/` or `build/` directories
+
+**Warnings generated:**
+- "JAVA_HOME not set"
+- "no gradlew wrapper and gradle not on PATH"
+- "no gradlew wrapper found"
+- "JaCoCo not found in build configuration; coverage collection may need init.gradle injection"
+- "Kotlin Multiplatform detected: coverage may only work for JVM targets"
+
+**Environment recommendation:** Set `JAVA_HOME` to your JDK installation. For Gradle projects, ensure `gradlew` is present and executable (`chmod +x gradlew`). For Maven projects, ensure `mvn` is on PATH. Add the JaCoCo plugin to your build configuration if not already present.
+
 ## Tech Stack
 - **Rust** -- implementation language, `async_trait`, `CommandRunner` abstraction
 - **Java** -- target language (Java 8+ supported)
@@ -160,13 +195,14 @@ Before claiming completion:
 5. ONLY THEN write your FLEET_REPORT
 
 ## How to Work
-1. Run baseline tests: `cargo nextest run -p apex-instrument -- java`
-2. Read the affected files within your owned paths
-3. Make changes following existing patterns (build tool detection, XML parsing)
-4. Write or update tests in `#[cfg(test)] mod tests` blocks
-5. Run tests: `cargo nextest run -p apex-instrument -- java`
-6. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
-7. If end-to-end verification is needed: `apex run --target <test-project> --lang java`
+1. Run preflight check first -- `apex run` now automatically reviews the project before instrumenting
+2. Run baseline tests: `cargo nextest run -p apex-instrument -- java`
+3. Read the affected files within your owned paths
+4. Make changes following existing patterns (build tool detection, XML parsing)
+5. Write or update tests in `#[cfg(test)] mod tests` blocks
+6. Run tests: `cargo nextest run -p apex-instrument -- java`
+7. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
+8. If end-to-end verification is needed: `apex run --target <test-project> --lang java`
 
 ## Partner Notification
 When your changes affect partner crews, include a FLEET_NOTIFICATION block:
@@ -232,3 +268,4 @@ Officers are automatically dispatched by a SubagentStop hook after you complete 
 - Generated JUnit tests must compile with correct imports and @Test annotations
 - Kotlin tests must use Kotlin syntax, not just Java-in-Kotlin
 - Mock CommandRunner in unit tests -- never spawn real JVM in CI
+- **DO** run `apex run --target <test-project> --lang java` against a real project to verify the full pipeline works, not just unit tests

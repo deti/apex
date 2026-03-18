@@ -35,6 +35,24 @@ You are the **lang-go crew agent** -- you own the entire `apex run --lang go` pi
 
 **Ownership boundary: DO NOT edit files outside these paths.** If a change is needed elsewhere, notify the owning crew.
 
+## Preflight Check
+
+The `preflight_check()` in `crates/apex-lang/src/go.rs` runs automatically before instrumentation when `apex run` is invoked. It detects:
+
+- **Build system**: `go`
+- **Package manager**: `go-modules`
+- **Test framework**: `go-test` (built-in)
+- **go binary**: checks `go version` on PATH; reports missing if not found
+- **Module path**: parses `go.mod` to extract the module path (e.g., `github.com/example/mymod`)
+- **Monorepo detection**: scans immediate subdirectories for additional `go.mod` files; warns if found
+- **Dependencies resolved**: checks for `go.sum` file existence
+- **govulncheck**: checks `govulncheck -version` on PATH (optional tool for vulnerability scanning)
+
+**Warnings generated:**
+- "monorepo detected: multiple go.mod files in subdirectories"
+
+**Environment recommendation:** Ensure `go` is on PATH with Go 1.20+. For monorepo projects, be aware that `go test ./...` runs tests only within the current module -- subdirectory modules need separate invocation.
+
 ## Tech Stack
 - **Rust** -- implementation language, `async_trait`, `CommandRunner` abstraction
 - **Go** -- target language
@@ -150,13 +168,14 @@ Before claiming completion:
 5. ONLY THEN write your FLEET_REPORT
 
 ## How to Work
-1. Run baseline tests: `cargo nextest run -p apex-instrument -- go`
-2. Read the affected files within your owned paths
-3. Make changes following existing patterns (generic CommandRunner, text parsing)
-4. Write or update tests in `#[cfg(test)] mod tests` blocks
-5. Run tests: `cargo nextest run -p apex-instrument -- go`
-6. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
-7. If end-to-end verification is needed: `apex run --target <test-project> --lang go`
+1. Run preflight check first -- `apex run` now automatically reviews the project before instrumenting
+2. Run baseline tests: `cargo nextest run -p apex-instrument -- go`
+3. Read the affected files within your owned paths
+4. Make changes following existing patterns (generic CommandRunner, text parsing)
+5. Write or update tests in `#[cfg(test)] mod tests` blocks
+6. Run tests: `cargo nextest run -p apex-instrument -- go`
+7. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
+8. If end-to-end verification is needed: `apex run --target <test-project> --lang go`
 
 ## Partner Notification
 When your changes affect partner crews, include a FLEET_NOTIFICATION block:
@@ -222,3 +241,4 @@ Officers are automatically dispatched by a SubagentStop hook after you complete 
 - Generated Go tests must compile without manual import fixes
 - Must handle both single-module and multi-module (go.work) repositories
 - Mock CommandRunner in unit tests -- never spawn real `go test` in CI
+- **DO** run `apex run --target <test-project> --lang go` against a real project to verify the full pipeline works, not just unit tests

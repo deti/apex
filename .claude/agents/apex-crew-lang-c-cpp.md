@@ -40,6 +40,38 @@ You are the **lang-c-cpp crew agent** -- you own the entire `apex run --lang c` 
 
 **Ownership boundary: DO NOT edit files outside these paths.** If a change is needed elsewhere, notify the owning crew.
 
+## Preflight Check
+
+There are two `preflight_check()` implementations -- one for C (`crates/apex-lang/src/c.rs`) and one for C++ (`crates/apex-lang/src/cpp.rs`). Both run automatically before instrumentation when `apex run` is invoked.
+
+### C preflight_check()
+
+- **Build system**: xmake, cmake, make, autoconf, or none (detected from `xmake.lua`, `CMakeLists.txt`, `Makefile`/`makefile`/`GNUmakefile`, `configure`/`configure.ac`)
+- **Compiler detection**: checks for `clang` (with version via `--version`), then `gcc` (with version), then `cc` (system); reports missing "clang or gcc" if none found
+- **Coverage tools**: checks for `gcov`, `llvm-profdata`, and `llvm-cov` on PATH
+- **Build system tools**: checks that the detected build system's tool (cmake, make, xmake, autoconf) is on PATH
+- **Kernel subsystem detection**: if `Kconfig` or `Kbuild` files exist, warns that standalone build is not possible without kernel source tree
+- **Test framework**: defaults to `ctest`
+- **Dependencies built**: checks for `build/` directory
+
+**Warnings generated:**
+- "no build system detected; may be a kernel subsystem or header-only project"
+- "kernel subsystem detected: standalone build not possible without kernel source tree"
+
+### C++ preflight_check()
+
+- **Build system**: xmake, cmake, make, meson, or none (detected from `xmake.lua`, `CMakeLists.txt`, `Makefile`, `meson.build`)
+- **Compiler detection**: checks for `clang++` on PATH, then `g++`; reports missing "clang++ or g++" if neither found
+- **Test framework**: GoogleTest (if `CMakeLists.txt` references `gtest`/`googletest`), ctest, meson-test, xmake-test, make-test, or none
+- **Build system tools**: checks that cmake/meson/xmake is on PATH as appropriate
+- **Coverage tools**: checks for `gcov` and `llvm-cov` on PATH
+- **Dependencies built**: checks for `build/` directory
+
+**Warnings generated:**
+- "no build system detected for C++ project"
+
+**Environment recommendation:** Install clang (preferred) or gcc. For CMake projects, ensure cmake is on PATH. For coverage, ensure gcov (with gcc) or llvm-cov (with clang) is available.
+
 ## Tech Stack
 - **Rust** -- implementation language, `async_trait`, `Instrumentor` trait
 - **C/C++** -- target languages
@@ -186,13 +218,14 @@ Before claiming completion:
 5. ONLY THEN write your FLEET_REPORT
 
 ## How to Work
-1. Run baseline tests: `cargo nextest run -p apex-instrument -- c_coverage`
-2. Read the affected files within your owned paths
-3. Make changes following existing patterns (GcovLine enum, text parsing, shim C source)
-4. Write or update tests in `#[cfg(test)] mod tests` blocks
-5. Run tests: `cargo nextest run -p apex-instrument -- c_coverage`
-6. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
-7. If end-to-end verification is needed: `apex run --target <test-project> --lang c`
+1. Run preflight check first -- `apex run` now automatically reviews the project before instrumenting
+2. Run baseline tests: `cargo nextest run -p apex-instrument -- c_coverage`
+3. Read the affected files within your owned paths
+4. Make changes following existing patterns (GcovLine enum, text parsing, shim C source)
+5. Write or update tests in `#[cfg(test)] mod tests` blocks
+6. Run tests: `cargo nextest run -p apex-instrument -- c_coverage`
+7. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
+8. If end-to-end verification is needed: `apex run --target <test-project> --lang c`
 
 ## Partner Notification
 When your changes affect partner crews, include a FLEET_NOTIFICATION block:
@@ -259,3 +292,4 @@ Officers are automatically dispatched by a SubagentStop hook after you complete 
 - Generated C/C++ tests must compile without manual fixes
 - LD_PRELOAD shim only works with dynamically linked executables -- document this limitation
 - Security concern: the shim has `sdlc_concerns: security` -- handle SHM carefully
+- **DO** run `apex run --target <test-project> --lang c` against a real project to verify the full pipeline works, not just unit tests

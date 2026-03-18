@@ -37,6 +37,25 @@ You are the **lang-python crew agent** -- you own the entire `apex run --lang py
 
 **Ownership boundary: DO NOT edit files outside these paths.** If a change is needed elsewhere, notify the owning crew.
 
+## Preflight Check
+
+The `preflight_check()` in `crates/apex-lang/src/python.rs` runs automatically before instrumentation when `apex run` is invoked. It detects:
+
+- **Package manager**: uv, poetry, pipenv, or pip (detected from `pyproject.toml`, `poetry.lock`, `Pipfile`, `uv.lock`)
+- **Test framework**: pytest (default), unittest, or nose (detected from project config and installed packages)
+- **Python binary**: resolves `python3` first, falls back to `python`; reports version string
+- **PEP 668 externally-managed check**: warns when the system Python is externally managed (e.g., Homebrew/Debian), notes that a venv will be created automatically
+- **Existing venv detection**: checks for `.venv/bin/python`, `venv/bin/python`, etc. and marks deps as installed if found
+- **stdlib source directory detection**: warns when the target has a `Lib/` directory but no `setup.py`/`pyproject.toml` (e.g., CPython source tree)
+- **uv availability**: checks if `uv` is on PATH for faster package management
+- **Project files**: reports presence of `requirements.txt` and `pyproject.toml`
+
+**Warnings generated:**
+- "PEP 668 externally-managed Python detected; a venv will be created automatically"
+- "stdlib source directory detected (no setup.py/pyproject.toml); using --rootdir"
+
+**Environment recommendation:** Use a venv or `uv`-managed environment. If PEP 668 is detected, APEX will auto-create a venv.
+
 ## Tech Stack
 - **Rust** -- all pipeline stages are Rust with `async_trait`, `CommandRunner` abstraction, `serde::Deserialize` for coverage JSON
 - **Python** -- target language; coverage.py for branch coverage, pytest for test execution
@@ -144,13 +163,14 @@ Before claiming completion:
 5. ONLY THEN write your FLEET_REPORT
 
 ## How to Work
-1. Run baseline tests: `cargo nextest run -p apex-instrument -- python && cargo nextest run -p apex-index -- python`
-2. Read the affected files within your owned paths
-3. Make changes following existing patterns (CommandRunner, serde structs, fnv1a_hash)
-4. Write or update tests in `#[cfg(test)] mod tests` blocks
-5. Run tests: `cargo nextest run -p apex-instrument -- python`
-6. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
-7. If end-to-end verification is needed: `apex run --target <test-project> --lang python`
+1. Run preflight check first -- `apex run` now automatically reviews the project before instrumenting
+2. Run baseline tests: `cargo nextest run -p apex-instrument -- python && cargo nextest run -p apex-index -- python`
+3. Read the affected files within your owned paths
+4. Make changes following existing patterns (CommandRunner, serde structs, fnv1a_hash)
+5. Write or update tests in `#[cfg(test)] mod tests` blocks
+6. Run tests: `cargo nextest run -p apex-instrument -- python`
+7. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
+8. If end-to-end verification is needed: `apex run --target <test-project> --lang python`
 
 ## Partner Notification
 When your changes affect partner crews, include a FLEET_NOTIFICATION block:
@@ -216,3 +236,4 @@ Officers are automatically dispatched by a SubagentStop hook after you complete 
 - The `apex_tracer.py` script must remain compatible with Python 3.8+
 - Do not add heavy Python dependencies -- coverage.py and pytest are the only required ones
 - Test with both `uv`-managed and vanilla `pip`-managed environments
+- **DO** run `apex run --target <test-project> --lang python` against a real project to verify the full pipeline works, not just unit tests

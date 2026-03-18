@@ -1,5 +1,6 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
+    config::InstrumentTimeouts,
     error::{ApexError, Result},
     traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
@@ -8,12 +9,9 @@ use async_trait::async_trait;
 use std::{path::Path, time::Instant};
 use tracing::{info, warn};
 
-/// JVM build timeout: 10 minutes (Gradle/Maven may download deps on first run).
-const JVM_BUILD_TIMEOUT_MS: u64 = 600_000;
-
-/// Build a `CommandSpec` with JVM-friendly defaults (10-min timeout, JAVA_HOME).
-fn jvm_command(program: &str, target: &Path) -> CommandSpec {
-    let mut spec = CommandSpec::new(program, target).timeout(JVM_BUILD_TIMEOUT_MS);
+/// Build a `CommandSpec` with JVM-friendly defaults (configurable timeout, JAVA_HOME).
+fn jvm_command(program: &str, target: &Path, timeout_ms: u64) -> CommandSpec {
+    let mut spec = CommandSpec::new(program, target).timeout(timeout_ms);
     if let Ok(java_home) = std::env::var("JAVA_HOME") {
         spec = spec.env("JAVA_HOME", java_home);
     }
@@ -22,19 +20,29 @@ fn jvm_command(program: &str, target: &Path) -> CommandSpec {
 
 pub struct JavaRunner<R: CommandRunner = RealCommandRunner> {
     runner: R,
+    timeouts: InstrumentTimeouts,
 }
 
 impl JavaRunner {
     pub fn new() -> Self {
         JavaRunner {
             runner: RealCommandRunner,
+            timeouts: InstrumentTimeouts::default(),
         }
     }
 }
 
 impl<R: CommandRunner> JavaRunner<R> {
     pub fn with_runner(runner: R) -> Self {
-        JavaRunner { runner }
+        JavaRunner {
+            runner,
+            timeouts: InstrumentTimeouts::default(),
+        }
+    }
+
+    pub fn with_timeouts(mut self, timeouts: InstrumentTimeouts) -> Self {
+        self.timeouts = timeouts;
+        self
     }
 
     /// Check if a binary is on PATH and return its version string.
@@ -151,9 +159,11 @@ impl<R: CommandRunner> LanguageRunner for JavaRunner<R> {
         let build_tool = detect_build_tool(target);
 
         let spec = if build_tool == "gradle" {
-            jvm_command("./gradlew", target).args(["dependencies", "--quiet"])
+            jvm_command("./gradlew", target, self.timeouts.jvm_build_ms)
+                .args(["dependencies", "--quiet"])
         } else {
-            jvm_command("mvn", target).args(["-q", "dependency:resolve", "-DskipTests"])
+            jvm_command("mvn", target, self.timeouts.jvm_build_ms)
+                .args(["-q", "dependency:resolve", "-DskipTests"])
         };
 
         let result = self
@@ -190,7 +200,8 @@ impl<R: CommandRunner> LanguageRunner for JavaRunner<R> {
             "running Java tests"
         );
 
-        let spec = jvm_command(&cmd_parts[0], target).args(cmd_parts[1..].to_vec());
+        let spec = jvm_command(&cmd_parts[0], target, self.timeouts.jvm_build_ms)
+            .args(cmd_parts[1..].to_vec());
 
         let start = Instant::now();
         let output = self

@@ -36,6 +36,24 @@ You are the **lang-dotnet crew agent** -- you own the entire `apex run --lang c-
 
 **Ownership boundary: DO NOT edit files outside these paths.** If a change is needed elsewhere, notify the owning crew.
 
+## Preflight Check
+
+The `preflight_check()` in `crates/apex-lang/src/csharp.rs` runs automatically before instrumentation when `apex run` is invoked. It detects:
+
+- **Build system**: always `dotnet`
+- **Package manager**: always `nuget`
+- **dotnet CLI**: checks `dotnet --version` on an augmented PATH (searches `~/.dotnet`, `DOTNET_ROOT`, `/usr/local/share/dotnet`, `/usr/share/dotnet`); warns with full search path if not found
+- **Project structure**: scans for `.sln` files (solution) or `.csproj` files (project); reports structure type and file names
+- **Test framework detection**: reads `.csproj` content for xunit/xUnit, NUnit/nunit, or MSTest references; reports the detected framework
+- **Coverlet detection**: checks `.csproj` files for `coverlet`/`Coverlet` references; warns "coverlet not found in project dependencies; code coverage collection may fail" if absent
+- **Dependencies built**: checks for `obj/` or `bin/` directory existence
+
+**Warnings generated:**
+- "dotnet not found on PATH (checked ~/.dotnet, DOTNET_ROOT, /usr/local/share/dotnet)"
+- "coverlet not found in project dependencies; code coverage collection may fail"
+
+**Environment recommendation:** Install the .NET SDK 6.0+. Add `coverlet.collector` NuGet package to test projects (`dotnet add package coverlet.collector`). If dotnet is installed via `dotnet-install.sh`, ensure `~/.dotnet` is on PATH or set `DOTNET_ROOT`.
+
 ## Tech Stack
 - **Rust** -- implementation language, `async_trait`, `CommandRunner` abstraction
 - **C#** -- target language
@@ -159,13 +177,14 @@ Before claiming completion:
 5. ONLY THEN write your FLEET_REPORT
 
 ## How to Work
-1. Run baseline tests: `cargo nextest run -p apex-instrument -- csharp`
-2. Read the affected files within your owned paths
-3. Make changes following existing patterns (Cobertura XML parsing, generic CommandRunner)
-4. Write or update tests in `#[cfg(test)] mod tests` blocks
-5. Run tests: `cargo nextest run -p apex-instrument -- csharp`
-6. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
-7. If end-to-end verification is needed: `apex run --target <test-project> --lang c-sharp`
+1. Run preflight check first -- `apex run` now automatically reviews the project before instrumenting
+2. Run baseline tests: `cargo nextest run -p apex-instrument -- csharp`
+3. Read the affected files within your owned paths
+4. Make changes following existing patterns (Cobertura XML parsing, generic CommandRunner)
+5. Write or update tests in `#[cfg(test)] mod tests` blocks
+6. Run tests: `cargo nextest run -p apex-instrument -- csharp`
+7. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
+8. If end-to-end verification is needed: `apex run --target <test-project> --lang c-sharp`
 
 ## Partner Notification
 When your changes affect partner crews, include a FLEET_NOTIFICATION block:
@@ -231,3 +250,4 @@ Officers are automatically dispatched by a SubagentStop hook after you complete 
 - Generated xUnit tests must include correct `using` statements and `[Fact]` attributes
 - Must support multi-target framework projects
 - Mock CommandRunner in unit tests -- never spawn real `dotnet test` in CI
+- **DO** run `apex run --target <test-project> --lang c-sharp` against a real project to verify the full pipeline works, not just unit tests

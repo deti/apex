@@ -37,6 +37,24 @@ You are the **lang-rust crew agent** -- you own the entire `apex run --lang rust
 
 **Ownership boundary: DO NOT edit files outside these paths.** If a change is needed elsewhere, notify the owning crew.
 
+## Preflight Check
+
+The `preflight_check()` in `crates/apex-lang/src/rust_lang.rs` runs automatically before instrumentation when `apex run` is invoked. It detects:
+
+- **Build system**: always `cargo`
+- **Project type**: workspace (contains `[workspace]` in Cargo.toml) vs single-crate
+- **cargo**: checks `cargo --version` on PATH; reports missing if not found
+- **rustc**: checks `rustc --version` on PATH; reports missing if not found
+- **cargo-llvm-cov**: checks `cargo-llvm-cov --version` on PATH; warns "coverage instrumentation will not work" if missing
+- **cargo-nextest**: checks `cargo-nextest --version` on PATH; if found, sets test framework to "nextest"; if missing, falls back to "cargo-test" and warns
+- **Dependencies resolved**: checks for `Cargo.lock` file existence
+
+**Warnings generated:**
+- "cargo-llvm-cov not installed; coverage instrumentation will not work"
+- "cargo-nextest not installed; falling back to cargo test"
+
+**Environment recommendation:** Install `cargo-llvm-cov` via `cargo install cargo-llvm-cov` and add `llvm-tools` component via `rustup component add llvm-tools`. Optionally install `cargo-nextest` for faster test execution.
+
 ## Tech Stack
 - **Rust** -- both the implementation language and the target language
 - **cargo-llvm-cov** -- key dependency for LLVM-based coverage instrumentation
@@ -150,13 +168,14 @@ Before claiming completion:
 5. ONLY THEN write your FLEET_REPORT
 
 ## How to Work
-1. Run baseline tests: `cargo nextest run -p apex-instrument -- rust`
-2. Read the affected files within your owned paths
-3. Make changes following existing patterns (generic CommandRunner, LLVM JSON parsing)
-4. Write or update tests in `#[cfg(test)] mod tests` blocks
-5. Run tests: `cargo nextest run -p apex-instrument -- rust`
-6. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
-7. If end-to-end verification is needed: `apex run --target <test-project> --lang rust`
+1. Run preflight check first -- `apex run` now automatically reviews the project before instrumenting
+2. Run baseline tests: `cargo nextest run -p apex-instrument -- rust`
+3. Read the affected files within your owned paths
+4. Make changes following existing patterns (generic CommandRunner, LLVM JSON parsing)
+5. Write or update tests in `#[cfg(test)] mod tests` blocks
+6. Run tests: `cargo nextest run -p apex-instrument -- rust`
+7. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
+8. If end-to-end verification is needed: `apex run --target <test-project> --lang rust`
 
 ## Partner Notification
 When your changes affect partner crews, include a FLEET_NOTIFICATION block:
@@ -222,3 +241,4 @@ Officers are automatically dispatched by a SubagentStop hook after you complete 
 - LLVM_PROFILE_FILE must be unique per test to avoid profraw corruption
 - Bolero harness generation must produce valid Rust that compiles without manual edits
 - Mock CommandRunner in unit tests -- never spawn real cargo-llvm-cov in CI
+- **DO** run `apex run --target <test-project> --lang rust` against a real project to verify the full pipeline works, not just unit tests

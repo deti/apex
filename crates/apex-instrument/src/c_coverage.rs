@@ -10,6 +10,7 @@
 //! 4. Parse `.gcov` output into `BranchId` entries
 
 use apex_core::{
+    config::InstrumentTimeouts,
     error::{ApexError, Result},
     hash::fnv1a_hash,
     traits::Instrumentor,
@@ -30,13 +31,20 @@ use tracing::{debug, info, warn};
 /// Currently implements gcov text output parsing.
 pub struct CCoverageInstrumentor {
     branch_ids: Vec<BranchId>,
+    timeouts: InstrumentTimeouts,
 }
 
 impl CCoverageInstrumentor {
     pub fn new() -> Self {
         CCoverageInstrumentor {
             branch_ids: Vec::new(),
+            timeouts: InstrumentTimeouts::default(),
         }
+    }
+
+    pub fn with_timeouts(mut self, timeouts: InstrumentTimeouts) -> Self {
+        self.timeouts = timeouts;
+        self
     }
 }
 
@@ -154,15 +162,6 @@ pub fn scan_gcov_files(dir: &Path) -> (Vec<BranchId>, Vec<BranchId>, HashMap<u64
     (all, executed, file_paths)
 }
 
-/// Timeout for C compilation (5 minutes — large projects like the Linux kernel
-/// need significant compile time even for a subset).
-const COMPILE_TIMEOUT_MS: u64 = 300_000;
-
-/// Timeout for running the compiled test binary (2 minutes).
-const TEST_RUN_TIMEOUT_MS: u64 = 120_000;
-
-/// Timeout for gcov processing (1 minute).
-const GCOV_TIMEOUT_MS: u64 = 60_000;
 
 /// Collect `.c` files from a directory, recursing into subdirectories but
 /// skipping build/VCS directories.
@@ -217,6 +216,7 @@ fn is_apple_clang() -> bool {
 /// 2. **gcc path** (Linux default): `--coverage` → run → `gcov` → parse `.gcov`
 async fn compile_and_run_gcov(
     target: &Target,
+    timeouts: &InstrumentTimeouts,
 ) -> Result<(Vec<BranchId>, Vec<BranchId>, HashMap<u64, PathBuf>, PathBuf)> {
     let c_files = collect_c_files(&target.root);
     if c_files.is_empty() {
@@ -233,9 +233,9 @@ async fn compile_and_run_gcov(
     let use_clang_path = has_tool("clang") && (is_apple_clang() || !has_tool("gcov"));
 
     if use_clang_path {
-        compile_and_run_llvm_cov(target, &c_files, &build_dir).await
+        compile_and_run_llvm_cov(target, &c_files, &build_dir, timeouts).await
     } else {
-        compile_and_run_gcc_gcov(target, &c_files, &build_dir).await
+        compile_and_run_gcc_gcov(target, &c_files, &build_dir, timeouts).await
     }
 }
 
@@ -245,6 +245,7 @@ async fn compile_and_run_llvm_cov(
     target: &Target,
     c_files: &[PathBuf],
     build_dir: &Path,
+    timeouts: &InstrumentTimeouts,
 ) -> Result<(Vec<BranchId>, Vec<BranchId>, HashMap<u64, PathBuf>, PathBuf)> {
     let binary_path = build_dir.join("apex_cov_test");
     let profraw_path = build_dir.join("default.profraw");
@@ -274,7 +275,7 @@ async fn compile_and_run_llvm_cov(
 
     // Step 1: Compile
     let compile_out = tokio::time::timeout(
-        std::time::Duration::from_millis(COMPILE_TIMEOUT_MS),
+        std::time::Duration::from_millis(timeouts.c_compile_ms),
         tokio::process::Command::new("clang")
             .args(&args)
             .current_dir(&target.root)
@@ -291,8 +292,9 @@ async fn compile_and_run_llvm_cov(
     }
 
     // Step 2: Run binary (produces .profraw)
+    let c_test_ms = timeouts.c_test_ms;
     let run_result = tokio::time::timeout(
-        std::time::Duration::from_millis(TEST_RUN_TIMEOUT_MS),
+        std::time::Duration::from_millis(c_test_ms),
         tokio::process::Command::new(&binary_path)
             .current_dir(&target.root)
             .env("LLVM_PROFILE_FILE", &profraw_path)
@@ -309,7 +311,7 @@ async fn compile_and_run_llvm_cov(
             return Ok((Vec::new(), Vec::new(), HashMap::new(), build_dir.to_path_buf()));
         }
         Err(_) => {
-            warn!("binary timed out after {TEST_RUN_TIMEOUT_MS}ms");
+            warn!("binary timed out after {c_test_ms}ms");
         }
         _ => {}
     }
@@ -338,7 +340,7 @@ async fn compile_and_run_llvm_cov(
     ]);
 
     let merge_out = tokio::time::timeout(
-        std::time::Duration::from_millis(GCOV_TIMEOUT_MS),
+        std::time::Duration::from_millis(timeouts.c_gcov_ms),
         tokio::process::Command::new(profdata_tool)
             .args(&merge_args)
             .output(),
@@ -375,7 +377,7 @@ async fn compile_and_run_llvm_cov(
     ]);
 
     let export_out = tokio::time::timeout(
-        std::time::Duration::from_millis(GCOV_TIMEOUT_MS),
+        std::time::Duration::from_millis(timeouts.c_gcov_ms),
         tokio::process::Command::new(cov_tool)
             .args(&export_args)
             .current_dir(&target.root)
@@ -478,6 +480,7 @@ async fn compile_and_run_gcc_gcov(
     target: &Target,
     c_files: &[PathBuf],
     build_dir: &Path,
+    timeouts: &InstrumentTimeouts,
 ) -> Result<(Vec<BranchId>, Vec<BranchId>, HashMap<u64, PathBuf>, PathBuf)> {
     let compiler = if has_tool("gcc") {
         "gcc"
@@ -517,8 +520,9 @@ async fn compile_and_run_gcc_gcov(
     );
 
     // Step 1: Compile from target root
+    let c_compile_ms = timeouts.c_compile_ms;
     let compile_out = tokio::time::timeout(
-        std::time::Duration::from_millis(COMPILE_TIMEOUT_MS),
+        std::time::Duration::from_millis(c_compile_ms),
         tokio::process::Command::new(compiler)
             .args(&args)
             .current_dir(&target.root)
@@ -527,7 +531,7 @@ async fn compile_and_run_gcc_gcov(
     .await
     .map_err(|_| {
         ApexError::Instrumentation(format!(
-            "compilation timed out after {COMPILE_TIMEOUT_MS}ms"
+            "compilation timed out after {c_compile_ms}ms"
         ))
     })?
     .map_err(|e| ApexError::Instrumentation(format!("compile: {e}")))?;
@@ -541,8 +545,9 @@ async fn compile_and_run_gcc_gcov(
     info!("gcov compilation succeeded, running binary");
 
     // Step 2: Run binary to produce .gcda files
+    let c_test_ms = timeouts.c_test_ms;
     let run_result = tokio::time::timeout(
-        std::time::Duration::from_millis(TEST_RUN_TIMEOUT_MS),
+        std::time::Duration::from_millis(c_test_ms),
         tokio::process::Command::new(&binary_path)
             .current_dir(&target.root)
             .output(),
@@ -561,7 +566,7 @@ async fn compile_and_run_gcc_gcov(
             return Ok((Vec::new(), Vec::new(), HashMap::new(), build_dir.to_path_buf()));
         }
         Err(_) => {
-            warn!("test binary timed out after {TEST_RUN_TIMEOUT_MS}ms");
+            warn!("test binary timed out after {c_test_ms}ms");
         }
     }
 
@@ -569,8 +574,9 @@ async fn compile_and_run_gcc_gcov(
     let mut gcov_args: Vec<String> = Vec::new();
     gcov_args.extend(relative_c_files);
 
+    let c_gcov_ms = timeouts.c_gcov_ms;
     let gcov_out = tokio::time::timeout(
-        std::time::Duration::from_millis(GCOV_TIMEOUT_MS),
+        std::time::Duration::from_millis(c_gcov_ms),
         tokio::process::Command::new("gcov")
             .args(&gcov_args)
             .current_dir(&target.root)
@@ -578,7 +584,7 @@ async fn compile_and_run_gcc_gcov(
     )
     .await
     .map_err(|_| {
-        ApexError::Instrumentation(format!("gcov timed out after {GCOV_TIMEOUT_MS}ms"))
+        ApexError::Instrumentation(format!("gcov timed out after {c_gcov_ms}ms"))
     })?
     .map_err(|e| ApexError::Instrumentation(format!("gcov: {e}")))?;
 
@@ -622,7 +628,7 @@ impl Instrumentor for CCoverageInstrumentor {
         // No pre-existing .gcov files — compile with --coverage and run gcov.
         info!("no pre-existing .gcov files; compiling with --coverage");
         let (all_branches, executed_branches, file_paths, work_dir) =
-            compile_and_run_gcov(target).await?;
+            compile_and_run_gcov(target, &self.timeouts).await?;
 
         Ok(InstrumentedTarget {
             target: target.clone(),
@@ -822,10 +828,11 @@ mod tests {
     }
 
     #[test]
-    fn timeout_constants_are_reasonable() {
-        assert!(COMPILE_TIMEOUT_MS >= 60_000, "compile timeout should be >= 1 min");
-        assert!(TEST_RUN_TIMEOUT_MS >= 30_000, "test timeout should be >= 30s");
-        assert!(GCOV_TIMEOUT_MS >= 10_000, "gcov timeout should be >= 10s");
+    fn timeout_defaults_are_reasonable() {
+        let t = InstrumentTimeouts::default();
+        assert!(t.c_compile_ms >= 60_000, "compile timeout should be >= 1 min");
+        assert!(t.c_test_ms >= 30_000, "test timeout should be >= 30s");
+        assert!(t.c_gcov_ms >= 10_000, "gcov timeout should be >= 10s");
     }
 
     #[tokio::test]

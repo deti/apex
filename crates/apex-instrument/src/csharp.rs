@@ -1,5 +1,6 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
+    config::InstrumentTimeouts,
     error::{ApexError, Result},
     hash::fnv1a_hash,
     traits::Instrumentor,
@@ -11,9 +12,6 @@ use std::{
     path::{Path, PathBuf},
 };
 use tracing::{debug, info, warn};
-
-/// 10 minutes — `dotnet test --collect` compiles, runs tests, and collects coverage.
-const INSTRUMENT_TIMEOUT_MS: u64 = 600_000;
 
 /// Augment `PATH` with common dotnet install locations.
 fn dotnet_path() -> String {
@@ -47,12 +45,14 @@ fn dotnet_path() -> String {
 
 pub struct CSharpInstrumentor<R: CommandRunner = RealCommandRunner> {
     runner: R,
+    timeouts: InstrumentTimeouts,
 }
 
 impl CSharpInstrumentor {
     pub fn new() -> Self {
         CSharpInstrumentor {
             runner: RealCommandRunner,
+            timeouts: InstrumentTimeouts::default(),
         }
     }
 }
@@ -65,7 +65,15 @@ impl Default for CSharpInstrumentor {
 
 impl<R: CommandRunner> CSharpInstrumentor<R> {
     pub fn with_runner(runner: R) -> Self {
-        CSharpInstrumentor { runner }
+        CSharpInstrumentor {
+            runner,
+            timeouts: InstrumentTimeouts::default(),
+        }
+    }
+
+    pub fn with_timeouts(mut self, timeouts: InstrumentTimeouts) -> Self {
+        self.timeouts = timeouts;
+        self
     }
 }
 
@@ -173,7 +181,7 @@ impl<R: CommandRunner> Instrumentor for CSharpInstrumentor<R> {
         let spec = CommandSpec::new("dotnet", target_root)
             .args(["test", "--collect:XPlat Code Coverage"])
             .env("PATH", dotnet_path())
-            .timeout(INSTRUMENT_TIMEOUT_MS);
+            .timeout(self.timeouts.csharp_ms);
 
         let output = self
             .runner

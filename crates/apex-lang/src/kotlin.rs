@@ -1,5 +1,6 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
+    config::InstrumentTimeouts,
     error::{ApexError, Result},
     traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
@@ -8,12 +9,9 @@ use async_trait::async_trait;
 use std::{path::Path, time::Instant};
 use tracing::info;
 
-/// JVM build timeout: 10 minutes (Gradle/Maven may download deps on first run).
-const JVM_BUILD_TIMEOUT_MS: u64 = 600_000;
-
-/// Build a `CommandSpec` with JVM-friendly defaults (10-min timeout, JAVA_HOME).
-fn jvm_command(program: &str, target: &Path) -> CommandSpec {
-    let mut spec = CommandSpec::new(program, target).timeout(JVM_BUILD_TIMEOUT_MS);
+/// Build a `CommandSpec` with JVM-friendly defaults (configurable timeout, JAVA_HOME).
+fn jvm_command(program: &str, target: &Path, timeout_ms: u64) -> CommandSpec {
+    let mut spec = CommandSpec::new(program, target).timeout(timeout_ms);
     if let Ok(java_home) = std::env::var("JAVA_HOME") {
         spec = spec.env("JAVA_HOME", java_home);
     }
@@ -22,19 +20,29 @@ fn jvm_command(program: &str, target: &Path) -> CommandSpec {
 
 pub struct KotlinRunner<R: CommandRunner = RealCommandRunner> {
     runner: R,
+    timeouts: InstrumentTimeouts,
 }
 
 impl KotlinRunner {
     pub fn new() -> Self {
         KotlinRunner {
             runner: RealCommandRunner,
+            timeouts: InstrumentTimeouts::default(),
         }
     }
 }
 
 impl<R: CommandRunner> KotlinRunner<R> {
     pub fn with_runner(runner: R) -> Self {
-        KotlinRunner { runner }
+        KotlinRunner {
+            runner,
+            timeouts: InstrumentTimeouts::default(),
+        }
+    }
+
+    pub fn with_timeouts(mut self, timeouts: InstrumentTimeouts) -> Self {
+        self.timeouts = timeouts;
+        self
     }
 
     /// Detect Kotlin Multiplatform from build.gradle.kts.
@@ -125,7 +133,8 @@ impl<R: CommandRunner> LanguageRunner for KotlinRunner<R> {
         match build_tool {
             "gradle" => {
                 let cmd = gradle_command(target);
-                let spec = jvm_command(cmd, target).args(["build", "-x", "test"]);
+                let spec = jvm_command(cmd, target, self.timeouts.jvm_build_ms)
+                    .args(["build", "-x", "test"]);
                 let output = self
                     .runner
                     .run_command(&spec)
@@ -139,7 +148,8 @@ impl<R: CommandRunner> LanguageRunner for KotlinRunner<R> {
                 }
             }
             _ => {
-                let spec = jvm_command("mvn", target).args(["compile", "-q"]);
+                let spec = jvm_command("mvn", target, self.timeouts.jvm_build_ms)
+                    .args(["compile", "-q"]);
                 let output = self
                     .runner
                     .run_command(&spec)
@@ -172,7 +182,7 @@ impl<R: CommandRunner> LanguageRunner for KotlinRunner<R> {
                 let cmd = gradle_command(target);
                 let mut args: Vec<String> = vec!["test".into()];
                 args.extend(extra_args.iter().cloned());
-                let spec = jvm_command(cmd, target).args(args);
+                let spec = jvm_command(cmd, target, self.timeouts.jvm_build_ms).args(args);
                 self.runner
                     .run_command(&spec)
                     .await
@@ -181,7 +191,7 @@ impl<R: CommandRunner> LanguageRunner for KotlinRunner<R> {
             _ => {
                 let mut args: Vec<String> = vec!["test".into(), "-q".into()];
                 args.extend(extra_args.iter().cloned());
-                let spec = jvm_command("mvn", target).args(args);
+                let spec = jvm_command("mvn", target, self.timeouts.jvm_build_ms).args(args);
                 self.runner
                     .run_command(&spec)
                     .await
@@ -268,7 +278,8 @@ impl<R: CommandRunner> KotlinRunner<R> {
                 } else {
                     "jacocoTestReport"
                 };
-                let spec = jvm_command(cmd, target).args([task]);
+                let spec =
+                    jvm_command(cmd, target, self.timeouts.jvm_build_ms).args([task]);
                 self.runner
                     .run_command(&spec)
                     .await
@@ -276,7 +287,7 @@ impl<R: CommandRunner> KotlinRunner<R> {
             }
             _ => {
                 // Maven: JaCoCo via surefire
-                let spec = jvm_command("mvn", target)
+                let spec = jvm_command("mvn", target, self.timeouts.jvm_build_ms)
                     .args(["jacoco:report", "-q"]);
                 self.runner
                     .run_command(&spec)

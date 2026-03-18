@@ -36,6 +36,24 @@ You are the **lang-swift crew agent** -- you own the entire `apex run --lang swi
 
 **Ownership boundary: DO NOT edit files outside these paths.** If a change is needed elsewhere, notify the owning crew.
 
+## Preflight Check
+
+The `preflight_check()` in `crates/apex-lang/src/swift.rs` runs automatically before instrumentation when `apex run` is invoked. It detects:
+
+- **Build system**: always `swift-package-manager`
+- **Package manager**: always `swift-package-manager`
+- **Test framework**: always `XCTest`
+- **swift binary**: checks `swift --version` on PATH; reports missing if not found
+- **Toolchain detection**: runs `xcode-select -p` to determine if Xcode or CommandLineTools is the active toolchain; reports "Xcode", "CommandLineTools", or "unknown"
+- **swift-tools-version**: parses the first line of `Package.swift` for `swift-tools-version:X.Y`
+- **Dependencies resolved**: checks for `Package.resolved` or `.build/` directory
+- **Coverage tool**: checks `xcrun llvm-cov --version` on PATH; warns "llvm-cov not found via xcrun; code coverage may not work" if missing
+
+**Warnings generated:**
+- "llvm-cov not found via xcrun; code coverage may not work"
+
+**Environment recommendation:** On macOS, install Xcode or Xcode Command Line Tools. On Linux, install the Swift toolchain from swift.org. Ensure `swift` is on PATH. For coverage, `xcrun llvm-cov` must be available (macOS) or `llvm-cov` directly (Linux).
+
 ## Tech Stack
 - **Rust** -- implementation language, `async_trait`, `CommandRunner` abstraction
 - **Swift** -- target language
@@ -151,13 +169,14 @@ Before claiming completion:
 5. ONLY THEN write your FLEET_REPORT
 
 ## How to Work
-1. Run baseline tests: `cargo nextest run -p apex-instrument -- swift`
-2. Read the affected files within your owned paths
-3. Make changes following existing patterns (llvm-cov JSON, generic CommandRunner)
-4. Write or update tests in `#[cfg(test)] mod tests` blocks
-5. Run tests: `cargo nextest run -p apex-instrument -- swift`
-6. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
-7. If end-to-end verification is needed: `apex run --target <test-project> --lang swift`
+1. Run preflight check first -- `apex run` now automatically reviews the project before instrumenting
+2. Run baseline tests: `cargo nextest run -p apex-instrument -- swift`
+3. Read the affected files within your owned paths
+4. Make changes following existing patterns (llvm-cov JSON, generic CommandRunner)
+5. Write or update tests in `#[cfg(test)] mod tests` blocks
+6. Run tests: `cargo nextest run -p apex-instrument -- swift`
+7. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
+8. If end-to-end verification is needed: `apex run --target <test-project> --lang swift`
 
 ## Partner Notification
 When your changes affect partner crews, include a FLEET_NOTIFICATION block:
@@ -224,3 +243,4 @@ Officers are automatically dispatched by a SubagentStop hook after you complete 
 - Generated XCTest code must include proper `import XCTest` and `@testable import`
 - macOS vs Linux: xccov is macOS-only; Linux path uses llvm-cov export directly
 - Mock CommandRunner in unit tests -- never spawn real swift test in CI
+- **DO** run `apex run --target <test-project> --lang swift` against a real project to verify the full pipeline works, not just unit tests

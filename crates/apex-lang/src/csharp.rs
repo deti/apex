@@ -1,5 +1,6 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
+    config::InstrumentTimeouts,
     error::{ApexError, Result},
     traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
@@ -8,11 +9,6 @@ use async_trait::async_trait;
 use std::path::Path;
 use std::time::Instant;
 use tracing::{debug, info};
-
-/// 5 minutes — NuGet restore can be slow on first run or large dependency graphs.
-const RESTORE_TIMEOUT_MS: u64 = 300_000;
-/// 10 minutes — `dotnet test` compiles then runs; large projects need headroom.
-const TEST_TIMEOUT_MS: u64 = 600_000;
 
 /// Augment `PATH` with common dotnet install locations so the binary is found
 /// even when the user's shell profile hasn't been sourced (e.g. inside CI or
@@ -52,19 +48,29 @@ fn dotnet_path() -> String {
 
 pub struct CSharpRunner<R: CommandRunner = RealCommandRunner> {
     runner: R,
+    timeouts: InstrumentTimeouts,
 }
 
 impl CSharpRunner {
     pub fn new() -> Self {
         CSharpRunner {
             runner: RealCommandRunner,
+            timeouts: InstrumentTimeouts::default(),
         }
     }
 }
 
 impl<R: CommandRunner> CSharpRunner<R> {
     pub fn with_runner(runner: R) -> Self {
-        CSharpRunner { runner }
+        CSharpRunner {
+            runner,
+            timeouts: InstrumentTimeouts::default(),
+        }
+    }
+
+    pub fn with_timeouts(mut self, timeouts: InstrumentTimeouts) -> Self {
+        self.timeouts = timeouts;
+        self
     }
 
     /// Check if a binary is on the augmented dotnet PATH and return its version string.
@@ -155,7 +161,7 @@ impl<R: CommandRunner> LanguageRunner for CSharpRunner<R> {
         let spec = CommandSpec::new("dotnet", target)
             .args(["restore"])
             .env("PATH", dotnet_path())
-            .timeout(RESTORE_TIMEOUT_MS);
+            .timeout(self.timeouts.csharp_restore_ms);
         let output = self
             .runner
             .run_command(&spec)
@@ -182,7 +188,7 @@ impl<R: CommandRunner> LanguageRunner for CSharpRunner<R> {
         let spec = CommandSpec::new("dotnet", target)
             .args(args)
             .env("PATH", dotnet_path())
-            .timeout(TEST_TIMEOUT_MS);
+            .timeout(self.timeouts.csharp_ms);
         let output = self
             .runner
             .run_command(&spec)
@@ -262,6 +268,7 @@ impl<R: CommandRunner> LanguageRunner for CSharpRunner<R> {
 mod tests {
     use super::*;
     use apex_core::command::CommandOutput;
+    use apex_core::config::InstrumentTimeouts;
     use apex_core::traits::LanguageRunner;
 
     mockall::mock! {
@@ -381,7 +388,7 @@ mod tests {
             .withf(|spec| {
                 spec.program == "dotnet"
                     && spec.args == ["restore"]
-                    && spec.timeout_ms == super::RESTORE_TIMEOUT_MS
+                    && spec.timeout_ms == InstrumentTimeouts::default().csharp_restore_ms
             })
             .returning(|_| {
                 Ok(CommandOutput {
@@ -402,7 +409,7 @@ mod tests {
             .withf(|spec| {
                 spec.program == "dotnet"
                     && spec.args[0] == "test"
-                    && spec.timeout_ms == super::TEST_TIMEOUT_MS
+                    && spec.timeout_ms == InstrumentTimeouts::default().csharp_ms
             })
             .returning(|_| {
                 Ok(CommandOutput {

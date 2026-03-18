@@ -36,6 +36,33 @@ You are the **lang-ruby crew agent** -- you own the entire `apex run --lang ruby
 
 **Ownership boundary: DO NOT edit files outside these paths.** If a change is needed elsewhere, notify the owning crew.
 
+## Preflight Check
+
+The `preflight_check()` in `crates/apex-lang/src/ruby.rs` runs automatically before instrumentation when `apex run` is invoked. It detects:
+
+- **Package manager**: always `bundler`
+- **Ruby binary**: uses `resolve_ruby()` which searches: `ruby` on PATH (if >= 3.0), `/opt/homebrew/bin/ruby` (Apple Silicon), `/usr/local/bin/ruby` (Intel Mac), `~/.rbenv/shims/ruby`, `~/.asdf/shims/ruby`. Reports version as major.minor tuple
+- **Ruby version check**: warns "Ruby X.Y detected; APEX requires Ruby >= 3.0" if version is below 3.0
+- **Test framework**: RSpec (if `spec/` directory or `.rspec` file exists) or Minitest (if `test/` directory exists; also the default)
+- **Build system**: `bundler` (if `Gemfile` exists) or `rake` (if `Rakefile` exists)
+- **Required bundler version**: parses `Gemfile.lock` for `BUNDLED WITH` section; reports the pinned bundler version
+- **Native extension gem warnings**: scans `Gemfile` for gems known to require system headers:
+  - `mysql2` requires mysql-client headers
+  - `pg` requires libpq headers
+  - `nokogiri` requires libxml2/libxslt headers
+  - `sqlite3` requires sqlite3 development headers
+- **Dependencies installed**: checks for both `Gemfile.lock` and `vendor/bundle/` directory
+- **mise integration**: detects `mise` on PATH with `.mise.toml` or `.tool-versions` config
+
+**Warnings generated:**
+- "Ruby X.Y detected; APEX requires Ruby >= 3.0"
+- "gem 'mysql2' requires mysql-client headers for native extension compilation"
+- "gem 'pg' requires libpq headers for native extension compilation"
+- "gem 'nokogiri' requires libxml2/libxslt headers for native extension compilation"
+- "gem 'sqlite3' requires sqlite3 development headers for native extension compilation"
+
+**Environment recommendation:** Install Ruby >= 3.0 via rbenv, asdf, or mise. If using Homebrew Ruby, ensure `/opt/homebrew/bin/ruby` is found. For projects with native extension gems, install the corresponding system headers (e.g., `libpq-dev` for pg, `libxml2-dev` for nokogiri).
+
 ## Tech Stack
 - **Rust** -- implementation language, `async_trait`, `Arc<dyn CommandRunner>`
 - **Ruby** -- target language (must support 2.6 system Ruby through modern 3.x)
@@ -164,13 +191,14 @@ Before claiming completion:
 5. ONLY THEN write your FLEET_REPORT
 
 ## How to Work
-1. Run baseline tests: `cargo nextest run -p apex-instrument -- ruby`
-2. Read the affected files within your owned paths
-3. Make changes following existing patterns (Arc<dyn CommandRunner>, SimpleCov JSON, serde untagged)
-4. Write or update tests in `#[cfg(test)] mod tests` blocks
-5. Run tests: `cargo nextest run -p apex-instrument -- ruby`
-6. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
-7. If end-to-end verification is needed: `apex run --target <test-project> --lang ruby`
+1. Run preflight check first -- `apex run` now automatically reviews the project before instrumenting
+2. Run baseline tests: `cargo nextest run -p apex-instrument -- ruby`
+3. Read the affected files within your owned paths
+4. Make changes following existing patterns (Arc<dyn CommandRunner>, SimpleCov JSON, serde untagged)
+5. Write or update tests in `#[cfg(test)] mod tests` blocks
+6. Run tests: `cargo nextest run -p apex-instrument -- ruby`
+7. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
+8. If end-to-end verification is needed: `apex run --target <test-project> --lang ruby`
 
 ## Partner Notification
 When your changes affect partner crews, include a FLEET_NOTIFICATION block:
@@ -238,3 +266,4 @@ Officers are automatically dispatched by a SubagentStop hook after you complete 
 - Ruby 2.6 compatibility must be maintained (system Ruby on older macOS)
 - Bundler isolation is critical -- never pollute the system gem set
 - Mock CommandRunner in unit tests -- never spawn real Ruby processes in CI
+- **DO** run `apex run --target <test-project> --lang ruby` against a real project to verify the full pipeline works, not just unit tests

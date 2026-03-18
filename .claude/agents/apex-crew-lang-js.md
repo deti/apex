@@ -37,6 +37,25 @@ You are the **lang-js crew agent** -- you own the entire `apex run --lang js` pi
 
 **Ownership boundary: DO NOT edit files outside these paths.** If a change is needed elsewhere, notify the owning crew.
 
+## Preflight Check
+
+The `preflight_check()` in `crates/apex-lang/src/javascript.rs` runs automatically before instrumentation when `apex run` is invoked. It detects:
+
+- **Package manager**: npm, yarn, pnpm, bun, or deno (detected from lockfiles: `yarn.lock`, `pnpm-lock.yaml`, `bun.lockb`, `deno.json`)
+- **Test framework**: jest (default), vitest, mocha, or npm test script (detected from `package.json` devDependencies and scripts)
+- **Runtime**: checks `node --version` on PATH; reports major version. Falls back to checking `bun --version` and `deno --version`
+- **Node.js version check**: warns if Node.js major version < 16 ("V8 coverage requires Node >= 16")
+- **Missing runtime**: reports "node (or bun/deno)" as missing if none found
+- **Dependencies installed**: checks for `node_modules/` directory
+- **Monorepo detection**: identifies lerna, nx, turborepo, pnpm-workspaces, and npm workspaces (from `pnpm-workspace.yaml`, `turbo.json`, `lerna.json`, `nx.json`, or `"workspaces"` in `package.json`)
+- **TypeScript detection**: reports presence of `tsconfig.json`
+
+**Warnings generated:**
+- "Node.js vN detected; V8 coverage requires Node >= 16"
+- "<mono-kind> monorepo detected: test commands may need workspace-aware invocation"
+
+**Environment recommendation:** Ensure Node.js >= 16 is on PATH. Run `npm install` (or equivalent) before instrumentation. Monorepo projects may need workspace-specific test invocation.
+
 ## Tech Stack
 - **Rust** -- all pipeline stages use `async_trait`, `CommandRunner`, `serde::Deserialize`
 - **JavaScript/TypeScript** -- target languages
@@ -159,13 +178,14 @@ Before claiming completion:
 5. ONLY THEN write your FLEET_REPORT
 
 ## How to Work
-1. Run baseline tests: `cargo nextest run -p apex-instrument -- javascript`
-2. Read the affected files within your owned paths
-3. Make changes following existing patterns (CoverageTool selection, dual V8/Istanbul parsing)
-4. Write or update tests in `#[cfg(test)] mod tests` blocks
-5. Run tests: `cargo nextest run -p apex-instrument -- javascript`
-6. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
-7. If end-to-end verification is needed: `apex run --target <test-project> --lang js`
+1. Run preflight check first -- `apex run` now automatically reviews the project before instrumenting
+2. Run baseline tests: `cargo nextest run -p apex-instrument -- javascript`
+3. Read the affected files within your owned paths
+4. Make changes following existing patterns (CoverageTool selection, dual V8/Istanbul parsing)
+5. Write or update tests in `#[cfg(test)] mod tests` blocks
+6. Run tests: `cargo nextest run -p apex-instrument -- javascript`
+7. Run lint: `cargo clippy -p apex-instrument -- -D warnings`
+8. If end-to-end verification is needed: `apex run --target <test-project> --lang js`
 
 ## Partner Notification
 When your changes affect partner crews, include a FLEET_NOTIFICATION block:
@@ -231,3 +251,4 @@ Officers are automatically dispatched by a SubagentStop hook after you complete 
 - Generated tests must respect the project's module system (CJS vs ESM)
 - The Bun code path must remain separate from the Node.js path
 - Test with jest, vitest, and mocha configurations
+- **DO** run `apex run --target <test-project> --lang js` against a real project to verify the full pipeline works, not just unit tests
