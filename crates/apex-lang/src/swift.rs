@@ -8,6 +8,14 @@ use async_trait::async_trait;
 use std::{path::Path, time::Instant};
 use tracing::{debug, info};
 
+/// Timeout for `swift package resolve` — large projects (e.g. Vapor) pull many
+/// dependencies and 30 s is not enough.  5 minutes gives plenty of headroom.
+const RESOLVE_TIMEOUT_MS: u64 = 300_000;
+
+/// Timeout for `swift test` — compilation + test execution on a cold cache can
+/// easily exceed the default 30 s.  10 minutes covers large workspaces.
+const TEST_TIMEOUT_MS: u64 = 600_000;
+
 pub struct SwiftRunner<R: CommandRunner = RealCommandRunner> {
     runner: R,
 }
@@ -45,7 +53,13 @@ impl<R: CommandRunner> LanguageRunner for SwiftRunner<R> {
     async fn install_deps(&self, target: &Path) -> Result<()> {
         info!(target = %target.display(), "resolving Swift dependencies");
 
-        let spec = CommandSpec::new("swift", target).args(["package", "resolve"]);
+        // Use a project-local SPM cache so we never fail on a read-only global
+        // cache directory (CI images, sandboxed runners, etc.).
+        let spm_cache = target.join(".build").join("spm-cache");
+        let spec = CommandSpec::new("swift", target)
+            .args(["package", "resolve"])
+            .env("SWIFTPM_CACHE_DIR", spm_cache.to_string_lossy())
+            .timeout(RESOLVE_TIMEOUT_MS);
         let output = self
             .runner
             .run_command(&spec)
@@ -69,7 +83,9 @@ impl<R: CommandRunner> LanguageRunner for SwiftRunner<R> {
         let start = Instant::now();
         let mut args: Vec<String> = vec!["test".into()];
         args.extend_from_slice(extra_args);
-        let spec = CommandSpec::new("swift", target).args(args);
+        let spec = CommandSpec::new("swift", target)
+            .args(args)
+            .timeout(TEST_TIMEOUT_MS);
         let output = self
             .runner
             .run_command(&spec)
@@ -205,7 +221,15 @@ mod tests {
     async fn install_deps_checks_command_spec() {
         let mut mock = MockCmd::new();
         mock.expect_run_command()
-            .withf(|spec| spec.program == "swift" && spec.args == ["package", "resolve"])
+            .withf(|spec| {
+                spec.program == "swift"
+                    && spec.args == ["package", "resolve"]
+                    && spec.timeout_ms == RESOLVE_TIMEOUT_MS
+                    && spec
+                        .env
+                        .iter()
+                        .any(|(k, _)| k == "SWIFTPM_CACHE_DIR")
+            })
             .returning(|_| {
                 Ok(CommandOutput {
                     exit_code: 0,
@@ -216,5 +240,27 @@ mod tests {
         let runner = SwiftRunner::with_runner(mock);
         let tmp = tempfile::tempdir().unwrap();
         runner.install_deps(tmp.path()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_tests_uses_extended_timeout() {
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| {
+                spec.program == "swift"
+                    && spec.args == ["test"]
+                    && spec.timeout_ms == TEST_TIMEOUT_MS
+            })
+            .returning(|_| {
+                Ok(CommandOutput {
+                    exit_code: 0,
+                    stdout: b"Test Suite 'All tests' passed.\n".to_vec(),
+                    stderr: Vec::new(),
+                })
+            });
+        let runner = SwiftRunner::with_runner(mock);
+        let tmp = tempfile::tempdir().unwrap();
+        let result = runner.run_tests(tmp.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 0);
     }
 }
