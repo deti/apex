@@ -1,8 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use apex_core::error::ApexError;
 use apex_core::types::Language;
+use tokio::sync::Semaphore;
 use tracing::warn;
 
 use crate::config::{default_audit_enabled, detector_tag, DetectConfig, DetectMode};
@@ -166,20 +168,23 @@ impl DetectorPipeline {
         });
         let pure_results = futures::future::join_all(pure_futs);
 
-        // Subprocess detectors run sequentially (Cargo.lock contention)
-        let subprocess_results = async {
-            let mut results = Vec::new();
-            for d in &subprocess {
+        // Subprocess detectors run concurrently, bounded to MAX_SUBPROCESS_CONCURRENCY
+        // to avoid Cargo.lock contention and resource exhaustion.
+        const MAX_SUBPROCESS_CONCURRENCY: usize = 4;
+        let subprocess_sem = Arc::new(Semaphore::new(MAX_SUBPROCESS_CONCURRENCY));
+        let subprocess_futs = subprocess.iter().map(|d| {
+            let timeout = per_detector_timeout;
+            let sem = Arc::clone(&subprocess_sem);
+            async move {
                 let name = d.name().to_string();
-                let result = match tokio::time::timeout(per_detector_timeout, d.analyze(ctx)).await
-                {
-                    Ok(r) => r,
-                    Err(_) => Err(ApexError::Timeout(per_detector_timeout.as_millis() as u64)),
-                };
-                results.push((name, result));
+                let _permit = sem.acquire().await.expect("semaphore closed");
+                match tokio::time::timeout(timeout, d.analyze(ctx)).await {
+                    Ok(result) => (name, result),
+                    Err(_) => (name, Err(ApexError::Timeout(timeout.as_millis() as u64))),
+                }
             }
-            results
-        };
+        });
+        let subprocess_results = futures::future::join_all(subprocess_futs);
 
         let (pure_res, sub_res) = tokio::join!(pure_results, subprocess_results);
 
@@ -569,7 +574,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_all_multiple_subprocess_detectors_run_sequentially() {
+    async fn run_all_multiple_subprocess_detectors_run_concurrently() {
         let f1 = make_finding(
             "sub-a",
             "src/a.rs",
@@ -599,6 +604,34 @@ mod tests {
         let ctx = test_context();
         let report = pipeline.run_all(&ctx).await;
         assert_eq!(report.findings.len(), 2);
+        assert!(report.detector_status.iter().all(|(_, ok)| *ok));
+    }
+
+    /// Verifies that subprocess detectors beyond the semaphore limit (4) still all complete
+    /// correctly — the semaphore bounds peak concurrency, not total work.
+    #[tokio::test]
+    async fn run_all_subprocess_semaphore_bounds_concurrency() {
+        let findings: Vec<Box<dyn Detector>> = (0..6_usize)
+            .map(|i| {
+                let f = make_finding(
+                    "det",
+                    "src/x.rs",
+                    i as u32 + 1,
+                    Severity::Low,
+                    FindingCategory::DependencyVuln,
+                );
+                Box::new(MockDetector {
+                    name: "det",
+                    subprocess: true,
+                    findings: vec![f],
+                }) as Box<dyn Detector>
+            })
+            .collect();
+        let pipeline = DetectorPipeline::new(findings);
+        let ctx = test_context();
+        let report = pipeline.run_all(&ctx).await;
+        // All 6 detectors ran and returned findings
+        assert_eq!(report.findings.len(), 6);
         assert!(report.detector_status.iter().all(|(_, ok)| *ok));
     }
 
