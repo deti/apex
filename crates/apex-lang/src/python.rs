@@ -240,11 +240,12 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
         let dep_timeout = adaptive_timeout(file_count, Language::Python, OpKind::DepInstall);
         info!(target = %target.display(), ?pkg_mgr, file_count, dep_timeout, "installing Python dependencies");
 
-        // For Pip-managed projects on PEP 668 externally-managed Python (and no
-        // uv available), create a .apex-venv automatically so pip install works.
+        // For Pip-managed projects on PEP 668 externally-managed Python, create a
+        // .apex-venv automatically so pip install works. We always need a venv when
+        // the system Python is externally managed, even if uv is available — uv sync
+        // requires a pyproject.toml which bare source dirs (like CPython/Lib) don't have.
         let needs_venv = pkg_mgr == PackageManager::Pip
             && Self::find_venv_python(target).is_none()
-            && Self::resolve_uv().is_none()
             && Self::is_externally_managed(target);
 
         if needs_venv {
