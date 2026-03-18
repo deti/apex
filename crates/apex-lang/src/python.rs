@@ -77,13 +77,74 @@ impl<R: CommandRunner> PythonRunner<R> {
 
     /// Find a virtualenv python binary relative to the target directory.
     pub fn find_venv_python(target: &Path) -> Option<String> {
-        for venv_dir in &[".venv", "venv", ".env", "env"] {
+        for venv_dir in &[".apex-venv", ".venv", "venv", ".env", "env"] {
             let python_path = target.join(venv_dir).join("bin").join("python");
             if python_path.exists() {
                 return Some(python_path.to_string_lossy().into_owned());
             }
         }
         None
+    }
+
+    /// Check whether the system Python is PEP 668 externally-managed.
+    ///
+    /// Runs `python3 -c "import sysconfig; ..."` to locate the stdlib directory,
+    /// then checks for the `EXTERNALLY-MANAGED` marker file.
+    fn is_externally_managed(target: &Path) -> bool {
+        let python = Self::resolve_python();
+        let output = std::process::Command::new(python)
+            .args([
+                "-c",
+                "import sysconfig, pathlib; \
+                 stdlib = pathlib.Path(sysconfig.get_path('stdlib')); \
+                 print('yes' if (stdlib / 'EXTERNALLY-MANAGED').exists() else 'no')",
+            ])
+            .current_dir(target)
+            .output();
+        match output {
+            Ok(o) if o.status.success() => {
+                String::from_utf8_lossy(&o.stdout).trim() == "yes"
+            }
+            _ => false,
+        }
+    }
+
+    /// Ensure a `.apex-venv` virtualenv exists in `target`, creating one if needed.
+    ///
+    /// Returns the path to the venv python binary.
+    async fn ensure_venv(&self, target: &Path) -> Result<String> {
+        let venv_dir = target.join(".apex-venv");
+        let venv_python = venv_dir.join("bin").join("python");
+
+        if venv_python.exists() {
+            return Ok(venv_python.to_string_lossy().into_owned());
+        }
+
+        info!(
+            target = %target.display(),
+            "creating .apex-venv (PEP 668 externally-managed Python detected)"
+        );
+
+        let python = Self::resolve_python();
+        let spec = CommandSpec::new(python, target).args([
+            "-m",
+            "venv",
+            ".apex-venv",
+        ]);
+        let output = self
+            .runner
+            .run_command(&spec)
+            .await
+            .map_err(|e| ApexError::LanguageRunner(format!("create venv: {e}")))?;
+
+        if output.exit_code != 0 {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(ApexError::LanguageRunner(format!(
+                "failed to create .apex-venv: {stderr}"
+            )));
+        }
+
+        Ok(venv_python.to_string_lossy().into_owned())
     }
 
     /// Resolve python for a specific target: prefer venv, fall back to system.
@@ -177,8 +238,31 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
         let pkg_mgr = Self::detect_package_manager(target);
         info!(target = %target.display(), ?pkg_mgr, "installing Python dependencies");
 
-        let pip = Self::resolve_pip();
+        // For Pip-managed projects on PEP 668 externally-managed Python (and no
+        // uv available), create a .apex-venv automatically so pip install works.
+        let needs_venv = pkg_mgr == PackageManager::Pip
+            && Self::find_venv_python(target).is_none()
+            && Self::resolve_uv().is_none()
+            && Self::is_externally_managed(target);
+
+        if needs_venv {
+            self.ensure_venv(target).await?;
+        }
+
+        // Re-resolve after potential venv creation so pip/python point at the venv.
         let python = Self::resolve_python_for(target);
+        let pip = if let Some(venv) = Self::find_venv_python(target) {
+            // Use the venv's pip (sibling of the venv python).
+            let venv_path = std::path::PathBuf::from(&venv);
+            let pip_path = venv_path.with_file_name("pip");
+            if pip_path.exists() {
+                pip_path.to_string_lossy().into_owned()
+            } else {
+                Self::resolve_pip().to_string()
+            }
+        } else {
+            Self::resolve_pip().to_string()
+        };
 
         match pkg_mgr {
             PackageManager::Uv => {
@@ -225,8 +309,8 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
             }
             PackageManager::Pip => {
                 if target.join("requirements.txt").exists() {
-                    let spec =
-                        CommandSpec::new(pip, target).args(["install", "-r", "requirements.txt"]);
+                    let spec = CommandSpec::new(&pip, target)
+                        .args(["install", "-r", "requirements.txt"]);
                     let output = self
                         .runner
                         .run_command(&spec)
@@ -241,7 +325,7 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
                     }
                 } else if target.join("pyproject.toml").exists() || target.join("setup.py").exists()
                 {
-                    let spec = CommandSpec::new(pip, target).args(["install", "-e", "."]);
+                    let spec = CommandSpec::new(&pip, target).args(["install", "-e", "."]);
                     let output =
                         self.runner.run_command(&spec).await.map_err(|e| {
                             ApexError::LanguageRunner(format!("pip install -e: {e}"))
@@ -276,8 +360,9 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
                     .await
                     .map_err(|e| ApexError::LanguageRunner(e.to_string()))?
             } else {
+                // Use venv pip if available (handles PEP 668 without uv).
                 let spec =
-                    CommandSpec::new(pip, target).args(["install", "coverage", "pytest"]);
+                    CommandSpec::new(&pip, target).args(["install", "coverage", "pytest"]);
                 self.runner
                     .run_command(&spec)
                     .await
@@ -286,9 +371,34 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
 
             if output.exit_code != 0 {
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                return Err(ApexError::LanguageRunner(format!(
-                    "failed to install coverage/pytest: {stderr}"
-                )));
+
+                // If pip failed due to externally-managed environment and we haven't
+                // created a venv yet, create one now and retry.
+                if stderr.contains("externally-managed-environment") {
+                    info!("PEP 668 externally-managed environment detected, creating .apex-venv");
+                    let venv_python = self.ensure_venv(target).await?;
+                    let venv_pip = std::path::PathBuf::from(&venv_python)
+                        .with_file_name("pip")
+                        .to_string_lossy()
+                        .into_owned();
+                    let retry_spec = CommandSpec::new(&venv_pip, target)
+                        .args(["install", "coverage", "pytest"]);
+                    let retry = self
+                        .runner
+                        .run_command(&retry_spec)
+                        .await
+                        .map_err(|e| ApexError::LanguageRunner(e.to_string()))?;
+                    if retry.exit_code != 0 {
+                        let retry_stderr = String::from_utf8_lossy(&retry.stderr).to_string();
+                        return Err(ApexError::LanguageRunner(format!(
+                            "failed to install coverage/pytest: {retry_stderr}"
+                        )));
+                    }
+                } else {
+                    return Err(ApexError::LanguageRunner(format!(
+                        "failed to install coverage/pytest: {stderr}"
+                    )));
+                }
             }
         }
 

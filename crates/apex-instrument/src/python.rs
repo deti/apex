@@ -14,6 +14,19 @@ use std::{
 };
 use tracing::{debug, info, warn};
 
+/// Resolve the python binary for a target directory.
+///
+/// Checks for `.apex-venv`, `.venv`, `venv` in order, falling back to `python3`.
+fn resolve_venv_python(target: &Path) -> String {
+    for venv_dir in &[".apex-venv", ".venv", "venv"] {
+        let python_path = target.join(venv_dir).join("bin").join("python");
+        if python_path.exists() {
+            return python_path.to_string_lossy().into_owned();
+        }
+    }
+    "python3".to_string()
+}
+
 /// Check if `uv` is available on PATH.
 fn resolve_uv() -> Option<String> {
     std::process::Command::new("uv")
@@ -209,6 +222,7 @@ impl PythonInstrumentor {
         // Run: python3 apex_instrument.py <test_cmd...>
         // Prefer `uv run --with coverage --with pytest python3` when uv is available
         // so that coverage.py is guaranteed importable (handles PEP 668 envs).
+        // Fall back to .apex-venv/bin/python if the lang runner created one.
         let spec = if let Some(uv) = resolve_uv() {
             let mut args = vec![
                 "run".to_string(),
@@ -223,9 +237,11 @@ impl PythonInstrumentor {
             args.extend(test_cmd);
             CommandSpec::new(&uv, &target.root).args(args)
         } else {
+            // Use .apex-venv python if it exists (created by PEP 668 venv logic).
+            let python = resolve_venv_python(&target.root);
             let mut args = vec![script_path.to_string_lossy().to_string()];
             args.extend(test_cmd);
-            CommandSpec::new("python3", &target.root).args(args)
+            CommandSpec::new(&python, &target.root).args(args)
         };
         let output = self
             .runner
