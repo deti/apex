@@ -15,7 +15,7 @@ description: >
 
   <example>
   user: "review the codebase for issues"
-  assistant: "I'll use the apex-captain agent to dispatch all 7 crews for structured review with bug reports and officer synthesis."
+  assistant: "I'll use the apex-captain agent to dispatch all 8 crews for structured review with bug reports and officer synthesis."
   </example>
 
   <example>
@@ -176,17 +176,20 @@ officer_synthesis:
   coverage_gaps: []
 ```
 
-**In Agent Teams mode:** Present the FLEET_FINAL_REPORT directly to the user. Clean up the team.
+5. Create PRs for crew branches — each crew pushes its branch (`fleet/crew/<name>/<task>`), and the captain creates a PR per branch (or a combined PR if changes are tightly coupled)
 
-**In skill fallback:** Present the report directly to the user.
+**In Agent Teams mode:** Present the FLEET_FINAL_REPORT directly to the user. Include PR URLs. Clean up the team.
+
+**In skill fallback:** Present the report directly to the user. Include PR URLs.
 
 ## Officer Report Aggregation
 
 After crew work is done and officers have been dispatched (automatically via hooks), synthesize across all officer reports:
 
-1. Read `.fleet/changes/` for any new entries from this session
+1. Read `.fleet/changes/` for any new entries from this session — notifications are persisted here in **both** runtimes (via the `TaskCompleted` hook in Agent Teams mode and the `SubagentStop` hook in subagent fallback)
 2. Look for officer findings in hook output or teammate messages
-3. Identify:
+3. In Agent Teams mode, also check direct messages from crews — crews may message partners directly for real-time coordination in addition to the persisted changelog entries
+4. Identify:
    - **Cross-cutting themes** — same issue flagged by multiple officers
    - **Conflicting recommendations** — one officer says X, another says not-X
    - **Coverage gaps** — SDLC concerns with no matching officer
@@ -215,6 +218,7 @@ crews:
   - intelligence
   - platform
   - mcp-integration
+  - agent-ops
 
 specialists:
   - agent: "feature-dev:code-architect"
