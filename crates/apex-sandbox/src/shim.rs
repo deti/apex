@@ -53,10 +53,22 @@ void __sanitizer_cov_trace_pc_guard(uint32_t *guard) {
 }
 "#;
 
-/// Path where the compiled shim is cached.
+/// Path where the compiled shim is cached (convenience wrapper for tests).
+#[cfg(test)]
 fn shim_path() -> Result<PathBuf> {
-    let home = std::env::var("HOME").map_err(|_| ApexError::Sandbox("HOME not set".into()))?;
-    let dir = PathBuf::from(home).join(".apex").join("shims");
+    shim_path_in(None)
+}
+
+/// Path with optional base directory override (for testing).
+fn shim_path_in(base_dir: Option<&std::path::Path>) -> Result<PathBuf> {
+    let dir = match base_dir {
+        Some(base) => base.join("shims"),
+        None => {
+            let home =
+                std::env::var("HOME").map_err(|_| ApexError::Sandbox("HOME not set".into()))?;
+            PathBuf::from(home).join(".apex").join("shims")
+        }
+    };
     std::fs::create_dir_all(&dir)
         .map_err(|e| ApexError::Sandbox(format!("create shim dir: {e}")))?;
 
@@ -71,7 +83,12 @@ fn shim_path() -> Result<PathBuf> {
 /// Ensure the shim shared library exists, compiling it if needed.
 /// Returns the path to the `.so` / `.dylib`.
 pub fn ensure_compiled() -> Result<PathBuf> {
-    let out_path = shim_path()?;
+    ensure_compiled_in(None)
+}
+
+/// Like `ensure_compiled` but with an optional base directory override.
+pub fn ensure_compiled_in(base_dir: Option<&std::path::Path>) -> Result<PathBuf> {
+    let out_path = shim_path_in(base_dir)?;
     if out_path.exists() {
         debug!(path = %out_path.display(), "coverage shim already compiled");
         return Ok(out_path);
@@ -263,8 +280,8 @@ mod tests {
 
     #[test]
     fn ensure_compiled_produces_dylib() {
-        // Requires write access to ~/.apex/shims/
-        match ensure_compiled() {
+        let tmp = tempfile::tempdir().unwrap();
+        match ensure_compiled_in(Some(tmp.path())) {
             Ok(path) => {
                 assert!(
                     path.exists(),
@@ -278,15 +295,19 @@ mod tests {
                     assert_eq!(ext, "so");
                 }
             }
-            Err(_) => {} // sandboxed — can't create ~/.apex/shims
+            Err(_) => {} // compiler not available
         }
     }
 
     #[test]
     fn ensure_compiled_is_idempotent() {
-        match (ensure_compiled(), ensure_compiled()) {
+        let tmp = tempfile::tempdir().unwrap();
+        match (
+            ensure_compiled_in(Some(tmp.path())),
+            ensure_compiled_in(Some(tmp.path())),
+        ) {
             (Ok(p1), Ok(p2)) => assert_eq!(p1, p2),
-            _ => {} // sandboxed
+            _ => {} // compiler not available
         }
     }
 

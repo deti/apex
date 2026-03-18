@@ -15,12 +15,15 @@ use std::sync::Mutex;
 /// A condition parser: takes source text, returns `(line_number, condition)` pairs.
 pub type ConditionParser = fn(&str) -> Vec<(u32, ConditionTree)>;
 
+/// Cached parse results: `(file_path, conditions)` pairs.
+type ParseCache = Vec<(String, Vec<(u32, ConditionTree)>)>;
+
 /// Static concolic strategy that extracts conditions from source code and
 /// generates boundary seeds without runtime tracing.
 pub struct StaticConcolicStrategy {
     name: String,
     parser: ConditionParser,
-    cache: Mutex<Vec<(String, Vec<(u32, ConditionTree)>)>>,
+    cache: Mutex<ParseCache>,
 }
 
 impl StaticConcolicStrategy {
