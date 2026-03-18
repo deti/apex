@@ -741,6 +741,33 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
 
     info!(target = %target_path.display(), lang = %lang, strategy = %args.strategy, "starting APEX");
 
+    // 0. Preflight check — review project structure before doing anything
+    let preflight = preflight_check(lang, &target_path);
+    if let Ok(ref info) = preflight {
+        if !info.missing_tools.is_empty() {
+            for tool in &info.missing_tools {
+                eprintln!("  \x1b[33m⚠\x1b[0m Missing tool: {tool}");
+            }
+        }
+        for (tool, ver) in &info.available_tools {
+            info!(tool, ver, "tool available");
+        }
+        for warning in &info.warnings {
+            eprintln!("  \x1b[33m⚠\x1b[0m {warning}");
+        }
+        if let Some(ref bs) = info.build_system {
+            info!(build_system = bs, "detected build system");
+        }
+        if let Some(ref tf) = info.test_framework {
+            info!(test_framework = tf, "detected test framework");
+        }
+        // Log summary
+        let summary = info.summary();
+        if !summary.is_empty() {
+            info!(summary, "preflight check complete");
+        }
+    }
+
     // 1. Install deps
     if !args.no_install {
         install_deps(lang, &target_path).await?;
@@ -1082,6 +1109,28 @@ fn fuzz_command(args: &RunArgs, target_path: &std::path::Path) -> Vec<String> {
 // ---------------------------------------------------------------------------
 // Helpers shared between `run` and `ratchet`
 // ---------------------------------------------------------------------------
+
+fn preflight_check(
+    lang: Language,
+    target: &std::path::Path,
+) -> std::result::Result<apex_core::traits::PreflightInfo, apex_core::error::ApexError> {
+    use apex_core::traits::LanguageRunner;
+    let runner_check = |r: &dyn apex_core::traits::LanguageRunner| r.preflight_check(target);
+    match lang {
+        Language::Python => runner_check(&PythonRunner::new()),
+        Language::JavaScript => runner_check(&JavaScriptRunner::new()),
+        Language::Java => runner_check(&JavaRunner::new()),
+        Language::Kotlin => runner_check(&KotlinRunner::new()),
+        Language::Go => runner_check(&apex_lang::go::GoRunner::new()),
+        Language::Swift => runner_check(&apex_lang::swift::SwiftRunner::new()),
+        Language::CSharp => runner_check(&apex_lang::csharp::CSharpRunner::new()),
+        Language::Ruby => runner_check(&apex_lang::ruby::RubyRunner::new()),
+        Language::C => runner_check(&CRunner::new()),
+        Language::Cpp => runner_check(&apex_lang::cpp::CppRunner::new()),
+        Language::Rust => runner_check(&apex_lang::rust_lang::RustRunner::new()),
+        Language::Wasm => Ok(apex_core::traits::PreflightInfo::default()),
+    }
+}
 
 async fn install_deps(lang: Language, target: &std::path::Path) -> Result<()> {
     match lang {
