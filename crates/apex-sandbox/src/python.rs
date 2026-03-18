@@ -15,6 +15,18 @@ use std::{
 };
 use tracing::{debug, warn};
 
+/// Check if `uv` is available on PATH.
+fn resolve_uv() -> Option<String> {
+    std::process::Command::new("uv")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()
+        .filter(|s| s.success())
+        .map(|_| "uv".to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Coverage JSON wire types (mirrors apex-instrument)
 // ---------------------------------------------------------------------------
@@ -48,6 +60,8 @@ pub struct PythonTestSandbox {
     file_paths: Arc<HashMap<u64, PathBuf>>,
     target_dir: PathBuf,
     timeout_ms: u64,
+    /// Cached uv binary path — resolved once at construction time.
+    uv_bin: Option<String>,
 }
 
 impl PythonTestSandbox {
@@ -61,6 +75,7 @@ impl PythonTestSandbox {
             file_paths,
             target_dir,
             timeout_ms: 30_000,
+            uv_bin: resolve_uv(),
         }
     }
 
@@ -122,39 +137,80 @@ impl Sandbox for PythonTestSandbox {
         // `runner: Arc<dyn CommandRunner>` field and updating the Sandbox trait or
         // this struct's constructor.
 
-        // Validate python3 is available before spawning.
-        let python_check = tokio::process::Command::new("python3")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await;
-        if python_check.map(|s| !s.success()).unwrap_or(true) {
-            return Err(ApexError::Sandbox("python3 not found in PATH".into()));
+        // Validate that either uv or python3 is available before spawning.
+        if let Some(uv) = &self.uv_bin {
+            let uv_check = tokio::process::Command::new(uv)
+                .args(["run", "python3", "--version"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+            if uv_check.map(|s| !s.success()).unwrap_or(true) {
+                return Err(ApexError::Sandbox(
+                    "uv run python3 failed — is python3 available via uv?".into(),
+                ));
+            }
+        } else {
+            let python_check = tokio::process::Command::new("python3")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+            if python_check.map(|s| !s.success()).unwrap_or(true) {
+                return Err(ApexError::Sandbox("python3 not found in PATH".into()));
+            }
         }
 
         // Step 1: run pytest under coverage.py
-        let run_output = tokio::time::timeout(
-            std::time::Duration::from_millis(self.timeout_ms),
-            tokio::process::Command::new("python3")
-                .args([
-                    "-m",
-                    "coverage",
-                    "run",
-                    "--branch",
-                    "--source=.",
-                    &format!("--data-file={}", cov_data.display()),
-                    "-m",
-                    "pytest",
-                    &test_file.to_string_lossy(),
-                    "-x",
-                    "-q",
-                    "--tb=short",
-                ])
-                .current_dir(&self.target_dir)
-                .output(),
-        )
-        .await;
+        // Prefer `uv run python3` when uv is available.
+        let run_output = if let Some(uv) = &self.uv_bin {
+            tokio::time::timeout(
+                std::time::Duration::from_millis(self.timeout_ms),
+                tokio::process::Command::new(uv)
+                    .args([
+                        "run",
+                        "python3",
+                        "-m",
+                        "coverage",
+                        "run",
+                        "--branch",
+                        "--source=.",
+                        &format!("--data-file={}", cov_data.display()),
+                        "-m",
+                        "pytest",
+                        &test_file.to_string_lossy(),
+                        "-x",
+                        "-q",
+                        "--tb=short",
+                    ])
+                    .current_dir(&self.target_dir)
+                    .output(),
+            )
+            .await
+        } else {
+            tokio::time::timeout(
+                std::time::Duration::from_millis(self.timeout_ms),
+                tokio::process::Command::new("python3")
+                    .args([
+                        "-m",
+                        "coverage",
+                        "run",
+                        "--branch",
+                        "--source=.",
+                        &format!("--data-file={}", cov_data.display()),
+                        "-m",
+                        "pytest",
+                        &test_file.to_string_lossy(),
+                        "-x",
+                        "-q",
+                        "--tb=short",
+                    ])
+                    .current_dir(&self.target_dir)
+                    .output(),
+            )
+            .await
+        };
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -186,20 +242,39 @@ impl Sandbox for PythonTestSandbox {
         };
 
         // Step 2: export coverage to JSON (best-effort; may fail on syntax errors)
-        let json_ok = tokio::process::Command::new("python3")
-            .args([
-                "-m",
-                "coverage",
-                "json",
-                &format!("--data-file={}", cov_data.display()),
-                "-o",
-                &cov_json.to_string_lossy(),
-            ])
-            .current_dir(&self.target_dir)
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+        let json_ok = if let Some(uv) = &self.uv_bin {
+            tokio::process::Command::new(uv)
+                .args([
+                    "run",
+                    "python3",
+                    "-m",
+                    "coverage",
+                    "json",
+                    &format!("--data-file={}", cov_data.display()),
+                    "-o",
+                    &cov_json.to_string_lossy(),
+                ])
+                .current_dir(&self.target_dir)
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        } else {
+            tokio::process::Command::new("python3")
+                .args([
+                    "-m",
+                    "coverage",
+                    "json",
+                    &format!("--data-file={}", cov_data.display()),
+                    "-o",
+                    &cov_json.to_string_lossy(),
+                ])
+                .current_dir(&self.target_dir)
+                .output()
+                .await
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
 
         // Step 3: compute coverage delta vs oracle
         let new_branches = if json_ok && cov_json.exists() {
@@ -285,6 +360,16 @@ mod tests {
         let sb = PythonTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/proj"));
         assert_eq!(sb.timeout_ms, 30_000);
         assert_eq!(sb.target_dir, PathBuf::from("/proj"));
+    }
+
+    #[test]
+    fn new_caches_uv_bin_at_construction() {
+        let sb = PythonTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/proj"));
+        // uv_bin is either None (uv absent) or Some("uv") — never panics.
+        match &sb.uv_bin {
+            None => {}
+            Some(s) => assert_eq!(s, "uv", "expected 'uv', got: {s}"),
+        }
     }
 
     #[test]

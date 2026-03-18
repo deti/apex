@@ -14,6 +14,18 @@ use std::{
 };
 use tracing::{debug, info, warn};
 
+/// Check if `uv` is available on PATH.
+fn resolve_uv() -> Option<String> {
+    std::process::Command::new("uv")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()
+        .filter(|s| s.success())
+        .map(|_| "uv".to_string())
+}
+
 /// Python helper script bundled at compile time.
 const INSTRUMENT_SCRIPT: &str = include_str!("scripts/apex_instrument.py");
 
@@ -195,10 +207,17 @@ impl PythonInstrumentor {
         );
 
         // Run: python3 apex_instrument.py <test_cmd...>
-        let mut args = vec![script_path.to_string_lossy().to_string()];
-        args.extend(test_cmd);
-
-        let spec = CommandSpec::new("python3", &target.root).args(args);
+        // Prefer `uv run python3` when uv is available (handles PEP 668 envs).
+        let spec = if let Some(uv) = resolve_uv() {
+            let mut args = vec!["run".to_string(), "python3".to_string()];
+            args.push(script_path.to_string_lossy().to_string());
+            args.extend(test_cmd);
+            CommandSpec::new(&uv, &target.root).args(args)
+        } else {
+            let mut args = vec![script_path.to_string_lossy().to_string()];
+            args.extend(test_cmd);
+            CommandSpec::new("python3", &target.root).args(args)
+        };
         let output = self
             .runner
             .run_command(&spec)

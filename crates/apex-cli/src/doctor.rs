@@ -157,23 +157,35 @@ async fn checks_core(runner: &dyn CommandRunner) -> Vec<Check> {
 }
 
 async fn checks_python(runner: &dyn CommandRunner) -> Vec<Check> {
-    vec![
-        check_required(
-            runner,
-            "python3",
-            "Python 3 interpreter",
-            "python3",
-            &["--version"],
-        )
-        .await,
-        check_required(
-            runner,
-            "pip3",
-            "pip package manager",
-            "pip3",
-            &["--version"],
-        )
-        .await,
+    let python3 = check_required(
+        runner,
+        "python3",
+        "Python 3 interpreter",
+        "python3",
+        &["--version"],
+    )
+    .await;
+
+    let uv = check_optional(runner, "uv", "Fast Python package manager", "uv", &["--version"]).await;
+    let uv_available = matches!(uv.status, Status::Ok(_));
+
+    let pip3 = if uv_available {
+        Check {
+            name: "pip3",
+            description: "pip package manager",
+            status: Status::Warn("pip not needed (uv available)".into()),
+        }
+    } else {
+        check_required(runner, "pip3", "pip package manager", "pip3", &["--version"]).await
+    };
+
+    let pytest = if uv_available {
+        Check {
+            name: "pytest",
+            description: "Python test runner",
+            status: Status::Warn("managed by uv".into()),
+        }
+    } else {
         check_optional(
             runner,
             "pytest",
@@ -181,7 +193,16 @@ async fn checks_python(runner: &dyn CommandRunner) -> Vec<Check> {
             "python3",
             &["-m", "pytest", "--version"],
         )
-        .await,
+        .await
+    };
+
+    let coverage = if uv_available {
+        Check {
+            name: "coverage.py",
+            description: "Python coverage tool",
+            status: Status::Warn("managed by uv".into()),
+        }
+    } else {
         check_optional(
             runner,
             "coverage.py",
@@ -189,8 +210,10 @@ async fn checks_python(runner: &dyn CommandRunner) -> Vec<Check> {
             "python3",
             &["-m", "coverage", "--version"],
         )
-        .await,
-    ]
+        .await
+    };
+
+    vec![python3, uv, pip3, pytest, coverage]
 }
 
 async fn checks_javascript(runner: &dyn CommandRunner) -> Vec<Check> {
@@ -731,8 +754,9 @@ mod tests {
     async fn checks_python_runs_without_panic() {
         let runner = RealCommandRunner;
         let checks = checks_python(&runner).await;
-        assert!(checks.len() >= 4);
+        assert!(checks.len() >= 5);
         assert!(checks.iter().any(|c| c.name == "python3"));
+        assert!(checks.iter().any(|c| c.name == "uv"));
         assert!(checks.iter().any(|c| c.name == "pip3"));
     }
 
@@ -1274,23 +1298,32 @@ mod tests {
 
     #[tokio::test]
     async fn mock_checks_python_all_found() {
+        // When uv is present, pip3/pytest/coverage.py are downgraded to Warn.
         let runner = MockRunner::all_succeed("Python 3.12.0");
         let checks = checks_python(&runner).await;
-        for c in &checks {
-            assert!(
-                matches!(&c.status, Status::Ok(_)),
-                "expected Ok for {}",
-                c.name
-            );
-        }
+        // python3 and uv should be Ok
+        let py = checks.iter().find(|c| c.name == "python3").unwrap();
+        assert!(matches!(&py.status, Status::Ok(_)), "expected Ok for python3");
+        let uv = checks.iter().find(|c| c.name == "uv").unwrap();
+        assert!(matches!(&uv.status, Status::Ok(_)), "expected Ok for uv");
+        // pip3/pytest/coverage.py are Warn because uv is available
+        let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
+        assert!(matches!(&pip.status, Status::Warn(_)), "expected Warn for pip3 when uv available");
+        let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
+        assert!(matches!(&pytest.status, Status::Warn(_)), "expected Warn for pytest when uv available");
+        let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
+        assert!(matches!(&cov.status, Status::Warn(_)), "expected Warn for coverage.py when uv available");
     }
 
     #[tokio::test]
     async fn mock_checks_python_all_missing() {
+        // When uv is absent, pip3 stays required (Fail), pytest/coverage stay Warn.
         let runner = MockRunner::all_fail();
         let checks = checks_python(&runner).await;
         let py = checks.iter().find(|c| c.name == "python3").unwrap();
         assert!(matches!(&py.status, Status::Fail(_)));
+        let uv = checks.iter().find(|c| c.name == "uv").unwrap();
+        assert!(matches!(&uv.status, Status::Warn(_)));
         let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
         assert!(matches!(&pip.status, Status::Fail(_)));
         // optional ones should be Warn
@@ -1512,13 +1545,98 @@ mod tests {
 
     // --- Individual tool checks within groups ---
 
+    // uv
+    #[tokio::test]
+    async fn mock_uv_found() {
+        // When uv is present, its check is Ok and pip3/pytest/coverage.py are downgraded to Warn.
+        let runner = MockRunner::with_handler(|spec| {
+            if spec.program == "uv" {
+                Ok(CommandOutput::success(b"uv 0.6.5 (abc123)".to_vec()))
+            } else {
+                Ok(CommandOutput::success(b"Python 3.14.3".to_vec()))
+            }
+        });
+        let checks = checks_python(&runner).await;
+        let uv = checks.iter().find(|c| c.name == "uv").unwrap();
+        assert!(
+            matches!(&uv.status, Status::Ok(v) if v.contains("uv")),
+            "expected uv check to be Ok with version string"
+        );
+        // pip3, pytest, coverage.py must all be Warn (downgraded)
+        let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
+        assert!(matches!(&pip.status, Status::Warn(_)), "pip3 should be Warn when uv present");
+        let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
+        assert!(
+            matches!(&pytest.status, Status::Warn(_)),
+            "pytest should be Warn when uv present"
+        );
+        let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
+        assert!(
+            matches!(&cov.status, Status::Warn(_)),
+            "coverage.py should be Warn when uv present"
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_uv_not_found() {
+        // When uv is absent, its check is Warn and pip3 retains its required status.
+        let runner = MockRunner::with_handler(|spec| {
+            if spec.program == "uv" {
+                Err(ApexError::Subprocess {
+                    exit_code: 127,
+                    stderr: "not found".into(),
+                })
+            } else if spec.program == "pip3" {
+                Ok(CommandOutput::success(b"pip 23.3 from /usr/lib/python3".to_vec()))
+            } else {
+                Ok(CommandOutput::success(b"Python 3.14.3".to_vec()))
+            }
+        });
+        let checks = checks_python(&runner).await;
+        let uv = checks.iter().find(|c| c.name == "uv").unwrap();
+        assert!(
+            matches!(&uv.status, Status::Warn(_)),
+            "uv check should be Warn when not found"
+        );
+        // pip3 retains its required check (Ok here since pip3 succeeds)
+        let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
+        assert!(
+            matches!(&pip.status, Status::Ok(_)),
+            "pip3 should be Ok when uv absent and pip3 found"
+        );
+    }
+
     // pip3
     #[tokio::test]
-    async fn mock_pip3_found() {
-        let runner = MockRunner::all_succeed("pip 23.3.1 from /usr/lib/python3/dist-packages/pip");
+    async fn mock_pip3_found_with_uv_absent() {
+        // uv not found → pip3 required check runs and finds pip3.
+        let runner = MockRunner::with_handler(|spec| {
+            if spec.program == "uv" {
+                Err(ApexError::Subprocess {
+                    exit_code: 127,
+                    stderr: "not found".into(),
+                })
+            } else {
+                Ok(CommandOutput::success(
+                    b"pip 23.3.1 from /usr/lib/python3/dist-packages/pip".to_vec(),
+                ))
+            }
+        });
         let checks = checks_python(&runner).await;
         let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
         assert!(matches!(&pip.status, Status::Ok(v) if v.contains("pip")));
+    }
+
+    #[tokio::test]
+    async fn mock_pip3_downgraded_when_uv_present() {
+        // uv found → pip3 is Warn (not a required check).
+        let runner = MockRunner::all_succeed("uv 0.6.1");
+        let checks = checks_python(&runner).await;
+        let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
+        assert!(
+            matches!(&pip.status, Status::Warn(msg) if msg.contains("uv available")),
+            "expected pip3 to be Warn when uv is present"
+        );
     }
 
     #[tokio::test]
@@ -1531,11 +1649,33 @@ mod tests {
 
     // pytest
     #[tokio::test]
-    async fn mock_pytest_found() {
-        let runner = MockRunner::all_succeed("pytest 7.4.3");
+    async fn mock_pytest_found_with_uv_absent() {
+        // uv not found → pytest optional check runs and finds it.
+        let runner = MockRunner::with_handler(|spec| {
+            if spec.program == "uv" {
+                Err(ApexError::Subprocess {
+                    exit_code: 127,
+                    stderr: "not found".into(),
+                })
+            } else {
+                Ok(CommandOutput::success(b"pytest 7.4.3".to_vec()))
+            }
+        });
         let checks = checks_python(&runner).await;
         let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
         assert!(matches!(&pytest.status, Status::Ok(v) if v.contains("pytest")));
+    }
+
+    #[tokio::test]
+    async fn mock_pytest_downgraded_when_uv_present() {
+        // uv found → pytest is Warn "managed by uv".
+        let runner = MockRunner::all_succeed("uv 0.6.1");
+        let checks = checks_python(&runner).await;
+        let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
+        assert!(
+            matches!(&pytest.status, Status::Warn(msg) if msg.contains("uv")),
+            "expected pytest to be Warn when uv is present"
+        );
     }
 
     #[tokio::test]
@@ -1548,11 +1688,33 @@ mod tests {
 
     // coverage.py
     #[tokio::test]
-    async fn mock_coverage_py_found() {
-        let runner = MockRunner::all_succeed("Coverage.py, version 7.3.2");
+    async fn mock_coverage_py_found_with_uv_absent() {
+        // uv not found → coverage.py optional check runs and finds it.
+        let runner = MockRunner::with_handler(|spec| {
+            if spec.program == "uv" {
+                Err(ApexError::Subprocess {
+                    exit_code: 127,
+                    stderr: "not found".into(),
+                })
+            } else {
+                Ok(CommandOutput::success(b"Coverage.py, version 7.3.2".to_vec()))
+            }
+        });
         let checks = checks_python(&runner).await;
         let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
         assert!(matches!(&cov.status, Status::Ok(v) if v.contains("Coverage")));
+    }
+
+    #[tokio::test]
+    async fn mock_coverage_py_downgraded_when_uv_present() {
+        // uv found → coverage.py is Warn "managed by uv".
+        let runner = MockRunner::all_succeed("uv 0.6.1");
+        let checks = checks_python(&runner).await;
+        let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
+        assert!(
+            matches!(&cov.status, Status::Warn(msg) if msg.contains("uv")),
+            "expected coverage.py to be Warn when uv is present"
+        );
     }
 
     #[tokio::test]
@@ -1777,12 +1939,16 @@ mod tests {
 
     #[tokio::test]
     async fn recording_runner_python_calls_correct_binaries() {
+        // When uv succeeds, pip3 is skipped (downgraded to synthetic Warn).
+        // So only python3 and uv are actually invoked.
         let runner = RecordingRunner::new_all_succeed("v1.0");
         let _ = checks_python(&runner).await;
         let calls = runner.calls().await;
         let programs: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
         assert!(programs.contains(&"python3"));
-        assert!(programs.contains(&"pip3"));
+        assert!(programs.contains(&"uv"));
+        // pip3 not invoked when uv is available
+        assert!(!programs.contains(&"pip3"));
     }
 
     #[tokio::test]
@@ -1833,10 +1999,12 @@ mod tests {
 
     #[tokio::test]
     async fn mock_selective_some_tools_found_some_not() {
+        // python3 found, uv NOT found, pip3 NOT found.
+        // Since uv is absent, pip3 falls back to required check → Fail.
         let runner = MockRunner::with_handler(|spec| {
             if spec.program == "python3" {
                 Ok(CommandOutput::success(b"Python 3.12.0".to_vec()))
-            } else if spec.program == "pip3" {
+            } else if spec.program == "uv" || spec.program == "pip3" {
                 Err(ApexError::Subprocess {
                     exit_code: 127,
                     stderr: "not found".into(),
@@ -1848,8 +2016,37 @@ mod tests {
         let checks = checks_python(&runner).await;
         let py = checks.iter().find(|c| c.name == "python3").unwrap();
         assert!(matches!(&py.status, Status::Ok(_)));
+        let uv = checks.iter().find(|c| c.name == "uv").unwrap();
+        assert!(matches!(&uv.status, Status::Warn(_)));
         let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
         assert!(matches!(&pip.status, Status::Fail(_)));
+    }
+
+    #[tokio::test]
+    async fn mock_selective_uv_found_pip3_skipped() {
+        // python3 found, uv found → pip3/pytest/coverage.py are Warn regardless of their actual presence.
+        let runner = MockRunner::with_handler(|spec| {
+            if spec.program == "python3" {
+                Ok(CommandOutput::success(b"Python 3.12.0".to_vec()))
+            } else if spec.program == "uv" {
+                Ok(CommandOutput::success(b"uv 0.6.1".to_vec()))
+            } else {
+                Err(ApexError::Subprocess {
+                    exit_code: 127,
+                    stderr: "not found".into(),
+                })
+            }
+        });
+        let checks = checks_python(&runner).await;
+        let uv = checks.iter().find(|c| c.name == "uv").unwrap();
+        assert!(matches!(&uv.status, Status::Ok(_)));
+        // pip3 is downgraded to Warn when uv is present
+        let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
+        assert!(matches!(&pip.status, Status::Warn(_)));
+        let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
+        assert!(matches!(&pytest.status, Status::Warn(_)));
+        let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
+        assert!(matches!(&cov.status, Status::Warn(_)));
     }
 
     #[tokio::test]
@@ -1962,9 +2159,9 @@ mod tests {
         // Core
         assert!(programs.contains(&"rustc"));
         assert!(programs.contains(&"cargo"));
-        // Python
+        // Python (uv found → pip3 not invoked)
         assert!(programs.contains(&"python3"));
-        assert!(programs.contains(&"pip3"));
+        assert!(programs.contains(&"uv"));
         // JavaScript
         assert!(programs.contains(&"node"));
         assert!(programs.contains(&"npm"));
@@ -2198,10 +2395,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_checks_python_returns_four_checks() {
+    async fn mock_checks_python_returns_five_checks() {
         let runner = MockRunner::all_succeed("v1.0");
         let checks = checks_python(&runner).await;
-        assert_eq!(checks.len(), 4);
+        assert_eq!(checks.len(), 5);
     }
 
     #[tokio::test]
@@ -2302,14 +2499,27 @@ mod tests {
 
     #[tokio::test]
     async fn recording_runner_python_pytest_uses_dash_m() {
-        let runner = RecordingRunner::new_all_succeed("v1.0");
+        // When uv is absent, pytest is invoked as python3 -m pytest --version.
+        // Build a RecordingRunner where uv fails so the uv-absent path is taken.
+        let runner = RecordingRunner {
+            handler: Arc::new(|spec: &CommandSpec| {
+                if spec.program == "uv" {
+                    Err(ApexError::Subprocess {
+                        exit_code: 127,
+                        stderr: "not found".into(),
+                    })
+                } else {
+                    Ok(CommandOutput::success(b"v1.0".to_vec()))
+                }
+            }),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        };
         let _ = checks_python(&runner).await;
         let calls = runner.calls().await;
-        // pytest is invoked as python3 -m pytest --version
         let pytest_call = calls
             .iter()
             .find(|c| c.1.contains(&"-m".to_string()) && c.1.contains(&"pytest".to_string()));
-        assert!(pytest_call.is_some());
+        assert!(pytest_call.is_some(), "pytest -m call not found");
         let call = pytest_call.unwrap();
         assert_eq!(call.0, "python3");
         assert_eq!(call.1, vec!["-m", "pytest", "--version"]);
@@ -2317,11 +2527,24 @@ mod tests {
 
     #[tokio::test]
     async fn recording_runner_python_coverage_uses_dash_m() {
-        let runner = RecordingRunner::new_all_succeed("v1.0");
+        // When uv is absent, coverage.py is invoked as python3 -m coverage --version.
+        let runner = RecordingRunner {
+            handler: Arc::new(|spec: &CommandSpec| {
+                if spec.program == "uv" {
+                    Err(ApexError::Subprocess {
+                        exit_code: 127,
+                        stderr: "not found".into(),
+                    })
+                } else {
+                    Ok(CommandOutput::success(b"v1.0".to_vec()))
+                }
+            }),
+            calls: Arc::new(Mutex::new(Vec::new())),
+        };
         let _ = checks_python(&runner).await;
         let calls = runner.calls().await;
         let cov_call = calls.iter().find(|c| c.1.contains(&"coverage".to_string()));
-        assert!(cov_call.is_some());
+        assert!(cov_call.is_some(), "coverage -m call not found");
         let call = cov_call.unwrap();
         assert_eq!(call.0, "python3");
         assert_eq!(call.1, vec!["-m", "coverage", "--version"]);
