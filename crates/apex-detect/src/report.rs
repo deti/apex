@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::finding::{Finding, Severity};
+use crate::hunt_hints::{HuntHintConfig, HuntHints};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisReport {
@@ -9,6 +10,15 @@ pub struct AnalysisReport {
 }
 
 impl AnalysisReport {
+    /// Build hunt priority hints from this report's findings.
+    ///
+    /// Callers (e.g. `apex run` orchestrator) can pass the returned `HuntHints`
+    /// to `HuntHints::security_boost_for(file, line)` when scoring uncovered
+    /// branches, so that branches near security findings are explored first.
+    pub fn hunt_hints(&self) -> HuntHints {
+        HuntHints::from_findings(&self.findings, HuntHintConfig::default())
+    }
+
     pub fn security_summary(&self) -> SecuritySummary {
         let mut critical = 0;
         let mut high = 0;
@@ -226,5 +236,24 @@ mod tests {
         let report2: AnalysisReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report2.findings.len(), 1);
         assert_eq!(report2.detector_status.len(), 1);
+    }
+
+    #[test]
+    fn hunt_hints_from_report_boosts_nearby_branch() {
+        use std::path::Path;
+        let mut f = make_finding(Severity::Critical);
+        f.file = PathBuf::from("src/auth.rs");
+        f.line = Some(50);
+        let report = AnalysisReport {
+            findings: vec![f],
+            detector_status: vec![],
+        };
+        let hints = report.hunt_hints();
+        // Branch at line 50 in the same file should receive a boost
+        assert!(hints.security_boost_for(Path::new("src/auth.rs"), 50) > 0.0);
+        // Branch in a different file should not
+        assert_eq!(hints.security_boost_for(Path::new("src/other.rs"), 50), 0.0);
+        // There should be 1 file with hints
+        assert_eq!(hints.file_count(), 1);
     }
 }

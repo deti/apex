@@ -5,6 +5,8 @@ All notable changes to APEX will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Concurrent subprocess detectors** — `DetectorPipeline::run_all` now runs subprocess detectors (e.g. dep-audit) concurrently with a semaphore (max 4) instead of sequentially, reducing audit wall time when multiple subprocess detectors are enabled
+- **HUNT+INTEL integration (`hunt_hints` module)** — `apex-detect` now exposes `HuntHints`, `HuntHintConfig`, and `AnalysisReport::hunt_hints()` to convert security findings into priority boosts for the hunt phase; uncovered branches within a configurable line window of a finding receive a severity-scaled boost so the orchestrator explores security-adjacent code first
 - **`apex integrate` subcommand** — auto-writes MCP server config for Claude Code, Cursor, and Windsurf with --editor, --global, --dry-run flags and config merging
 - **33 total MCP tools** — full CLI coverage via MCP protocol (was 6, added 27: complexity, dead-code, risk, hotpaths, test-optimize, test-prioritize, blast-radius, secret-scan, data-flow, diff, regression-check, lint, flaky-detect, contracts, attack-surface, verify-boundaries, features, index, docs, license-scan, flag-hygiene, api-diff, compliance-export, api-coverage, service-map, schema-check, test-data)
 - **Scripted test harness** — `ScriptedSandbox` and `ScriptedStrategy` mocks for deterministic orchestrator loop testing
@@ -17,6 +19,18 @@ All notable changes to APEX will be documented in this file.
 - **Dependency audit for C/C++** — `osv-scanner` integration for lockfile scanning; reports Info finding when tool is not installed
 - **Exhaustive language match** in `DependencyAuditDetector::analyze()` — replaces wildcard arm with explicit arms for all 12 languages; remaining unsupported languages (Java, Kotlin, Go, Wasm) return empty
 - **+28 tests** for new dep audit parsers and language dispatch
+- **Test synthesis for 8 languages** — Go (`go test`), C++ (Google Test), C (`assert.h`), C# (xUnit), Swift (XCTest), Kotlin (JUnit5), Ruby (RSpec), WASM (Jest wrapper); all via `TestSynthesizer` trait with dedup, chunking, and hash-named output files
+- **+58 tests** for test synthesis expansion
+- **Fuzzing harness generators** — C# (SharpFuzz `Fuzzer.Run`) and Swift (libFuzzer `@_cdecl("LLVMFuzzerTestOneInput")`) harness code generation
+- **+12 tests** for fuzz harness generators
+- **Ruby test sandbox** — `RubyTestSandbox` with SimpleCov JSON parser for coverage-guided execution
+- **Kotlin per-test indexer** — JaCoCo-based per-test branch indexing via Gradle
+- **+25 tests** for Ruby sandbox and Kotlin indexer
+- **Concolic condition parsers for 7 languages** — Rust (`if`/`match`/`if let`/`.is_some()`), Go (`err != nil`/`switch`/`len()`), Java/Kotlin (`instanceof`/`.equals()`), C# (`is Type`/`?.`/`??`), Swift (`if let`/`guard let`), C/C++ (`ptr != NULL`/`flags & MASK`), Ruby (`.nil?`/`unless`/`case/when`); all parse into shared `ConditionTree` IR
+- **Boundary seed generator** — `boundary_values(ConditionTree)` generates concrete values near decision boundaries for concolic execution
+- **`StaticConcolicStrategy`** — language-agnostic `Strategy` impl that accepts pluggable condition parsers
+- **+53 tests** for concolic expansion
+- **README marketing redesign** — new headline, hero SVG (18s, no scroll), Quick Start, comparison table, language support matrix, CI/CD example
 
 ## [0.2.1] — 2026-03-16
 

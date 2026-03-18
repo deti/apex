@@ -19,6 +19,7 @@ pub mod dep_graph;
 pub mod detectors;
 pub mod doc_coverage;
 pub mod finding;
+pub mod hunt_hints;
 pub mod i18n_check;
 pub mod iac_scan;
 pub mod incident_match;
@@ -47,6 +48,7 @@ pub mod vuln_pipeline;
 pub use config::{DetectConfig, DetectMode};
 pub use context::AnalysisContext;
 pub use finding::{Evidence, Finding, FindingCategory, Fix, Severity};
+pub use hunt_hints::{HuntHintConfig, HuntHint, HuntHints};
 pub use pipeline::DetectorPipeline;
 pub use report::{AnalysisReport, SecuritySummary};
 
