@@ -12,6 +12,39 @@ use std::{
 };
 use tracing::{debug, info, warn};
 
+/// 10 minutes — `dotnet test --collect` compiles, runs tests, and collects coverage.
+const INSTRUMENT_TIMEOUT_MS: u64 = 600_000;
+
+/// Augment `PATH` with common dotnet install locations.
+fn dotnet_path() -> String {
+    let mut paths: Vec<String> = Vec::new();
+
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_dotnet = Path::new(&home).join(".dotnet");
+        if home_dotnet.is_dir() {
+            paths.push(home_dotnet.to_string_lossy().into_owned());
+        }
+    }
+
+    if let Ok(root) = std::env::var("DOTNET_ROOT") {
+        if Path::new(&root).is_dir() {
+            paths.push(root);
+        }
+    }
+
+    for candidate in ["/usr/local/share/dotnet", "/usr/share/dotnet"] {
+        if Path::new(candidate).is_dir() {
+            paths.push(candidate.to_string());
+        }
+    }
+
+    if let Ok(current) = std::env::var("PATH") {
+        paths.push(current);
+    }
+
+    paths.join(":")
+}
+
 pub struct CSharpInstrumentor<R: CommandRunner = RealCommandRunner> {
     runner: R,
 }
@@ -137,8 +170,10 @@ impl<R: CommandRunner> Instrumentor for CSharpInstrumentor<R> {
         info!(target = %target_root.display(), "running C# coverage instrumentation");
 
         // Run: dotnet test --collect:"XPlat Code Coverage"
-        let spec =
-            CommandSpec::new("dotnet", target_root).args(["test", "--collect:XPlat Code Coverage"]);
+        let spec = CommandSpec::new("dotnet", target_root)
+            .args(["test", "--collect:XPlat Code Coverage"])
+            .env("PATH", dotnet_path())
+            .timeout(INSTRUMENT_TIMEOUT_MS);
 
         let output = self
             .runner

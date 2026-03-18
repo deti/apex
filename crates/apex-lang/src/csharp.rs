@@ -9,6 +9,47 @@ use std::path::Path;
 use std::time::Instant;
 use tracing::{debug, info};
 
+/// 5 minutes — NuGet restore can be slow on first run or large dependency graphs.
+const RESTORE_TIMEOUT_MS: u64 = 300_000;
+/// 10 minutes — `dotnet test` compiles then runs; large projects need headroom.
+const TEST_TIMEOUT_MS: u64 = 600_000;
+
+/// Augment `PATH` with common dotnet install locations so the binary is found
+/// even when the user's shell profile hasn't been sourced (e.g. inside CI or
+/// a sandboxed subprocess).
+fn dotnet_path() -> String {
+    let mut paths: Vec<String> = Vec::new();
+
+    // ~/.dotnet (dotnet-install.sh default)
+    if let Some(home) = std::env::var_os("HOME") {
+        let home_dotnet = Path::new(&home).join(".dotnet");
+        if home_dotnet.is_dir() {
+            paths.push(home_dotnet.to_string_lossy().into_owned());
+        }
+    }
+
+    // DOTNET_ROOT takes precedence when set explicitly.
+    if let Ok(root) = std::env::var("DOTNET_ROOT") {
+        if Path::new(&root).is_dir() {
+            paths.push(root);
+        }
+    }
+
+    // macOS .pkg installer location and common Linux paths.
+    for candidate in ["/usr/local/share/dotnet", "/usr/share/dotnet"] {
+        if Path::new(candidate).is_dir() {
+            paths.push(candidate.to_string());
+        }
+    }
+
+    // Append current PATH so existing entries are preserved.
+    if let Ok(current) = std::env::var("PATH") {
+        paths.push(current);
+    }
+
+    paths.join(":")
+}
+
 pub struct CSharpRunner<R: CommandRunner = RealCommandRunner> {
     runner: R,
 }
@@ -56,7 +97,10 @@ impl<R: CommandRunner> LanguageRunner for CSharpRunner<R> {
     async fn install_deps(&self, target: &Path) -> Result<()> {
         info!(target = %target.display(), "restoring C# dependencies");
 
-        let spec = CommandSpec::new("dotnet", target).args(["restore"]);
+        let spec = CommandSpec::new("dotnet", target)
+            .args(["restore"])
+            .env("PATH", dotnet_path())
+            .timeout(RESTORE_TIMEOUT_MS);
         let output = self
             .runner
             .run_command(&spec)
@@ -80,7 +124,10 @@ impl<R: CommandRunner> LanguageRunner for CSharpRunner<R> {
         let start = Instant::now();
         let mut args: Vec<String> = vec!["test".into()];
         args.extend_from_slice(extra_args);
-        let spec = CommandSpec::new("dotnet", target).args(args);
+        let spec = CommandSpec::new("dotnet", target)
+            .args(args)
+            .env("PATH", dotnet_path())
+            .timeout(TEST_TIMEOUT_MS);
         let output = self
             .runner
             .run_command(&spec)
@@ -220,7 +267,11 @@ mod tests {
     async fn install_deps_checks_command_spec() {
         let mut mock = MockCmd::new();
         mock.expect_run_command()
-            .withf(|spec| spec.program == "dotnet" && spec.args == ["restore"])
+            .withf(|spec| {
+                spec.program == "dotnet"
+                    && spec.args == ["restore"]
+                    && spec.timeout_ms == super::RESTORE_TIMEOUT_MS
+            })
             .returning(|_| {
                 Ok(CommandOutput {
                     exit_code: 0,
@@ -231,5 +282,27 @@ mod tests {
         let runner = CSharpRunner::with_runner(mock);
         let tmp = tempfile::tempdir().unwrap();
         runner.install_deps(tmp.path()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_tests_checks_timeout() {
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| {
+                spec.program == "dotnet"
+                    && spec.args[0] == "test"
+                    && spec.timeout_ms == super::TEST_TIMEOUT_MS
+            })
+            .returning(|_| {
+                Ok(CommandOutput {
+                    exit_code: 0,
+                    stdout: b"Passed!\n".to_vec(),
+                    stderr: Vec::new(),
+                })
+            });
+        let runner = CSharpRunner::with_runner(mock);
+        let tmp = tempfile::tempdir().unwrap();
+        let result = runner.run_tests(tmp.path(), &[]).await.unwrap();
+        assert_eq!(result.exit_code, 0);
     }
 }
