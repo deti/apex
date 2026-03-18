@@ -153,12 +153,14 @@ impl<R: CommandRunner> Instrumentor for GoInstrumentor<R> {
 
         // Run: go test -coverprofile=coverage.out -covermode=atomic ./...
         let coverage_out = target_root.join("coverage.out");
-        let spec = CommandSpec::new("go", target_root).args([
-            "test",
-            "-coverprofile=coverage.out",
-            "-covermode=atomic",
-            "./...",
-        ]);
+        let spec = CommandSpec::new("go", target_root)
+            .args([
+                "test",
+                "-coverprofile=coverage.out",
+                "-covermode=atomic",
+                "./...",
+            ])
+            .timeout(600_000); // 10 min — coverage instrumentation is slower than plain tests
 
         let output = self
             .runner

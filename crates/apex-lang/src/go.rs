@@ -45,7 +45,9 @@ impl<R: CommandRunner> LanguageRunner for GoRunner<R> {
     async fn install_deps(&self, target: &Path) -> Result<()> {
         info!(target = %target.display(), "installing Go dependencies");
 
-        let spec = CommandSpec::new("go", target).args(["mod", "download"]);
+        let spec = CommandSpec::new("go", target)
+            .args(["mod", "download"])
+            .timeout(300_000); // 5 min — large Go projects (e.g. Kubernetes) have 100+ deps
         let output = self
             .runner
             .run_command(&spec)
@@ -69,7 +71,9 @@ impl<R: CommandRunner> LanguageRunner for GoRunner<R> {
         let start = Instant::now();
         let mut args: Vec<String> = vec!["test".into(), "./...".into()];
         args.extend_from_slice(extra_args);
-        let spec = CommandSpec::new("go", target).args(args);
+        let spec = CommandSpec::new("go", target)
+            .args(args)
+            .timeout(600_000); // 10 min — Go test suites can be slow on large projects
         let output = self
             .runner
             .run_command(&spec)
