@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
 
 pub struct RustCovInstrumentor {
     branch_ids: Vec<BranchId>,
@@ -54,23 +54,32 @@ impl Instrumentor for RustCovInstrumentor {
         let root = &target.root;
 
         if !has_llvm_cov_with_runner(self.runner.as_ref()).await {
-            warn!(
-                "cargo-llvm-cov not found; install with: cargo install cargo-llvm-cov\n\
+            return Err(ApexError::Instrumentation(
+                "cargo-llvm-cov not found on PATH. Install with: cargo install cargo-llvm-cov\n\
                  Also set LLVM_COV and LLVM_PROFDATA if using a non-rustup Rust.\n\
-                 Returning empty branch set."
-            );
-            return Ok(empty_result(target));
+                 Hint: ensure ~/.cargo/bin is on your PATH."
+                    .into(),
+            ));
         }
 
         let json_path = root.join(".apex_coverage.json");
         let json_path_str = json_path.to_string_lossy().into_owned();
 
-        let spec = CommandSpec::new("cargo", root).args([
-            "llvm-cov",
-            "--json",
-            "--output-path",
-            &json_path_str,
-        ]);
+        // Propagate PATH explicitly so cargo-llvm-cov is found even when the
+        // subprocess doesn't inherit the user's shell profile (e.g. cron, CI).
+        let mut spec = CommandSpec::new("cargo", root)
+            .args([
+                "llvm-cov",
+                "--json",
+                "--output-path",
+                &json_path_str,
+            ])
+            .timeout(300_000); // 5 min — large projects need more than 30s
+
+        if let Ok(path) = std::env::var("PATH") {
+            spec = spec.env("PATH", path);
+        }
+
         let output = self
             .runner
             .run_command(&spec)
@@ -79,8 +88,10 @@ impl Instrumentor for RustCovInstrumentor {
 
         if output.exit_code != 0 {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!(stderr = %stderr, "cargo llvm-cov exited non-zero; returning empty branch set");
-            return Ok(empty_result(target));
+            return Err(ApexError::Instrumentation(format!(
+                "cargo llvm-cov exited with code {}:\n{}",
+                output.exit_code, stderr
+            )));
         }
 
         let json_bytes = std::fs::read(&json_path)
@@ -88,6 +99,16 @@ impl Instrumentor for RustCovInstrumentor {
 
         let (branch_ids, executed_branch_ids, file_paths) = parse_llvm_json(&json_bytes, root)
             .map_err(|e| ApexError::Instrumentation(format!("parse coverage json: {e}")))?;
+
+        if branch_ids.is_empty() {
+            return Err(ApexError::Instrumentation(
+                "cargo llvm-cov produced valid JSON but 0 coverable branches. \
+                 This usually means the project has no source files under the target root, \
+                 or all files were filtered out (tests, external deps). \
+                 Check that --target points to the correct project root."
+                    .into(),
+            ));
+        }
 
         info!(
             total = branch_ids.len(),
@@ -214,14 +235,22 @@ pub async fn run_coverage_for_test_with_runner(
     let json_path = root.join(".apex_delta.json");
     let json_path_str = json_path.to_string_lossy().into_owned();
 
-    let spec = CommandSpec::new("cargo", root).args([
-        "llvm-cov",
-        "--json",
-        "--output-path",
-        &json_path_str,
-        "--test",
-        test_name,
-    ]);
+    let mut spec = CommandSpec::new("cargo", root)
+        .args([
+            "llvm-cov",
+            "--json",
+            "--output-path",
+            &json_path_str,
+            "--test",
+            test_name,
+        ])
+        .timeout(300_000); // 5 min for large projects
+
+    // Propagate PATH so cargo-llvm-cov in ~/.cargo/bin is found.
+    if let Ok(path) = std::env::var("PATH") {
+        spec = spec.env("PATH", path);
+    }
+
     let output = runner
         .run_command(&spec)
         .await
@@ -247,8 +276,15 @@ pub async fn has_llvm_cov() -> bool {
 
 /// Check if `cargo-llvm-cov` is available (using a custom runner).
 pub async fn has_llvm_cov_with_runner(runner: &dyn CommandRunner) -> bool {
-    let spec = CommandSpec::new("cargo", std::env::temp_dir().display().to_string())
-        .args(["llvm-cov", "--version"]);
+    let mut spec = CommandSpec::new("cargo", std::env::temp_dir().display().to_string())
+        .args(["llvm-cov", "--version"])
+        .timeout(10_000);
+
+    // Propagate PATH so cargo-llvm-cov in ~/.cargo/bin is found.
+    if let Ok(path) = std::env::var("PATH") {
+        spec = spec.env("PATH", path);
+    }
+
     runner
         .run_command(&spec)
         .await
@@ -256,6 +292,7 @@ pub async fn has_llvm_cov_with_runner(runner: &dyn CommandRunner) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 fn empty_result(target: &Target) -> InstrumentedTarget {
     InstrumentedTarget {
         target: target.clone(),
@@ -707,7 +744,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_instrument_no_llvm_cov_returns_empty() {
+    async fn test_instrument_no_llvm_cov_returns_error() {
         // Runner that fails for "llvm-cov --version" check
         let runner = Arc::new(FakeRunner::failure(127));
         let inst = RustCovInstrumentor::with_runner(runner);
@@ -718,9 +755,13 @@ mod tests {
             test_command: Vec::new(),
         };
 
-        let result = inst.instrument(&target).await.unwrap();
-        assert!(result.branch_ids.is_empty());
-        assert!(result.executed_branch_ids.is_empty());
+        let result = inst.instrument(&target).await;
+        assert!(result.is_err(), "should error when cargo-llvm-cov is not found");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("cargo-llvm-cov not found"),
+            "error should mention cargo-llvm-cov not found, got: {err_msg}"
+        );
     }
 
     #[tokio::test]
@@ -760,7 +801,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_instrument_nonzero_exit_returns_empty() {
+    async fn test_instrument_nonzero_exit_returns_error() {
         use std::sync::atomic::{AtomicU32, Ordering};
 
         let tmp = tempfile::tempdir().unwrap();
@@ -774,7 +815,7 @@ mod tests {
         impl CommandRunner for VersionOkCovFailRunner {
             async fn run_command(
                 &self,
-                spec: &CommandSpec,
+                _spec: &CommandSpec,
             ) -> apex_core::error::Result<CommandOutput> {
                 let n = self.call_count.fetch_add(1, Ordering::SeqCst);
                 if n == 0 {
@@ -798,9 +839,13 @@ mod tests {
             test_command: Vec::new(),
         };
 
-        let result = inst.instrument(&target).await.unwrap();
-        // Non-zero exit returns empty set
-        assert!(result.branch_ids.is_empty());
+        let result = inst.instrument(&target).await;
+        assert!(result.is_err(), "should error when cargo llvm-cov exits non-zero");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("exited with code 1"),
+            "error should mention exit code, got: {err_msg}"
+        );
     }
 
     #[tokio::test]
