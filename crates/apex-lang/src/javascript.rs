@@ -98,7 +98,10 @@ impl<R: CommandRunner> LanguageRunner for JavaScriptRunner<R> {
         let pm = Self::detect_package_manager(target);
         info!(target = %target.display(), pm, "installing JavaScript dependencies");
 
-        let spec = CommandSpec::new(pm, target).args(["install"]);
+        // Large projects with many transitive deps can take 2+ minutes to install.
+        let spec = CommandSpec::new(pm, target)
+            .args(["install"])
+            .timeout(180_000);
         let output = self
             .runner
             .run_command(&spec)

@@ -358,7 +358,8 @@ impl Instrumentor for JavaScriptInstrumentor {
         // --- Stage 1: Detect JS environment ---
         let env = JsEnvironment::detect(&target.root).ok_or_else(|| {
             ApexError::Instrumentation(format!(
-                "no package.json found at {}; is this a JS/TS project?",
+                "no package.json found at {}; check that --target points to the \
+                 project root (not src/ or a subdirectory)",
                 target.root.display()
             ))
         })?;
@@ -437,7 +438,10 @@ impl Instrumentor for JavaScriptInstrumentor {
             .split_first()
             .ok_or_else(|| ApexError::Instrumentation("empty command".into()))?;
 
-        let mut spec = CommandSpec::new(program, &target.root).args(args.to_vec());
+        // Coverage runs execute the full test suite; 5 minutes accommodates large projects.
+        let mut spec = CommandSpec::new(program, &target.root)
+            .args(args.to_vec())
+            .timeout(300_000);
 
         // Set NODE_V8_COVERAGE when running Bun so that V8 coverage JSON files
         // are written to the directory rather than a text summary going to stdout.
@@ -1055,6 +1059,7 @@ mod tests {
         assert!(result.is_err());
         let err_msg = format!("{}", result.unwrap_err());
         assert!(err_msg.contains("no package.json"));
+        assert!(err_msg.contains("project root"));
     }
 
     // -----------------------------------------------------------------------

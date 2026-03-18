@@ -75,8 +75,28 @@ pub fn parse_v8_coverage(
     repo_root: &Path,
     source_loader: &dyn Fn(&Path) -> Option<String>,
 ) -> Result<V8ParseResult, String> {
-    let data: V8CoverageResult =
-        serde_json::from_str(json_str).map_err(|e| format!("parse V8 JSON: {e}"))?;
+    // V8 coverage JSON comes in several shapes depending on the Node version,
+    // runtime (Bun, Deno) and tool (c8, vitest, NODE_V8_COVERAGE):
+    //   1. `{"result": [...]}`           — classic Node / c8 format
+    //   2. `[{...}, ...]`                — bare array of ScriptCoverage objects
+    //   3. `{"url": "...", "functions": ...}` — single ScriptCoverage (per-file from NODE_V8_COVERAGE)
+    let data: V8CoverageResult = serde_json::from_str(json_str)
+        .or_else(|_| {
+            // Try bare array of ScriptCoverage objects
+            serde_json::from_str::<Vec<V8ScriptCoverage>>(json_str)
+                .map(|scripts| V8CoverageResult { result: scripts })
+        })
+        .or_else(|_| {
+            // Try single ScriptCoverage object (NODE_V8_COVERAGE per-file format)
+            serde_json::from_str::<V8ScriptCoverage>(json_str)
+                .map(|script| V8CoverageResult { result: vec![script] })
+        })
+        .map_err(|e| {
+            format!(
+                "parse V8 JSON: {e} (expected {{\"result\":[...]}}, \
+                 [...], or a single ScriptCoverage object)"
+            )
+        })?;
 
     let mut all_branches = Vec::new();
     let mut executed_branches = Vec::new();
@@ -244,6 +264,50 @@ mod tests {
     fn parse_v8_invalid_json() {
         let result = parse_v8_coverage("not json", Path::new("/"), &|_| None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_v8_bare_array_format() {
+        // Some Node versions / tools emit a bare array instead of {"result": [...]}
+        let json = r#"[{
+            "url": "file:///repo/src/app.js",
+            "functions": [{
+                "functionName": "main",
+                "ranges": [
+                    {"startOffset": 0, "endOffset": 100, "count": 1},
+                    {"startOffset": 10, "endOffset": 50, "count": 1},
+                    {"startOffset": 50, "endOffset": 90, "count": 0}
+                ]
+            }]
+        }]"#;
+        let source = "if (x) {\n  doA();\n} else {\n  doB();\n}\n".repeat(3);
+        let repo = Path::new("/repo");
+        let (all, exec, files) = parse_v8_coverage(json, repo, &|_| Some(source.clone())).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(all.len(), 2);
+        assert_eq!(exec.len(), 1);
+    }
+
+    #[test]
+    fn parse_v8_single_script_coverage_format() {
+        // NODE_V8_COVERAGE writes one file per script as a bare ScriptCoverage object
+        let json = r#"{
+            "url": "file:///repo/src/app.js",
+            "functions": [{
+                "functionName": "main",
+                "ranges": [
+                    {"startOffset": 0, "endOffset": 100, "count": 1},
+                    {"startOffset": 10, "endOffset": 50, "count": 1},
+                    {"startOffset": 50, "endOffset": 90, "count": 0}
+                ]
+            }]
+        }"#;
+        let source = "if (x) {\n  doA();\n} else {\n  doB();\n}\n".repeat(3);
+        let repo = Path::new("/repo");
+        let (all, exec, files) = parse_v8_coverage(json, repo, &|_| Some(source.clone())).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(all.len(), 2);
+        assert_eq!(exec.len(), 1);
     }
 
     #[test]
