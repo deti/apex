@@ -1,9 +1,9 @@
 use apex_core::{
-    command::{CommandRunner, CommandSpec, RealCommandRunner},
+    command::{adaptive_timeout, count_source_files, CommandRunner, CommandSpec, OpKind, RealCommandRunner},
     error::{ApexError, Result},
     hash::fnv1a_hash,
     traits::Instrumentor,
-    types::{BranchId, InstrumentedTarget, Target},
+    types::{BranchId, InstrumentedTarget, Language, Target},
 };
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -235,13 +235,17 @@ impl PythonInstrumentor {
             ];
             args.push(script_path.to_string_lossy().to_string());
             args.extend(test_cmd);
-            CommandSpec::new(&uv, &target.root).args(args)
+            let file_count = count_source_files(&target.root);
+            let timeout = adaptive_timeout(file_count, Language::Python, OpKind::TestRun);
+            CommandSpec::new(&uv, &target.root).args(args).timeout(timeout)
         } else {
             // Use .apex-venv python if it exists (created by PEP 668 venv logic).
             let python = resolve_venv_python(&target.root);
             let mut args = vec![script_path.to_string_lossy().to_string()];
             args.extend(test_cmd);
-            CommandSpec::new(&python, &target.root).args(args)
+            let file_count = count_source_files(&target.root);
+            let timeout = adaptive_timeout(file_count, Language::Python, OpKind::TestRun);
+            CommandSpec::new(&python, &target.root).args(args).timeout(timeout)
         };
         let output = self
             .runner

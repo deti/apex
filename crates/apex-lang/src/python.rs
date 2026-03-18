@@ -1,5 +1,5 @@
 use apex_core::{
-    command::{CommandRunner, CommandSpec, RealCommandRunner},
+    command::{adaptive_timeout, count_source_files, CommandRunner, CommandSpec, OpKind, RealCommandRunner},
     error::{ApexError, Result},
     traits::{LanguageRunner, TestRunOutput},
     types::Language,
@@ -236,7 +236,9 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
 
     async fn install_deps(&self, target: &Path) -> Result<()> {
         let pkg_mgr = Self::detect_package_manager(target);
-        info!(target = %target.display(), ?pkg_mgr, "installing Python dependencies");
+        let file_count = count_source_files(target);
+        let dep_timeout = adaptive_timeout(file_count, Language::Python, OpKind::DepInstall);
+        info!(target = %target.display(), ?pkg_mgr, file_count, dep_timeout, "installing Python dependencies");
 
         // For Pip-managed projects on PEP 668 externally-managed Python (and no
         // uv available), create a .apex-venv automatically so pip install works.
@@ -266,7 +268,7 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
 
         match pkg_mgr {
             PackageManager::Uv => {
-                let spec = CommandSpec::new("uv", target).args(["sync"]);
+                let spec = CommandSpec::new("uv", target).args(["sync"]).timeout(dep_timeout);
                 let output = self
                     .runner
                     .run_command(&spec)
@@ -280,7 +282,7 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
                 }
             }
             PackageManager::Poetry => {
-                let spec = CommandSpec::new("poetry", target).args(["install"]);
+                let spec = CommandSpec::new("poetry", target).args(["install"]).timeout(dep_timeout);
                 let output = self
                     .runner
                     .run_command(&spec)
@@ -294,7 +296,7 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
                 }
             }
             PackageManager::Pipenv => {
-                let spec = CommandSpec::new("pipenv", target).args(["install", "--dev"]);
+                let spec = CommandSpec::new("pipenv", target).args(["install", "--dev"]).timeout(dep_timeout);
                 let output = self
                     .runner
                     .run_command(&spec)
@@ -310,7 +312,8 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
             PackageManager::Pip => {
                 if target.join("requirements.txt").exists() {
                     let spec = CommandSpec::new(&pip, target)
-                        .args(["install", "-r", "requirements.txt"]);
+                        .args(["install", "-r", "requirements.txt"])
+                        .timeout(dep_timeout);
                     let output = self
                         .runner
                         .run_command(&spec)
@@ -325,7 +328,7 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
                     }
                 } else if target.join("pyproject.toml").exists() || target.join("setup.py").exists()
                 {
-                    let spec = CommandSpec::new(&pip, target).args(["install", "-e", "."]);
+                    let spec = CommandSpec::new(&pip, target).args(["install", "-e", "."]).timeout(dep_timeout);
                     let output =
                         self.runner.run_command(&spec).await.map_err(|e| {
                             ApexError::LanguageRunner(format!("pip install -e: {e}"))
@@ -362,7 +365,7 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
             } else {
                 // Use venv pip if available (handles PEP 668 without uv).
                 let spec =
-                    CommandSpec::new(&pip, target).args(["install", "coverage", "pytest"]);
+                    CommandSpec::new(&pip, target).args(["install", "coverage", "pytest"]).timeout(dep_timeout);
                 self.runner
                     .run_command(&spec)
                     .await
@@ -410,13 +413,17 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
         let mut args: Vec<String> = cmd_parts[1..].to_vec();
         args.extend(extra_args.iter().cloned());
 
+        let file_count = count_source_files(target);
+        let test_timeout = adaptive_timeout(file_count, Language::Python, OpKind::TestRun);
+
         info!(
             target = %target.display(),
             cmd = ?cmd_parts,
+            file_count, test_timeout,
             "running Python tests"
         );
 
-        let spec = CommandSpec::new(&cmd_parts[0], target).args(args);
+        let spec = CommandSpec::new(&cmd_parts[0], target).args(args).timeout(test_timeout);
 
         let start = Instant::now();
         let output = self

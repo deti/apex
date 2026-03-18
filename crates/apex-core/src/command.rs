@@ -52,6 +52,90 @@ impl CommandSpec {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Adaptive timeouts — scale with project size
+// ---------------------------------------------------------------------------
+
+/// What kind of subprocess operation is being timed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpKind {
+    /// Downloading dependencies (npm install, go mod download, bundle install).
+    DepInstall,
+    /// Compiling / instrumenting (cargo build, gcc, dotnet build).
+    Compile,
+    /// Running test suite under coverage.
+    TestRun,
+    /// Post-processing (gcov, llvm-profdata merge, coverage report).
+    PostProcess,
+}
+
+/// Compute a timeout in milliseconds that scales with project size.
+///
+/// Formula: `clamp(base + file_count * per_file, min, max)`
+///
+/// | OpKind      | base  | per_file | min   | max     |
+/// |-------------|------:|---------:|------:|--------:|
+/// | DepInstall  |  60s  |     0    |  60s  |  300s   |
+/// | Compile     |  60s  |    50ms  |  60s  |  600s   |
+/// | TestRun     |  60s  |   100ms  |  60s  |  600s   |
+/// | PostProcess |  30s  |    10ms  |  30s  |  120s   |
+///
+/// `lang_multiplier` adjusts for language speed:
+/// - C/C++: 2.0 (slow compilation)
+/// - Rust: 1.5, Java/Kotlin: 1.5, Swift: 1.5
+/// - Go: 1.0
+/// - Python/JS/Ruby: 0.5 (interpreted — fast startup, deps are the bottleneck)
+pub fn adaptive_timeout(file_count: usize, lang: crate::types::Language, op: OpKind) -> u64 {
+    use crate::types::Language;
+
+    let (base_ms, per_file_ms, min_ms, max_ms): (u64, u64, u64, u64) = match op {
+        OpKind::DepInstall  => (60_000,   0, 60_000, 300_000),
+        OpKind::Compile     => (60_000,  50, 60_000, 600_000),
+        OpKind::TestRun     => (60_000, 100, 60_000, 600_000),
+        OpKind::PostProcess => (30_000,  10, 30_000, 120_000),
+    };
+
+    let multiplier: f64 = match lang {
+        Language::C | Language::Cpp     => 2.0,
+        Language::Rust                  => 1.5,
+        Language::Java | Language::Kotlin => 1.5,
+        Language::Swift                 => 1.5,
+        Language::Go                    => 1.0,
+        Language::CSharp                => 1.2,
+        Language::Python | Language::JavaScript | Language::Ruby => 0.5,
+        Language::Wasm                  => 1.0,
+    };
+
+    let raw = base_ms + (file_count as u64) * per_file_ms;
+    let scaled = (raw as f64 * multiplier) as u64;
+    scaled.clamp(min_ms, max_ms)
+}
+
+/// Count source files in a directory (non-recursive quick scan for timeout estimation).
+/// Counts files with common source extensions, skipping build/vendor dirs.
+pub fn count_source_files(dir: &std::path::Path) -> usize {
+    let skip = ["target", "node_modules", "vendor", ".git", "build", "dist", "__pycache__", ".tox", "venv", ".venv"];
+    let mut count = 0;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if skip.contains(&name) { continue; }
+            }
+            if path.is_dir() {
+                count += count_source_files(&path);
+            } else if path.is_file() {
+                let is_source = path.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
+                    matches!(ext, "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "go" | "java" | "kt"
+                        | "c" | "h" | "cpp" | "hpp" | "cs" | "swift" | "rb" | "wasm")
+                });
+                if is_source { count += 1; }
+            }
+        }
+    }
+    count
+}
+
 /// Output from a command execution.
 #[derive(Debug, Clone)]
 pub struct CommandOutput {
@@ -316,5 +400,74 @@ mod tests {
         let cloned = out.clone();
         assert_eq!(cloned.exit_code, 0);
         assert_eq!(cloned.stdout, b"data");
+    }
+
+    // -----------------------------------------------------------------------
+    // Adaptive timeout tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn adaptive_timeout_small_python_project() {
+        use crate::types::Language;
+        // 50 files * 100ms/file * 0.5 (Python) = 2,500ms + 60s base * 0.5 = 32,500ms
+        // Clamped to min 60,000
+        let t = adaptive_timeout(50, Language::Python, OpKind::TestRun);
+        assert_eq!(t, 60_000, "small Python project should hit minimum");
+    }
+
+    #[test]
+    fn adaptive_timeout_large_c_project() {
+        use crate::types::Language;
+        // 5000 files * 50ms/file * 2.0 (C) = 500,000ms + 60s base * 2.0 = 620,000ms
+        // Clamped to max 600,000
+        let t = adaptive_timeout(5000, Language::C, OpKind::Compile);
+        assert_eq!(t, 600_000, "large C project should hit maximum");
+    }
+
+    #[test]
+    fn adaptive_timeout_medium_go_project() {
+        use crate::types::Language;
+        // 1000 files * 100ms/file * 1.0 (Go) = 100,000ms + 60s base = 160,000ms
+        let t = adaptive_timeout(1000, Language::Go, OpKind::TestRun);
+        assert_eq!(t, 160_000);
+    }
+
+    #[test]
+    fn adaptive_timeout_dep_install_ignores_file_count() {
+        use crate::types::Language;
+        // DepInstall has per_file=0, so file_count doesn't matter
+        let t1 = adaptive_timeout(10, Language::Rust, OpKind::DepInstall);
+        let t2 = adaptive_timeout(10000, Language::Rust, OpKind::DepInstall);
+        // Both should be base * multiplier = 60,000 * 1.5 = 90,000
+        assert_eq!(t1, t2);
+        assert_eq!(t1, 90_000);
+    }
+
+    #[test]
+    fn adaptive_timeout_post_process_quick() {
+        use crate::types::Language;
+        // PostProcess: base 30s, per_file 10ms, min 30s, max 120s
+        // 100 files * 10ms * 1.0 = 1,000ms + 30s = 31,000ms
+        let t = adaptive_timeout(100, Language::Go, OpKind::PostProcess);
+        assert_eq!(t, 31_000);
+    }
+
+    #[test]
+    fn adaptive_timeout_zero_files_returns_min() {
+        use crate::types::Language;
+        let t = adaptive_timeout(0, Language::Python, OpKind::TestRun);
+        // base * 0.5 = 30,000ms, clamped to min 60,000
+        assert_eq!(t, 60_000);
+    }
+
+    #[test]
+    fn adaptive_timeout_jvm_multiplier() {
+        use crate::types::Language;
+        // 2000 files * 50ms * 1.5 = 150,000 + 60,000 * 1.5 = 240,000
+        let t = adaptive_timeout(2000, Language::Java, OpKind::Compile);
+        assert_eq!(t, 240_000);
+        // Kotlin same multiplier
+        let t2 = adaptive_timeout(2000, Language::Kotlin, OpKind::Compile);
+        assert_eq!(t, t2);
     }
 }
