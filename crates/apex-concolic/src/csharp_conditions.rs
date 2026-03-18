@@ -74,7 +74,6 @@ fn try_parse_is_type(line: &str) -> Option<ConditionTree> {
     // `x is not Type`
     if let Some(type_name) = type_part.strip_prefix("not ") {
         let type_name = type_name
-            .trim()
             .split_whitespace()
             .next()
             .unwrap_or(type_name.trim());
@@ -136,7 +135,7 @@ fn try_parse_null_coalescing(line: &str) -> Option<ConditionTree> {
     }
     let left = line[..qq_pos].trim();
     // Extract the variable name (last token before ??)
-    let var = left.rsplit_once(|c: char| c == '=' || c == '(' || c == ',')
+    let var = left.rsplit_once(['=', '(', ','])
         .map(|(_, v)| v.trim())
         .unwrap_or(left);
     if var.is_empty() {

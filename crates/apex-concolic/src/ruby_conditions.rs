@@ -68,8 +68,8 @@ fn try_parse_nil_check(line: &str) -> Option<ConditionTree> {
         }
     }
     // !x.nil? (in unless or with negation)
-    if cond.starts_with('!') {
-        let inner = cond[1..].trim();
+    if let Some(stripped) = cond.strip_prefix('!') {
+        let inner = stripped.trim();
         if let Some(pos) = inner.find(".nil?") {
             let var = inner[..pos].trim();
             if !var.is_empty() {

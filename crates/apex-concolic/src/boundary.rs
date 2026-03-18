@@ -13,12 +13,8 @@ use crate::condition_tree::{CompareOp, ConditionTree, Expr};
 pub fn boundary_values(tree: &ConditionTree) -> Vec<String> {
     match tree {
         ConditionTree::Compare { left: _, op, right } => boundary_for_compare(*op, right),
-        ConditionTree::NullCheck { is_null, .. } => {
-            if *is_null {
-                vec!["null".into(), "0".into(), "\"\"".into()]
-            } else {
-                vec!["null".into(), "0".into(), "\"\"".into()]
-            }
+        ConditionTree::NullCheck { .. } => {
+            vec!["null".into(), "0".into(), "\"\"".into()]
         }
         ConditionTree::LengthCheck { op, value, .. } => boundary_for_compare(*op, value),
         ConditionTree::TypeCheck { type_name, .. } => type_boundary_values(type_name),
