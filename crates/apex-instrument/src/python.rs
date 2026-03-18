@@ -845,11 +845,15 @@ mod tests {
             "expected 'unittest' in args: {:?}",
             *args
         );
-        // Should NOT contain "pytest" since custom command was provided
+        // The custom command itself should be "python -m unittest", not "pytest".
+        // Note: when uv is available, "--with pytest" appears as a dep specifier
+        // (before "--"), but "pytest" should NOT appear after the script path.
+        let script_idx = args.iter().position(|a| a.contains("apex_instrument.py")).unwrap();
+        let post_script: Vec<&String> = args[script_idx + 1..].iter().collect();
         assert!(
-            !args.iter().any(|a| a == "pytest"),
-            "should not contain 'pytest': {:?}",
-            *args
+            !post_script.iter().any(|a| *a == "pytest"),
+            "custom test command args should not contain 'pytest': {:?}",
+            post_script
         );
     }
 
