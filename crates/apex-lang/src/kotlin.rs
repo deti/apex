@@ -32,6 +32,20 @@ impl Default for KotlinRunner {
     }
 }
 
+/// Check if build.gradle.kts has the Kover plugin.
+///
+/// When Kover is present, the runner prefers `./gradlew koverXmlReport`
+/// over the standard JaCoCo task. The Kover XML format is JaCoCo-compatible,
+/// so existing parsers work without changes.
+pub fn detect_kover_plugin(target: &Path) -> bool {
+    let gradle_kts = target.join("build.gradle.kts");
+    if let Ok(content) = std::fs::read_to_string(&gradle_kts) {
+        content.contains("kotlinx.kover") || content.contains("kover")
+    } else {
+        false
+    }
+}
+
 /// Detect whether the project uses Gradle or Maven.
 fn detect_build_tool(target: &Path) -> &'static str {
     if target.join("build.gradle.kts").exists() || target.join("build.gradle").exists() {
@@ -144,6 +158,55 @@ impl<R: CommandRunner> LanguageRunner for KotlinRunner<R> {
                     .run_command(&spec)
                     .await
                     .map_err(|e| ApexError::LanguageRunner(format!("mvn test: {e}")))?
+            }
+        };
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        Ok(TestRunOutput {
+            exit_code: output.exit_code,
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            duration_ms,
+        })
+    }
+}
+
+impl<R: CommandRunner> KotlinRunner<R> {
+    /// Collect coverage for a Kotlin project.
+    ///
+    /// When the Kover plugin is detected in `build.gradle.kts`, this runs
+    /// `./gradlew koverXmlReport` (preferred). Otherwise it falls back to the
+    /// standard JaCoCo task `./gradlew jacocoTestReport`. Both produce
+    /// JaCoCo-compatible XML that existing parsers can read.
+    pub async fn collect_coverage(&self, target: &Path) -> Result<TestRunOutput> {
+        let build_tool = detect_build_tool(target);
+        info!(target = %target.display(), build_tool, "collecting Kotlin coverage");
+
+        let start = Instant::now();
+
+        let output = match build_tool {
+            "gradle" => {
+                let cmd = gradle_command(target);
+                let task = if detect_kover_plugin(target) {
+                    "koverXmlReport"
+                } else {
+                    "jacocoTestReport"
+                };
+                let spec = CommandSpec::new(cmd, target).args([task]);
+                self.runner
+                    .run_command(&spec)
+                    .await
+                    .map_err(|e| ApexError::LanguageRunner(format!("gradle {task}: {e}")))?
+            }
+            _ => {
+                // Maven: JaCoCo via surefire
+                let spec = CommandSpec::new("mvn", target)
+                    .args(["jacoco:report", "-q"]);
+                self.runner
+                    .run_command(&spec)
+                    .await
+                    .map_err(|e| ApexError::LanguageRunner(format!("mvn jacoco:report: {e}")))?
             }
         };
 
@@ -328,5 +391,84 @@ mod tests {
     fn gradle_command_without_wrapper() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(gradle_command(dir.path()), "gradle");
+    }
+
+    // ------------------------------------------------------------------
+    // detect_kover_plugin tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn detect_kover_plugin_present() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("build.gradle.kts"),
+            r#"plugins {
+    id("org.jetbrains.kotlinx.kover") version "0.7.3"
+}
+"#,
+        )
+        .unwrap();
+        assert!(detect_kover_plugin(dir.path()));
+    }
+
+    #[test]
+    fn detect_kover_plugin_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("build.gradle.kts"),
+            r#"plugins {
+    id("jacoco")
+}
+"#,
+        )
+        .unwrap();
+        assert!(!detect_kover_plugin(dir.path()));
+    }
+
+    #[test]
+    fn detect_kover_plugin_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!detect_kover_plugin(dir.path()));
+    }
+
+    // ------------------------------------------------------------------
+    // collect_coverage tests
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn collect_coverage_uses_kover_when_plugin_present() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("build.gradle.kts"),
+            r#"plugins { id("kotlinx.kover") }"#,
+        )
+        .unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.args.contains(&"koverXmlReport".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"BUILD SUCCESSFUL".to_vec())));
+
+        let runner = KotlinRunner::with_runner(mock);
+        let result = runner.collect_coverage(dir.path()).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn collect_coverage_falls_back_to_jacoco_without_kover() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle.kts"), r#"plugins { id("jacoco") }"#)
+            .unwrap();
+
+        let mut mock = MockCmd::new();
+        mock.expect_run_command()
+            .withf(|spec| spec.args.contains(&"jacocoTestReport".to_string()))
+            .times(1)
+            .returning(|_| Ok(CommandOutput::success(b"BUILD SUCCESSFUL".to_vec())));
+
+        let runner = KotlinRunner::with_runner(mock);
+        let result = runner.collect_coverage(dir.path()).await;
+        assert!(result.is_ok());
     }
 }

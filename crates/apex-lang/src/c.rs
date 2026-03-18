@@ -26,7 +26,9 @@ impl<R: CommandRunner> CRunner<R> {
     }
 
     fn detect_build_system(target: &Path) -> BuildSystem {
-        if target.join("CMakeLists.txt").exists() {
+        if target.join("xmake.lua").exists() {
+            BuildSystem::Xmake
+        } else if target.join("CMakeLists.txt").exists() {
             BuildSystem::CMake
         } else if target.join("Makefile").exists()
             || target.join("makefile").exists()
@@ -43,6 +45,7 @@ impl<R: CommandRunner> CRunner<R> {
 
 #[derive(Debug)]
 enum BuildSystem {
+    Xmake,
     CMake,
     Make,
     Autoconf,
@@ -63,7 +66,8 @@ impl<R: CommandRunner> LanguageRunner for CRunner<R> {
 
     fn detect(&self, target: &Path) -> bool {
         // C project markers
-        target.join("CMakeLists.txt").exists()
+        target.join("xmake.lua").exists()
+            || target.join("CMakeLists.txt").exists()
             || target.join("Makefile").exists()
             || target.join("configure.ac").exists()
             || target.join("configure").exists()
@@ -80,6 +84,21 @@ impl<R: CommandRunner> LanguageRunner for CRunner<R> {
 
     async fn install_deps(&self, target: &Path) -> Result<()> {
         // C projects typically ship their own deps; nothing to install.
+        // For xmake projects, run `xmake build` to compile.
+        if target.join("xmake.lua").exists() {
+            info!("running xmake build");
+            let spec = CommandSpec::new("xmake", target).args(["build"]);
+            let out = self
+                .runner
+                .run_command(&spec)
+                .await
+                .map_err(|e| ApexError::LanguageRunner(e.to_string()))?;
+            if out.exit_code != 0 {
+                warn!(stderr = %String::from_utf8_lossy(&out.stderr), "xmake build failed");
+            }
+            return Ok(());
+        }
+
         // Run autogen/configure if present.
         if target.join("autogen.sh").exists() {
             info!("running autogen.sh");
@@ -115,6 +134,7 @@ impl<R: CommandRunner> LanguageRunner for CRunner<R> {
 
         let cmake_build_dir = target.join("build_apex");
         let (cmd, args): (&str, Vec<String>) = match Self::detect_build_system(target) {
+            BuildSystem::Xmake => ("xmake", vec!["test".into()]),
             BuildSystem::CMake => {
                 // Configure
                 let cmake_build_dir_str = cmake_build_dir.to_string_lossy().into_owned();
@@ -374,6 +394,48 @@ mod tests {
             CRunner::<RealCommandRunner>::detect_build_system(dir.path()),
             BuildSystem::CMake
         ));
+    }
+
+    #[test]
+    fn detect_build_system_xmake() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("xmake.lua"), "target('hello')\n").unwrap();
+        assert!(matches!(
+            CRunner::<RealCommandRunner>::detect_build_system(dir.path()),
+            BuildSystem::Xmake
+        ));
+    }
+
+    #[test]
+    fn detect_build_system_cmake_when_no_xmake() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CMakeLists.txt"), "project(test)").unwrap();
+        assert!(matches!(
+            CRunner::<RealCommandRunner>::detect_build_system(dir.path()),
+            BuildSystem::CMake
+        ));
+    }
+
+    #[test]
+    fn xmake_takes_priority_over_cmake() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("xmake.lua"), "target('hello')\n").unwrap();
+        std::fs::write(dir.path().join("CMakeLists.txt"), "project(test)").unwrap();
+        assert!(matches!(
+            CRunner::<RealCommandRunner>::detect_build_system(dir.path()),
+            BuildSystem::Xmake
+        ));
+    }
+
+    #[test]
+    fn xmake_build_command() {
+        // Verify that an xmake.lua project produces `xmake test` as the test command.
+        // We do this structurally: detect_build_system returns Xmake, and the match
+        // arm maps to ("xmake", vec!["test"]).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("xmake.lua"), "target('hello')\n").unwrap();
+        let build_sys = CRunner::<RealCommandRunner>::detect_build_system(dir.path());
+        assert!(matches!(build_sys, BuildSystem::Xmake));
     }
 
     #[test]

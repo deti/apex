@@ -25,17 +25,50 @@ impl<R: CommandRunner> RubyRunner<R> {
         RubyRunner { runner }
     }
 
+    /// Returns `Some("mise")` when mise is available on PATH, `None` otherwise.
+    fn resolve_mise() -> Option<String> {
+        std::process::Command::new("mise")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()
+            .filter(|s| s.success())
+            .map(|_| "mise".to_string())
+    }
+
+    /// Returns true when a mise config file is present in `target`.
+    fn has_mise_config(target: &Path) -> bool {
+        target.join(".mise.toml").exists() || target.join(".tool-versions").exists()
+    }
+
     fn detect_test_runner(target: &Path) -> Vec<String> {
+        let use_mise = Self::resolve_mise().is_some() && Self::has_mise_config(target);
+
         if target.join("spec").exists() || target.join(".rspec").exists() {
-            vec!["bundle".into(), "exec".into(), "rspec".into()]
+            let base = vec!["bundle".into(), "exec".into(), "rspec".into()];
+            if use_mise {
+                let mut cmd = vec!["mise".into(), "exec".into(), "ruby".into(), "--".into()];
+                cmd.extend(base);
+                cmd
+            } else {
+                base
+            }
         } else {
-            vec![
+            let base = vec![
                 "ruby".into(),
                 "-Ilib".into(),
                 "-Itest".into(),
                 "-e".into(),
                 "Dir.glob('test/**/test_*.rb').each{|f| require(File.expand_path(f))}".into(),
-            ]
+            ];
+            if use_mise {
+                let mut cmd = vec!["mise".into(), "exec".into(), "ruby".into(), "--".into()];
+                cmd.extend(base);
+                cmd
+            } else {
+                base
+            }
         }
     }
 }
@@ -184,6 +217,50 @@ mod tests {
     #[test]
     fn language_is_ruby() {
         assert_eq!(RubyRunner::new().language(), Language::Ruby);
+    }
+
+    #[test]
+    fn resolve_mise_returns_option() {
+        // This is a probe test: mise may or may not be installed in CI.
+        // We only assert that the return type is Option<String> and that
+        // if Some is returned it equals "mise".
+        let result = RubyRunner::<RealCommandRunner>::resolve_mise();
+        if let Some(ref val) = result {
+            assert_eq!(val, "mise");
+        }
+        // Either None (mise not on PATH) or Some("mise") — both valid.
+        assert!(result.is_none() || result.as_deref() == Some("mise"));
+    }
+
+    #[test]
+    fn mise_prefix_when_config_present() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("spec")).unwrap();
+        std::fs::write(dir.path().join(".mise.toml"), "[tools]\nruby = '3.2'\n").unwrap();
+
+        // When mise is NOT on PATH, no prefix is added (correct fallback).
+        // When mise IS on PATH, the command starts with ["mise", "exec", "ruby", "--"].
+        let cmd = RubyRunner::<RealCommandRunner>::detect_test_runner(dir.path());
+        let has_mise = RubyRunner::<RealCommandRunner>::resolve_mise().is_some();
+        if has_mise {
+            assert_eq!(&cmd[..4], &["mise", "exec", "ruby", "--"]);
+            assert!(cmd.contains(&"rspec".to_string()));
+        } else {
+            // Fallback path: no mise prefix
+            assert!(cmd.contains(&"rspec".to_string()));
+            assert!(!cmd.contains(&"mise".to_string()));
+        }
+    }
+
+    #[test]
+    fn no_mise_prefix_when_no_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("spec")).unwrap();
+        // No .mise.toml or .tool-versions — mise prefix must not be applied.
+
+        let cmd = RubyRunner::<RealCommandRunner>::detect_test_runner(dir.path());
+        assert!(!cmd.contains(&"mise".to_string()));
+        assert!(cmd.contains(&"rspec".to_string()));
     }
 
     #[tokio::test]

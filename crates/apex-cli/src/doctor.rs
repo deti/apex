@@ -134,6 +134,84 @@ fn check_tcp_basics() -> Check {
 // Check groups
 // ---------------------------------------------------------------------------
 
+/// Parse `mise ls --current --json` output and extract managed tool names.
+///
+/// The JSON schema is an array of objects, each with at least a "name" field:
+/// `[{"name":"python","version":"3.14.0",...}, ...]`
+///
+/// We do a minimal parse without pulling in a JSON dep — just scan for
+/// `"name":"<value>"` patterns, which is sufficient for well-formed mise output.
+fn parse_mise_managed(json: &str) -> Vec<String> {
+    let mut tools = Vec::new();
+    // Each entry looks like: {"name":"python","version":"3.14.0",...}
+    // We extract the name field values.
+    let mut rest = json;
+    while let Some(idx) = rest.find("\"name\"") {
+        rest = &rest[idx + 6..];
+        // skip whitespace and colon
+        let trimmed = rest.trim_start().trim_start_matches(':').trim_start();
+        if let Some(s) = trimmed.strip_prefix('"') {
+            if let Some(end) = s.find('"') {
+                let name = &s[..end];
+                if !name.is_empty() {
+                    tools.push(name.to_string());
+                }
+            }
+        }
+    }
+    // Deduplicate while preserving order
+    let mut seen = std::collections::HashSet::new();
+    tools.retain(|t| seen.insert(t.clone()));
+    tools
+}
+
+async fn checks_version_managers(runner: &dyn CommandRunner) -> (Vec<Check>, Vec<String>) {
+    // --- mise ---
+    let mise_version = version_of(runner, "mise", &["--version"]).await;
+    let mise_found = mise_version.is_some();
+
+    let managed_tools: Vec<String> = if mise_found {
+        // Run `mise ls --current --json` to find what languages are active
+        let spec = CommandSpec::new("mise", ".")
+            .args(["ls", "--current", "--json"])
+            .timeout(10_000);
+        if let Ok(output) = runner.run_command(&spec).await {
+            if output.exit_code == 0 {
+                let json = String::from_utf8_lossy(&output.stdout).to_string();
+                parse_mise_managed(&json)
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let mise_check = Check {
+        name: "mise",
+        description: "Universal version manager (Python, Node, Ruby, ...)",
+        status: match mise_version {
+            Some(v) if !managed_tools.is_empty() => {
+                let tools_str = managed_tools
+                    .iter()
+                    .map(|t| t.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Status::Ok(format!("{v} (managing: {tools_str})"))
+            }
+            Some(v) => Status::Ok(v),
+            None => Status::Warn("mise not found (optional)".into()),
+        },
+    };
+
+    let asdf_check =
+        check_optional(runner, "asdf", "Alternative version manager (optional)", "asdf", &["--version"]).await;
+
+    (vec![mise_check, asdf_check], managed_tools)
+}
+
 async fn checks_core(runner: &dyn CommandRunner) -> Vec<Check> {
     vec![
         check_required(runner, "rust", "Rust compiler", "rustc", &["--version"]).await,
@@ -156,8 +234,10 @@ async fn checks_core(runner: &dyn CommandRunner) -> Vec<Check> {
     ]
 }
 
-async fn checks_python(runner: &dyn CommandRunner) -> Vec<Check> {
-    let python3 = check_required(
+async fn checks_python(runner: &dyn CommandRunner, mise_managed: &[String]) -> Vec<Check> {
+    let python_managed_by_mise = mise_managed.iter().any(|t| t.contains("python"));
+
+    let mut python3 = check_required(
         runner,
         "python3",
         "Python 3 interpreter",
@@ -165,6 +245,11 @@ async fn checks_python(runner: &dyn CommandRunner) -> Vec<Check> {
         &["--version"],
     )
     .await;
+    if python_managed_by_mise {
+        if let Status::Ok(ref mut v) = python3.status {
+            v.push_str(" (version managed by mise)");
+        }
+    }
 
     let uv = check_optional(runner, "uv", "Fast Python package manager", "uv", &["--version"]).await;
     let uv_available = matches!(uv.status, Status::Ok(_));
@@ -216,7 +301,9 @@ async fn checks_python(runner: &dyn CommandRunner) -> Vec<Check> {
     vec![python3, uv, pip3, pytest, coverage]
 }
 
-async fn checks_javascript(runner: &dyn CommandRunner) -> Vec<Check> {
+async fn checks_javascript(runner: &dyn CommandRunner, mise_managed: &[String]) -> Vec<Check> {
+    let node_managed_by_mise = mise_managed.iter().any(|t| t.contains("node"));
+
     let bun_version = version_of(runner, "bun", &["--version"]).await;
     let bun_found = bun_version.is_some();
 
@@ -237,8 +324,16 @@ async fn checks_javascript(runner: &dyn CommandRunner) -> Vec<Check> {
         "npx tool runner (for nyc)"
     };
 
+    let mut node_check =
+        check_required(runner, "node", "Node.js runtime", "node", &["--version"]).await;
+    if node_managed_by_mise {
+        if let Status::Ok(ref mut v) = node_check.status {
+            v.push_str(" (version managed by mise)");
+        }
+    }
+
     vec![
-        check_required(runner, "node", "Node.js runtime", "node", &["--version"]).await,
+        node_check,
         check_required(runner, "npm", "npm package manager", "npm", &["--version"]).await,
         bun_check,
         check_optional(runner, "npx", npx_desc, "npx", &["--version"]).await,
@@ -396,15 +491,19 @@ async fn run_doctor_with_runner(runner: &dyn CommandRunner) -> color_eyre::Resul
 
     let mut total_failures = 0;
 
+    // Version managers first — their output informs language checks.
+    let (vm_checks, mise_managed) = checks_version_managers(runner).await;
+
     // Run all check groups sequentially (could be parallel but order matters for display).
     let core_checks = checks_core(runner).await;
-    let py_checks = checks_python(runner).await;
-    let js_checks = checks_javascript(runner).await;
+    let py_checks = checks_python(runner, &mise_managed).await;
+    let js_checks = checks_javascript(runner, &mise_managed).await;
     let java_checks = checks_java(runner).await;
     let c_checks = checks_c(runner).await;
     let wasm_checks = checks_wasm(runner).await;
     let fc_checks = checks_firecracker(runner).await;
 
+    total_failures += print_group("Version Managers", &vm_checks);
     total_failures += print_group("Core", &core_checks);
     total_failures += print_group("Python  (--lang python)", &py_checks);
     total_failures += print_group("JavaScript  (--lang js)", &js_checks);
@@ -767,7 +866,7 @@ mod tests {
     #[tokio::test]
     async fn checks_python_runs_without_panic() {
         let runner = RealCommandRunner;
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         assert!(checks.len() >= 5);
         assert!(checks.iter().any(|c| c.name == "python3"));
         assert!(checks.iter().any(|c| c.name == "uv"));
@@ -777,7 +876,7 @@ mod tests {
     #[tokio::test]
     async fn checks_javascript_runs_without_panic() {
         let runner = RealCommandRunner;
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         assert!(checks.len() >= 4);
         assert!(checks.iter().any(|c| c.name == "node"));
         assert!(checks.iter().any(|c| c.name == "npm"));
@@ -1101,7 +1200,7 @@ mod tests {
     #[tokio::test]
     async fn mock_python3_found() {
         let runner = MockRunner::all_succeed("Python 3.12.1");
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let py = checks.iter().find(|c| c.name == "python3").unwrap();
         assert!(matches!(&py.status, Status::Ok(v) if v.contains("Python 3.12")));
     }
@@ -1109,7 +1208,7 @@ mod tests {
     #[tokio::test]
     async fn mock_python3_not_found() {
         let runner = MockRunner::all_fail();
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let py = checks.iter().find(|c| c.name == "python3").unwrap();
         assert!(matches!(&py.status, Status::Fail(_)));
     }
@@ -1117,7 +1216,7 @@ mod tests {
     #[tokio::test]
     async fn mock_python3_empty_output() {
         let runner = MockRunner::all_empty_output();
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let py = checks.iter().find(|c| c.name == "python3").unwrap();
         assert!(matches!(&py.status, Status::Fail(_)));
     }
@@ -1127,7 +1226,7 @@ mod tests {
     #[tokio::test]
     async fn mock_node_found() {
         let runner = MockRunner::all_succeed("v20.10.0");
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let node = checks.iter().find(|c| c.name == "node").unwrap();
         assert!(matches!(&node.status, Status::Ok(v) if v == "v20.10.0"));
     }
@@ -1135,7 +1234,7 @@ mod tests {
     #[tokio::test]
     async fn mock_node_not_found() {
         let runner = MockRunner::all_fail();
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let node = checks.iter().find(|c| c.name == "node").unwrap();
         assert!(matches!(&node.status, Status::Fail(_)));
     }
@@ -1143,7 +1242,7 @@ mod tests {
     #[tokio::test]
     async fn mock_node_empty_output() {
         let runner = MockRunner::all_empty_output();
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let node = checks.iter().find(|c| c.name == "node").unwrap();
         assert!(matches!(&node.status, Status::Fail(_)));
     }
@@ -1315,7 +1414,7 @@ mod tests {
     async fn mock_checks_python_all_found() {
         // When uv is present, pip3/pytest/coverage.py are downgraded to Warn.
         let runner = MockRunner::all_succeed("Python 3.12.0");
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         // python3 and uv should be Ok
         let py = checks.iter().find(|c| c.name == "python3").unwrap();
         assert!(matches!(&py.status, Status::Ok(_)), "expected Ok for python3");
@@ -1334,7 +1433,7 @@ mod tests {
     async fn mock_checks_python_all_missing() {
         // When uv is absent, pip3 stays required (Fail), pytest/coverage stay Warn.
         let runner = MockRunner::all_fail();
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let py = checks.iter().find(|c| c.name == "python3").unwrap();
         assert!(matches!(&py.status, Status::Fail(_)));
         let uv = checks.iter().find(|c| c.name == "uv").unwrap();
@@ -1349,7 +1448,7 @@ mod tests {
     #[tokio::test]
     async fn mock_checks_javascript_all_found() {
         let runner = MockRunner::all_succeed("v20.0.0");
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         for c in &checks {
             assert!(
                 matches!(&c.status, Status::Ok(_)),
@@ -1362,7 +1461,7 @@ mod tests {
     #[tokio::test]
     async fn mock_checks_javascript_all_missing() {
         let runner = MockRunner::all_fail();
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let node = checks.iter().find(|c| c.name == "node").unwrap();
         assert!(matches!(&node.status, Status::Fail(_)));
         let npm = checks.iter().find(|c| c.name == "npm").unwrap();
@@ -1573,7 +1672,7 @@ mod tests {
                 Ok(CommandOutput::success(b"Python 3.14.3".to_vec()))
             }
         });
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let uv = checks.iter().find(|c| c.name == "uv").unwrap();
         assert!(
             matches!(&uv.status, Status::Ok(v) if v.contains("uv")),
@@ -1609,7 +1708,7 @@ mod tests {
                 Ok(CommandOutput::success(b"Python 3.14.3".to_vec()))
             }
         });
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let uv = checks.iter().find(|c| c.name == "uv").unwrap();
         assert!(
             matches!(&uv.status, Status::Warn(_)),
@@ -1639,7 +1738,7 @@ mod tests {
                 ))
             }
         });
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
         assert!(matches!(&pip.status, Status::Ok(v) if v.contains("pip")));
     }
@@ -1648,7 +1747,7 @@ mod tests {
     async fn mock_pip3_downgraded_when_uv_present() {
         // uv found → pip3 is Warn (not a required check).
         let runner = MockRunner::all_succeed("uv 0.6.1");
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
         assert!(
             matches!(&pip.status, Status::Warn(msg) if msg.contains("uv available")),
@@ -1659,7 +1758,7 @@ mod tests {
     #[tokio::test]
     async fn mock_pip3_not_found() {
         let runner = MockRunner::all_fail();
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
         assert!(matches!(&pip.status, Status::Fail(_)));
     }
@@ -1678,7 +1777,7 @@ mod tests {
                 Ok(CommandOutput::success(b"pytest 7.4.3".to_vec()))
             }
         });
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
         assert!(matches!(&pytest.status, Status::Ok(v) if v.contains("pytest")));
     }
@@ -1687,7 +1786,7 @@ mod tests {
     async fn mock_pytest_downgraded_when_uv_present() {
         // uv found → pytest is Warn "managed by uv".
         let runner = MockRunner::all_succeed("uv 0.6.1");
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
         assert!(
             matches!(&pytest.status, Status::Warn(msg) if msg.contains("uv")),
@@ -1698,7 +1797,7 @@ mod tests {
     #[tokio::test]
     async fn mock_pytest_not_found() {
         let runner = MockRunner::all_fail();
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
         assert!(matches!(&pytest.status, Status::Warn(_)));
     }
@@ -1717,7 +1816,7 @@ mod tests {
                 Ok(CommandOutput::success(b"Coverage.py, version 7.3.2".to_vec()))
             }
         });
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
         assert!(matches!(&cov.status, Status::Ok(v) if v.contains("Coverage")));
     }
@@ -1726,7 +1825,7 @@ mod tests {
     async fn mock_coverage_py_downgraded_when_uv_present() {
         // uv found → coverage.py is Warn "managed by uv".
         let runner = MockRunner::all_succeed("uv 0.6.1");
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
         assert!(
             matches!(&cov.status, Status::Warn(msg) if msg.contains("uv")),
@@ -1737,7 +1836,7 @@ mod tests {
     #[tokio::test]
     async fn mock_coverage_py_not_found() {
         let runner = MockRunner::all_fail();
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
         assert!(matches!(&cov.status, Status::Warn(_)));
     }
@@ -1746,7 +1845,7 @@ mod tests {
     #[tokio::test]
     async fn mock_npm_found() {
         let runner = MockRunner::all_succeed("10.2.3");
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let npm = checks.iter().find(|c| c.name == "npm").unwrap();
         assert!(matches!(&npm.status, Status::Ok(_)));
     }
@@ -1754,7 +1853,7 @@ mod tests {
     #[tokio::test]
     async fn mock_npm_not_found() {
         let runner = MockRunner::all_fail();
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let npm = checks.iter().find(|c| c.name == "npm").unwrap();
         assert!(matches!(&npm.status, Status::Fail(_)));
     }
@@ -1763,7 +1862,7 @@ mod tests {
     #[tokio::test]
     async fn mock_npx_found() {
         let runner = MockRunner::all_succeed("10.2.3");
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let npx = checks.iter().find(|c| c.name == "npx").unwrap();
         assert!(matches!(&npx.status, Status::Ok(_)));
     }
@@ -1771,7 +1870,7 @@ mod tests {
     #[tokio::test]
     async fn mock_npx_not_found() {
         let runner = MockRunner::all_fail();
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let npx = checks.iter().find(|c| c.name == "npx").unwrap();
         assert!(matches!(&npx.status, Status::Warn(_)));
     }
@@ -1786,7 +1885,7 @@ mod tests {
                 Ok(CommandOutput::success(b"v20.0.0".to_vec()))
             }
         });
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let bun = checks.iter().find(|c| c.name == "bun").unwrap();
         match &bun.status {
             Status::Ok(v) => {
@@ -1807,7 +1906,7 @@ mod tests {
     #[tokio::test]
     async fn mock_bun_not_found() {
         let runner = MockRunner::all_fail();
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let bun = checks.iter().find(|c| c.name == "bun").unwrap();
         assert!(
             matches!(&bun.status, Status::Warn(_)),
@@ -2006,7 +2105,7 @@ mod tests {
         // When uv succeeds, pip3 is skipped (downgraded to synthetic Warn).
         // So only python3 and uv are actually invoked.
         let runner = RecordingRunner::new_all_succeed("v1.0");
-        let _ = checks_python(&runner).await;
+        let _ = checks_python(&runner, &[]).await;
         let calls = runner.calls().await;
         let programs: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
         assert!(programs.contains(&"python3"));
@@ -2018,7 +2117,7 @@ mod tests {
     #[tokio::test]
     async fn recording_runner_js_calls_correct_binaries() {
         let runner = RecordingRunner::new_all_succeed("v1.0");
-        let _ = checks_javascript(&runner).await;
+        let _ = checks_javascript(&runner, &[]).await;
         let calls = runner.calls().await;
         let programs: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
         assert!(programs.contains(&"node"));
@@ -2078,7 +2177,7 @@ mod tests {
                 Ok(CommandOutput::success(b"v1.0".to_vec()))
             }
         });
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let py = checks.iter().find(|c| c.name == "python3").unwrap();
         assert!(matches!(&py.status, Status::Ok(_)));
         let uv = checks.iter().find(|c| c.name == "uv").unwrap();
@@ -2102,7 +2201,7 @@ mod tests {
                 })
             }
         });
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let uv = checks.iter().find(|c| c.name == "uv").unwrap();
         assert!(matches!(&uv.status, Status::Ok(_)));
         // pip3 is downgraded to Warn when uv is present
@@ -2126,7 +2225,7 @@ mod tests {
                 })
             }
         });
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let node = checks.iter().find(|c| c.name == "node").unwrap();
         assert!(matches!(&node.status, Status::Ok(_)));
         let npm = checks.iter().find(|c| c.name == "npm").unwrap();
@@ -2314,7 +2413,7 @@ mod tests {
     #[tokio::test]
     async fn mock_checks_python_nonzero_exit() {
         let runner = MockRunner::all_exit_nonzero();
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         let py = checks.iter().find(|c| c.name == "python3").unwrap();
         assert!(matches!(&py.status, Status::Fail(_)));
         let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
@@ -2328,7 +2427,7 @@ mod tests {
     #[tokio::test]
     async fn mock_checks_javascript_nonzero_exit() {
         let runner = MockRunner::all_exit_nonzero();
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let node = checks.iter().find(|c| c.name == "node").unwrap();
         assert!(matches!(&node.status, Status::Fail(_)));
         let npm = checks.iter().find(|c| c.name == "npm").unwrap();
@@ -2397,7 +2496,7 @@ mod tests {
     #[tokio::test]
     async fn mock_checks_javascript_empty_output() {
         let runner = MockRunner::all_empty_output();
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         let node = checks.iter().find(|c| c.name == "node").unwrap();
         assert!(matches!(&node.status, Status::Fail(_)));
         let npm = checks.iter().find(|c| c.name == "npm").unwrap();
@@ -2469,14 +2568,14 @@ mod tests {
     #[tokio::test]
     async fn mock_checks_python_returns_five_checks() {
         let runner = MockRunner::all_succeed("v1.0");
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         assert_eq!(checks.len(), 5);
     }
 
     #[tokio::test]
     async fn mock_checks_javascript_returns_four_checks() {
         let runner = MockRunner::all_succeed("v1.0");
-        let checks = checks_javascript(&runner).await;
+        let checks = checks_javascript(&runner, &[]).await;
         assert_eq!(checks.len(), 4);
     }
 
@@ -2526,7 +2625,7 @@ mod tests {
     #[tokio::test]
     async fn mock_checks_python_descriptions_nonempty() {
         let runner = MockRunner::all_succeed("v1.0");
-        let checks = checks_python(&runner).await;
+        let checks = checks_python(&runner, &[]).await;
         for c in &checks {
             assert!(
                 !c.description.is_empty(),
@@ -2586,7 +2685,7 @@ mod tests {
             }),
             calls: Arc::new(Mutex::new(Vec::new())),
         };
-        let _ = checks_python(&runner).await;
+        let _ = checks_python(&runner, &[]).await;
         let calls = runner.calls().await;
         let pytest_call = calls
             .iter()
@@ -2613,12 +2712,131 @@ mod tests {
             }),
             calls: Arc::new(Mutex::new(Vec::new())),
         };
-        let _ = checks_python(&runner).await;
+        let _ = checks_python(&runner, &[]).await;
         let calls = runner.calls().await;
         let cov_call = calls.iter().find(|c| c.1.contains(&"coverage".to_string()));
         assert!(cov_call.is_some(), "coverage -m call not found");
         let call = cov_call.unwrap();
         assert_eq!(call.0, "python3");
         assert_eq!(call.1, vec!["-m", "coverage", "--version"]);
+    }
+
+    // ==================================================================
+    // Version manager checks
+    // ==================================================================
+
+    #[test]
+    fn parse_mise_managed_empty_json() {
+        let tools = parse_mise_managed("[]");
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn parse_mise_managed_single_tool() {
+        let json = r#"[{"name":"python","version":"3.14.0","requested_version":"3.14","source":{"type":"tool-versions","path":"/home/user/.tool-versions"}}]"#;
+        let tools = parse_mise_managed(json);
+        assert_eq!(tools, vec!["python"]);
+    }
+
+    #[test]
+    fn parse_mise_managed_multiple_tools() {
+        let json = r#"[{"name":"python","version":"3.14.0"},{"name":"node","version":"22.0.0"},{"name":"ruby","version":"3.3.0"}]"#;
+        let tools = parse_mise_managed(json);
+        assert_eq!(tools, vec!["python", "node", "ruby"]);
+    }
+
+    #[test]
+    fn parse_mise_managed_deduplicates() {
+        let json = r#"[{"name":"python","version":"3.14.0"},{"name":"python","version":"3.12.0"}]"#;
+        let tools = parse_mise_managed(json);
+        assert_eq!(tools, vec!["python"]);
+    }
+
+    #[tokio::test]
+    async fn mock_mise_found() {
+        let runner = MockRunner::with_handler(|spec| {
+            if spec.program == "mise" && spec.args.contains(&"--version".to_string()) {
+                Ok(CommandOutput::success(b"mise 2025.3.0".to_vec()))
+            } else if spec.program == "mise" {
+                // mise ls --current --json
+                Ok(CommandOutput::success(
+                    br#"[{"name":"python","version":"3.14.0"},{"name":"node","version":"22.0.0"}]"#
+                        .to_vec(),
+                ))
+            } else {
+                Err(apex_core::error::ApexError::Subprocess {
+                    exit_code: 127,
+                    stderr: "not found".into(),
+                })
+            }
+        });
+        let (checks, managed) = checks_version_managers(&runner).await;
+        let mise = checks.iter().find(|c| c.name == "mise").unwrap();
+        assert!(
+            matches!(&mise.status, Status::Ok(v) if v.contains("mise 2025.3.0")),
+            "expected mise Ok, got {:?}",
+            mise.status
+        );
+        assert!(managed.contains(&"python".to_string()));
+        assert!(managed.contains(&"node".to_string()));
+    }
+
+    #[tokio::test]
+    async fn mock_mise_not_found() {
+        let runner = MockRunner::all_fail();
+        let (checks, managed) = checks_version_managers(&runner).await;
+        let mise = checks.iter().find(|c| c.name == "mise").unwrap();
+        assert!(
+            matches!(&mise.status, Status::Warn(_)),
+            "expected mise Warn, got {:?}",
+            mise.status
+        );
+        assert!(managed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mock_asdf_found() {
+        let runner = MockRunner::with_handler(|spec| {
+            if spec.program == "asdf" {
+                Ok(CommandOutput::success(b"asdf version 0.14.0".to_vec()))
+            } else if spec.program == "mise" && spec.args.contains(&"--version".to_string()) {
+                Ok(CommandOutput::success(b"mise 2025.3.0".to_vec()))
+            } else {
+                Ok(CommandOutput::success(b"[]".to_vec()))
+            }
+        });
+        let (checks, _) = checks_version_managers(&runner).await;
+        let asdf = checks.iter().find(|c| c.name == "asdf").unwrap();
+        assert!(
+            matches!(&asdf.status, Status::Ok(_)),
+            "expected asdf Ok, got {:?}",
+            asdf.status
+        );
+    }
+
+    #[tokio::test]
+    async fn mise_managed_python_annotates_python3_check() {
+        // mise manages python — python3 check should show "(version managed by mise)"
+        let runner = MockRunner::all_succeed("3.14.0");
+        let checks = checks_python(&runner, &["python".to_string()]).await;
+        let py = checks.iter().find(|c| c.name == "python3").unwrap();
+        assert!(
+            matches!(&py.status, Status::Ok(v) if v.contains("version managed by mise")),
+            "expected annotation, got {:?}",
+            py.status
+        );
+    }
+
+    #[tokio::test]
+    async fn mise_managed_node_annotates_node_check() {
+        // mise manages node — node check should show "(version managed by mise)"
+        let runner = MockRunner::all_succeed("v22.0.0");
+        let checks = checks_javascript(&runner, &["node".to_string()]).await;
+        let node = checks.iter().find(|c| c.name == "node").unwrap();
+        assert!(
+            matches!(&node.status, Status::Ok(v) if v.contains("version managed by mise")),
+            "expected annotation, got {:?}",
+            node.status
+        );
     }
 }

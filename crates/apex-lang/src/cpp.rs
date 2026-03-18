@@ -26,7 +26,9 @@ impl<R: CommandRunner> CppRunner<R> {
     }
 
     fn detect_build_system(target: &Path) -> CppBuildSystem {
-        if target.join("CMakeLists.txt").exists() {
+        if target.join("xmake.lua").exists() {
+            CppBuildSystem::Xmake
+        } else if target.join("CMakeLists.txt").exists() {
             CppBuildSystem::CMake
         } else if target.join("Makefile").exists()
             || target.join("makefile").exists()
@@ -64,6 +66,7 @@ impl<R: CommandRunner> CppRunner<R> {
 
 #[derive(Debug)]
 enum CppBuildSystem {
+    Xmake,
     CMake,
     Make,
     Meson,
@@ -84,7 +87,8 @@ impl<R: CommandRunner> LanguageRunner for CppRunner<R> {
 
     fn detect(&self, target: &Path) -> bool {
         // C++ project: CMakeLists.txt with C++ sources, or Makefile with C++ sources
-        let has_build = target.join("CMakeLists.txt").exists()
+        let has_build = target.join("xmake.lua").exists()
+            || target.join("CMakeLists.txt").exists()
             || target.join("Makefile").exists()
             || target.join("meson.build").exists();
 
@@ -93,6 +97,18 @@ impl<R: CommandRunner> LanguageRunner for CppRunner<R> {
 
     async fn install_deps(&self, target: &Path) -> Result<()> {
         match Self::detect_build_system(target) {
+            CppBuildSystem::Xmake => {
+                info!("running xmake build");
+                let spec = CommandSpec::new("xmake", target).args(["build"]);
+                let out = self
+                    .runner
+                    .run_command(&spec)
+                    .await
+                    .map_err(|e| ApexError::LanguageRunner(e.to_string()))?;
+                if out.exit_code != 0 {
+                    warn!(stderr = %String::from_utf8_lossy(&out.stderr), "xmake build failed");
+                }
+            }
             CppBuildSystem::CMake => {
                 info!("running cmake -B build");
                 let spec = CommandSpec::new("cmake", target).args(["-B", "build"]);
@@ -151,6 +167,7 @@ impl<R: CommandRunner> LanguageRunner for CppRunner<R> {
         let start = Instant::now();
 
         let (spec, test_framework) = match Self::detect_build_system(target) {
+            CppBuildSystem::Xmake => (CommandSpec::new("xmake", target).args(["test"]), "xmake-test"),
             CppBuildSystem::CMake => {
                 if Self::has_googletest(target) {
                     info!("detected GoogleTest; running ctest");
@@ -326,6 +343,46 @@ mod tests {
         )
         .unwrap();
         assert!(CppRunner::<RealCommandRunner>::has_googletest(tmp.path()));
+    }
+
+    #[test]
+    fn detect_build_system_xmake() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("xmake.lua"), "target('hello')\n").unwrap();
+        assert!(matches!(
+            CppRunner::<RealCommandRunner>::detect_build_system(tmp.path()),
+            CppBuildSystem::Xmake
+        ));
+    }
+
+    #[test]
+    fn detect_build_system_cmake_when_no_xmake() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("CMakeLists.txt"), "project(test)").unwrap();
+        assert!(matches!(
+            CppRunner::<RealCommandRunner>::detect_build_system(tmp.path()),
+            CppBuildSystem::CMake
+        ));
+    }
+
+    #[test]
+    fn xmake_build_command() {
+        // Verify xmake.lua produces the Xmake build-system variant.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("xmake.lua"), "target('hello')\n").unwrap();
+        let build_sys = CppRunner::<RealCommandRunner>::detect_build_system(tmp.path());
+        assert!(matches!(build_sys, CppBuildSystem::Xmake));
+    }
+
+    #[test]
+    fn xmake_takes_priority_over_cmake_cpp() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("xmake.lua"), "target('hello')\n").unwrap();
+        std::fs::write(tmp.path().join("CMakeLists.txt"), "project(test)").unwrap();
+        assert!(matches!(
+            CppRunner::<RealCommandRunner>::detect_build_system(tmp.path()),
+            CppBuildSystem::Xmake
+        ));
     }
 
     #[test]
