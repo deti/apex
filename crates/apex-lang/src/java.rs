@@ -1,7 +1,7 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
-    traits::{LanguageRunner, TestRunOutput},
+    traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
 };
 use async_trait::async_trait;
@@ -35,6 +35,86 @@ impl JavaRunner {
 impl<R: CommandRunner> JavaRunner<R> {
     pub fn with_runner(runner: R) -> Self {
         JavaRunner { runner }
+    }
+
+    /// Check if a binary is on PATH and return its version string.
+    fn tool_version(bin: &str, args: &[&str]) -> Option<String> {
+        let mut cmd = std::process::Command::new(bin);
+        cmd.args(args);
+        if let Ok(java_home) = std::env::var("JAVA_HOME") {
+            cmd.env("JAVA_HOME", java_home);
+        }
+        let output = cmd.output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // java -version outputs to stderr
+        let text = if stdout.trim().is_empty() {
+            stderr.to_string()
+        } else {
+            stdout.to_string()
+        };
+        Some(text.lines().next().unwrap_or("").trim().to_string())
+    }
+
+    /// Check if gradlew exists and is executable.
+    fn has_gradle_wrapper(target: &Path) -> bool {
+        let gradlew = target.join("gradlew");
+        gradlew.exists()
+    }
+
+    /// Check if JaCoCo plugin is configured in build.gradle.
+    fn has_jacoco_plugin(target: &Path) -> bool {
+        for name in &["build.gradle", "build.gradle.kts"] {
+            if let Ok(content) = std::fs::read_to_string(target.join(name)) {
+                if content.contains("jacoco") || content.contains("JaCoCo") {
+                    return true;
+                }
+            }
+        }
+        // Also check pom.xml for Maven
+        if let Ok(content) = std::fs::read_to_string(target.join("pom.xml")) {
+            if content.contains("jacoco") {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Detect Gradle multi-module projects by looking for settings.gradle.
+    fn detect_subprojects(target: &Path) -> Vec<String> {
+        let mut subprojects = Vec::new();
+        for name in &["settings.gradle", "settings.gradle.kts"] {
+            if let Ok(content) = std::fs::read_to_string(target.join(name)) {
+                // Parse include statements: include("sub1", "sub2") or include 'sub1', 'sub2'
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("include") {
+                        // Extract quoted strings
+                        let mut in_quote = false;
+                        let mut quote_char = '"';
+                        let mut current = String::new();
+                        for ch in trimmed.chars() {
+                            if !in_quote && (ch == '"' || ch == '\'') {
+                                in_quote = true;
+                                quote_char = ch;
+                            } else if in_quote && ch == quote_char {
+                                in_quote = false;
+                                if !current.is_empty() {
+                                    subprojects.push(current.trim_start_matches(':').to_string());
+                                    current.clear();
+                                }
+                            } else if in_quote {
+                                current.push(ch);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        subprojects
     }
 }
 
@@ -127,6 +207,82 @@ impl<R: CommandRunner> LanguageRunner for JavaRunner<R> {
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             duration_ms,
         })
+    }
+
+    fn preflight_check(&self, target: &Path) -> Result<PreflightInfo> {
+        let mut info = PreflightInfo::default();
+        let build_tool = detect_build_tool(target);
+        info.build_system = Some(build_tool.into());
+        info.test_framework = Some("JUnit".into());
+
+        if build_tool == "gradle" {
+            info.package_manager = Some("gradle".into());
+
+            // Check for gradle wrapper
+            if Self::has_gradle_wrapper(target) {
+                info.extra.push(("gradlew".into(), "true".into()));
+            } else {
+                // Check system gradle
+                if let Some(ver) = Self::tool_version("gradle", &["--version"]) {
+                    info.available_tools.push(("gradle".into(), ver));
+                } else {
+                    info.missing_tools.push("gradle".into());
+                    info.warnings.push(
+                        "no gradlew wrapper and gradle not on PATH".into(),
+                    );
+                }
+            }
+
+            // Detect subprojects (multi-module)
+            let subprojects = Self::detect_subprojects(target);
+            if !subprojects.is_empty() {
+                info.extra.push(("multi_module".into(), "true".into()));
+                for sp in &subprojects {
+                    info.extra.push(("subproject".into(), sp.clone()));
+                }
+            }
+        } else {
+            info.package_manager = Some("maven".into());
+
+            // Check mvn
+            if let Some(ver) = Self::tool_version("mvn", &["--version"]) {
+                info.available_tools.push(("mvn".into(), ver));
+            } else {
+                info.missing_tools.push("mvn".into());
+            }
+        }
+
+        // Check java
+        if let Some(ver) = Self::tool_version("java", &["-version"]) {
+            info.available_tools.push(("java".into(), ver));
+        } else {
+            info.missing_tools.push("java".into());
+        }
+
+        // Check JAVA_HOME
+        if let Ok(java_home) = std::env::var("JAVA_HOME") {
+            info.env_vars.push(("JAVA_HOME".into(), java_home));
+        } else {
+            info.warnings.push("JAVA_HOME not set".into());
+        }
+
+        // Check JaCoCo
+        if Self::has_jacoco_plugin(target) {
+            info.extra.push(("jacoco".into(), "configured".into()));
+        } else {
+            info.warnings.push(
+                "JaCoCo not found in build configuration; coverage collection may need init.gradle injection".into(),
+            );
+        }
+
+        // Deps installed check
+        info.deps_installed = if build_tool == "gradle" {
+            target.join(".gradle").exists() || target.join("build").exists()
+        } else {
+            target.join("target").exists()
+        };
+
+        Ok(info)
     }
 }
 
@@ -634,5 +790,141 @@ mod tests {
         let runner = JavaRunner::with_runner(mock);
         let result = runner.run_tests(dir.path(), &[]).await.unwrap();
         assert!(result.stderr.contains("deprecated API"));
+    }
+
+    // ------------------------------------------------------------------
+    // preflight_check tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn preflight_check_gradle_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle"), "apply plugin: 'java'\n").unwrap();
+        let runner = JavaRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("gradle"));
+        assert_eq!(info.test_framework.as_deref(), Some("JUnit"));
+    }
+
+    #[test]
+    fn preflight_check_maven_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pom.xml"), "<project/>").unwrap();
+        let runner = JavaRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("maven"));
+        assert_eq!(info.package_manager.as_deref(), Some("maven"));
+    }
+
+    #[test]
+    fn preflight_check_detects_jacoco_in_gradle() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("build.gradle"),
+            "apply plugin: 'jacoco'\n",
+        )
+        .unwrap();
+        let runner = JavaRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "jacoco" && v == "configured"));
+    }
+
+    #[test]
+    fn preflight_check_warns_no_jacoco() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle"), "apply plugin: 'java'\n").unwrap();
+        let runner = JavaRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.warnings.iter().any(|w| w.contains("JaCoCo")));
+    }
+
+    #[test]
+    fn preflight_check_detects_multi_module() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle"), "").unwrap();
+        std::fs::write(
+            dir.path().join("settings.gradle"),
+            "include 'module-a', 'module-b'\n",
+        )
+        .unwrap();
+        let runner = JavaRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "multi_module" && v == "true"));
+        assert!(info.extra.iter().any(|(k, v)| k == "subproject" && v == "module-a"));
+        assert!(info.extra.iter().any(|(k, v)| k == "subproject" && v == "module-b"));
+    }
+
+    #[test]
+    fn preflight_check_detects_gradlew() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle"), "").unwrap();
+        std::fs::write(dir.path().join("gradlew"), "#!/bin/sh\n").unwrap();
+        let runner = JavaRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "gradlew" && v == "true"));
+    }
+
+    #[test]
+    fn detect_subprojects_from_settings_gradle() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.gradle"),
+            "include 'api', 'core'\ninclude 'web'\n",
+        )
+        .unwrap();
+        let subs = JavaRunner::<RealCommandRunner>::detect_subprojects(dir.path());
+        assert!(subs.contains(&"api".to_string()));
+        assert!(subs.contains(&"core".to_string()));
+        assert!(subs.contains(&"web".to_string()));
+    }
+
+    #[test]
+    fn detect_subprojects_from_settings_gradle_kts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.gradle.kts"),
+            "include(\"api\")\ninclude(\"core\")\n",
+        )
+        .unwrap();
+        let subs = JavaRunner::<RealCommandRunner>::detect_subprojects(dir.path());
+        assert!(subs.contains(&"api".to_string()));
+        assert!(subs.contains(&"core".to_string()));
+    }
+
+    #[test]
+    fn detect_subprojects_colon_prefix_stripped() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.gradle"),
+            "include ':app', ':lib'\n",
+        )
+        .unwrap();
+        let subs = JavaRunner::<RealCommandRunner>::detect_subprojects(dir.path());
+        assert!(subs.contains(&"app".to_string()));
+        assert!(subs.contains(&"lib".to_string()));
+    }
+
+    #[test]
+    fn has_jacoco_plugin_in_pom() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("pom.xml"),
+            "<project><plugins><plugin><artifactId>jacoco-maven-plugin</artifactId></plugin></plugins></project>",
+        )
+        .unwrap();
+        assert!(JavaRunner::<RealCommandRunner>::has_jacoco_plugin(dir.path()));
+    }
+
+    #[test]
+    fn has_gradle_wrapper_true() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gradlew"), "#!/bin/sh\n").unwrap();
+        assert!(JavaRunner::<RealCommandRunner>::has_gradle_wrapper(dir.path()));
+    }
+
+    #[test]
+    fn has_gradle_wrapper_false() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!JavaRunner::<RealCommandRunner>::has_gradle_wrapper(dir.path()));
     }
 }

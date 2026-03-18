@@ -1,7 +1,7 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
-    traits::{LanguageRunner, TestRunOutput},
+    traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
 };
 use async_trait::async_trait;
@@ -214,6 +214,82 @@ impl<R: CommandRunner> LanguageRunner for CppRunner<R> {
             duration_ms: elapsed,
         })
     }
+
+    fn preflight_check(&self, target: &Path) -> Result<PreflightInfo> {
+        let mut info = PreflightInfo::default();
+
+        let build_sys = Self::detect_build_system(target);
+        info.build_system = Some(match &build_sys {
+            CppBuildSystem::Xmake => "xmake",
+            CppBuildSystem::CMake => "cmake",
+            CppBuildSystem::Make => "make",
+            CppBuildSystem::Meson => "meson",
+            CppBuildSystem::None => "none",
+        }
+        .into());
+
+        // Check compilers
+        let which_bin = |name: &str| -> bool {
+            std::process::Command::new("which")
+                .arg(name)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+
+        if which_bin("clang++") {
+            info.available_tools.push(("clang++".into(), "available".into()));
+        } else if which_bin("g++") {
+            info.available_tools.push(("g++".into(), "available".into()));
+        } else {
+            info.missing_tools.push("clang++ or g++".into());
+        }
+
+        // Check build system tools
+        match &build_sys {
+            CppBuildSystem::CMake => {
+                if !which_bin("cmake") {
+                    info.missing_tools.push("cmake".into());
+                }
+                if Self::has_googletest(target) {
+                    info.test_framework = Some("GoogleTest".into());
+                } else {
+                    info.test_framework = Some("ctest".into());
+                }
+            }
+            CppBuildSystem::Meson => {
+                if !which_bin("meson") {
+                    info.missing_tools.push("meson".into());
+                }
+                info.test_framework = Some("meson-test".into());
+            }
+            CppBuildSystem::Xmake => {
+                if !which_bin("xmake") {
+                    info.missing_tools.push("xmake".into());
+                }
+                info.test_framework = Some("xmake-test".into());
+            }
+            CppBuildSystem::Make => {
+                info.test_framework = Some("make-test".into());
+            }
+            CppBuildSystem::None => {
+                info.warnings.push("no build system detected for C++ project".into());
+                info.test_framework = Some("none".into());
+            }
+        }
+
+        // Check coverage tools
+        if which_bin("gcov") {
+            info.available_tools.push(("gcov".into(), "available".into()));
+        }
+        if which_bin("llvm-cov") {
+            info.available_tools.push(("llvm-cov".into(), "available".into()));
+        }
+
+        info.deps_installed = target.join("build").exists();
+
+        Ok(info)
+    }
 }
 
 /// Parse ctest summary output for test pass/fail counts.
@@ -394,5 +470,69 @@ mod tests {
         )
         .unwrap();
         assert!(!CppRunner::<RealCommandRunner>::has_googletest(tmp.path()));
+    }
+
+    // ------------------------------------------------------------------
+    // preflight_check tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn preflight_check_cmake_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CMakeLists.txt"), "project(test)").unwrap();
+        std::fs::write(dir.path().join("main.cpp"), "int main() {}").unwrap();
+        let runner = CppRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("cmake"));
+    }
+
+    #[test]
+    fn preflight_check_meson_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("meson.build"), "project('test')").unwrap();
+        let runner = CppRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("meson"));
+        assert_eq!(info.test_framework.as_deref(), Some("meson-test"));
+    }
+
+    #[test]
+    fn preflight_check_googletest_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("CMakeLists.txt"),
+            "find_package(GTest REQUIRED)",
+        )
+        .unwrap();
+        let runner = CppRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.test_framework.as_deref(), Some("GoogleTest"));
+    }
+
+    #[test]
+    fn preflight_check_no_build_system() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = CppRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("none"));
+        assert!(info.warnings.iter().any(|w| w.contains("no build system")));
+    }
+
+    #[test]
+    fn preflight_check_xmake_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("xmake.lua"), "target('hello')").unwrap();
+        let runner = CppRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("xmake"));
+    }
+
+    #[test]
+    fn preflight_check_deps_installed_with_build_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("build")).unwrap();
+        let runner = CppRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.deps_installed);
     }
 }

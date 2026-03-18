@@ -1,7 +1,7 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
-    traits::{LanguageRunner, TestRunOutput},
+    traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
 };
 use async_trait::async_trait;
@@ -331,6 +331,78 @@ impl<R: CommandRunner> LanguageRunner for RubyRunner<R> {
             duration_ms: start.elapsed().as_millis() as u64,
         })
     }
+
+    fn preflight_check(&self, target: &Path) -> Result<PreflightInfo> {
+        let mut info = PreflightInfo::default();
+        info.package_manager = Some("bundler".into());
+
+        // Detect Ruby version
+        let ruby_bin = Self::resolve_ruby();
+        if let Some(ver) = Self::ruby_version(ruby_bin) {
+            info.available_tools.push((
+                "ruby".into(),
+                format!("{}.{}", ver.0, ver.1),
+            ));
+            if ver < (3, 0) {
+                info.warnings.push(format!(
+                    "Ruby {}.{} detected; APEX requires Ruby >= 3.0",
+                    ver.0, ver.1
+                ));
+            }
+        } else {
+            info.missing_tools.push("ruby (>= 3.0)".into());
+        }
+
+        // Detect test framework
+        if target.join("spec").exists() || target.join(".rspec").exists() {
+            info.test_framework = Some("RSpec".into());
+        } else if target.join("test").exists() {
+            info.test_framework = Some("Minitest".into());
+        } else {
+            info.test_framework = Some("Minitest".into()); // default
+        }
+
+        // Detect build system
+        if target.join("Gemfile").exists() {
+            info.build_system = Some("bundler".into());
+
+            // Check bundler version mismatch
+            if let Some(required_ver) = Self::detect_required_bundler(target) {
+                info.extra
+                    .push(("required_bundler_version".into(), required_ver));
+            }
+        } else if target.join("Rakefile").exists() {
+            info.build_system = Some("rake".into());
+        }
+
+        // Check for native extension gems that commonly fail
+        if let Ok(gemfile) = std::fs::read_to_string(target.join("Gemfile")) {
+            let problematic_gems = [
+                ("mysql2", "mysql-client headers"),
+                ("pg", "libpq headers"),
+                ("nokogiri", "libxml2/libxslt headers"),
+                ("sqlite3", "sqlite3 development headers"),
+            ];
+            for (gem, dep) in &problematic_gems {
+                if gemfile.contains(gem) {
+                    info.warnings.push(format!(
+                        "gem '{gem}' requires {dep} for native extension compilation"
+                    ));
+                }
+            }
+        }
+
+        // Check if deps are installed
+        info.deps_installed = target.join("Gemfile.lock").exists()
+            && target.join("vendor").join("bundle").exists();
+
+        // Check for mise
+        if Self::resolve_mise().is_some() && Self::has_mise_config(target) {
+            info.extra.push(("mise".into(), "configured".into()));
+        }
+
+        Ok(info)
+    }
 }
 
 #[cfg(test)]
@@ -572,5 +644,89 @@ mod tests {
         // Smoke test: resolve_ruby should return something (even if just "ruby")
         let ruby = RubyRunner::<RealCommandRunner>::resolve_ruby();
         assert!(!ruby.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // preflight_check tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn preflight_check_rspec_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("spec")).unwrap();
+        std::fs::write(dir.path().join("Gemfile"), "source 'https://rubygems.org'\n").unwrap();
+        let runner = RubyRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.test_framework.as_deref(), Some("RSpec"));
+        assert_eq!(info.build_system.as_deref(), Some("bundler"));
+    }
+
+    #[test]
+    fn preflight_check_minitest_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("test")).unwrap();
+        let runner = RubyRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.test_framework.as_deref(), Some("Minitest"));
+    }
+
+    #[test]
+    fn preflight_check_warns_native_gems() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Gemfile"),
+            "source 'https://rubygems.org'\ngem 'mysql2'\ngem 'pg'\n",
+        )
+        .unwrap();
+        let runner = RubyRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.warnings.iter().any(|w| w.contains("mysql2")));
+        assert!(info.warnings.iter().any(|w| w.contains("pg")));
+    }
+
+    #[test]
+    fn preflight_check_detects_bundler_version() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Gemfile"), "source 'https://rubygems.org'\n").unwrap();
+        std::fs::write(
+            dir.path().join("Gemfile.lock"),
+            "BUNDLED WITH\n   2.5.6\n",
+        )
+        .unwrap();
+        let runner = RubyRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(
+            info.extra
+                .iter()
+                .any(|(k, v)| k == "required_bundler_version" && v == "2.5.6"),
+            "extra: {:?}",
+            info.extra
+        );
+    }
+
+    #[test]
+    fn preflight_check_rspec_from_dotfile() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".rspec"), "--format documentation\n").unwrap();
+        let runner = RubyRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.test_framework.as_deref(), Some("RSpec"));
+    }
+
+    #[test]
+    fn preflight_check_rake_build_system() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Rakefile"), "task :test\n").unwrap();
+        let runner = RubyRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("rake"));
+    }
+
+    #[test]
+    fn preflight_check_deps_not_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = RubyRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(!info.deps_installed);
     }
 }

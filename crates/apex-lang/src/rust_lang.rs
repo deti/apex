@@ -1,7 +1,7 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
-    traits::{LanguageRunner, TestRunOutput},
+    traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
 };
 use async_trait::async_trait;
@@ -23,6 +23,28 @@ impl RustRunner {
 impl<R: CommandRunner> RustRunner<R> {
     pub fn with_runner(runner: R) -> Self {
         RustRunner { runner }
+    }
+
+    /// Check if a binary is on PATH and return its version string.
+    fn tool_version(bin: &str, version_flag: &str) -> Option<String> {
+        let output = std::process::Command::new(bin)
+            .arg(version_flag)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Some(stdout.lines().next().unwrap_or("").trim().to_string())
+    }
+
+    /// Detect whether this is a workspace or single-crate project.
+    fn is_workspace(target: &Path) -> bool {
+        if let Ok(content) = std::fs::read_to_string(target.join("Cargo.toml")) {
+            content.contains("[workspace]")
+        } else {
+            false
+        }
     }
 }
 
@@ -67,6 +89,58 @@ impl<R: CommandRunner> LanguageRunner for RustRunner<R> {
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             duration_ms: start.elapsed().as_millis() as u64,
         })
+    }
+
+    fn preflight_check(&self, target: &Path) -> Result<PreflightInfo> {
+        let mut info = PreflightInfo::default();
+        info.build_system = Some("cargo".into());
+        info.package_manager = Some("cargo".into());
+
+        // Detect workspace vs single crate
+        if Self::is_workspace(target) {
+            info.extra.push(("project_type".into(), "workspace".into()));
+        } else {
+            info.extra.push(("project_type".into(), "single-crate".into()));
+        }
+
+        // Check cargo
+        if let Some(ver) = Self::tool_version("cargo", "--version") {
+            info.available_tools.push(("cargo".into(), ver));
+        } else {
+            info.missing_tools.push("cargo".into());
+        }
+
+        // Check rustc
+        if let Some(ver) = Self::tool_version("rustc", "--version") {
+            info.available_tools.push(("rustc".into(), ver));
+        } else {
+            info.missing_tools.push("rustc".into());
+        }
+
+        // Check cargo-llvm-cov (needed for coverage)
+        if let Some(ver) = Self::tool_version("cargo-llvm-cov", "--version") {
+            info.available_tools.push(("cargo-llvm-cov".into(), ver));
+        } else {
+            info.warnings.push(
+                "cargo-llvm-cov not installed; coverage instrumentation will not work".into(),
+            );
+        }
+
+        // Check cargo-nextest (preferred test runner)
+        if let Some(ver) = Self::tool_version("cargo-nextest", "--version") {
+            info.available_tools.push(("cargo-nextest".into(), ver));
+            info.test_framework = Some("nextest".into());
+        } else {
+            info.test_framework = Some("cargo-test".into());
+            info.warnings.push(
+                "cargo-nextest not installed; falling back to cargo test".into(),
+            );
+        }
+
+        // Check if Cargo.lock exists (deps resolved)
+        info.deps_installed = target.join("Cargo.lock").exists();
+
+        Ok(info)
     }
 }
 
@@ -522,5 +596,98 @@ mod tests {
         let runner = RustRunner::with_runner(mock);
         let result = runner.run_tests(dir.path(), &[]).await.unwrap();
         assert!(result.stderr.contains("unused variable"));
+    }
+
+    // ------------------------------------------------------------------
+    // preflight_check tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn preflight_check_detects_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crate-a\"]\n",
+        )
+        .unwrap();
+        let runner = RustRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("cargo"));
+        assert!(info.extra.iter().any(|(k, v)| k == "project_type" && v == "workspace"));
+    }
+
+    #[test]
+    fn preflight_check_detects_single_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"foo\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        let runner = RustRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "project_type" && v == "single-crate"));
+    }
+
+    #[test]
+    fn preflight_check_no_cargo_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = RustRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        // Should still detect single-crate (no [workspace] found)
+        assert!(info.extra.iter().any(|(k, v)| k == "project_type" && v == "single-crate"));
+    }
+
+    #[test]
+    fn preflight_check_reports_cargo_available() {
+        // cargo must be on PATH in our CI/dev environment
+        let dir = tempfile::tempdir().unwrap();
+        let runner = RustRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(
+            info.available_tools.iter().any(|(name, _)| name == "cargo"),
+            "cargo should be available: {:?}",
+            info.available_tools
+        );
+    }
+
+    #[test]
+    fn preflight_check_deps_installed_when_lock_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.lock"), "").unwrap();
+        let runner = RustRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.deps_installed);
+    }
+
+    #[test]
+    fn preflight_check_deps_not_installed_without_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = RustRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(!info.deps_installed);
+    }
+
+    #[test]
+    fn preflight_check_summary_has_build_system() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = RustRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        let summary = info.summary();
+        assert!(summary.contains("build system: cargo"));
+    }
+
+    #[test]
+    fn is_workspace_returns_true_for_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[workspace]\nmembers = []\n").unwrap();
+        assert!(RustRunner::<RealCommandRunner>::is_workspace(dir.path()));
+    }
+
+    #[test]
+    fn is_workspace_returns_false_for_package() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        assert!(!RustRunner::<RealCommandRunner>::is_workspace(dir.path()));
     }
 }

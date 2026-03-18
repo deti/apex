@@ -1,7 +1,7 @@
 use apex_core::{
     command::{adaptive_timeout, count_source_files, CommandRunner, CommandSpec, OpKind, RealCommandRunner},
     error::{ApexError, Result},
-    traits::{LanguageRunner, TestRunOutput},
+    traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
 };
 use async_trait::async_trait;
@@ -441,6 +441,88 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             duration_ms,
         })
+    }
+
+    fn preflight_check(&self, target: &Path) -> Result<PreflightInfo> {
+        let mut info = PreflightInfo::default();
+
+        // Detect package manager
+        let pkg_mgr = Self::detect_package_manager(target);
+        info.package_manager = Some(match pkg_mgr {
+            PackageManager::Uv => "uv",
+            PackageManager::Poetry => "poetry",
+            PackageManager::Pipenv => "pipenv",
+            PackageManager::Pip => "pip",
+        }
+        .into());
+        info.build_system = info.package_manager.clone();
+
+        // Detect test framework
+        let test_cmd = Self::detect_test_runner(target);
+        if test_cmd.iter().any(|s| s.contains("pytest")) {
+            info.test_framework = Some("pytest".into());
+        } else if test_cmd.iter().any(|s| s.contains("unittest")) {
+            info.test_framework = Some("unittest".into());
+        } else if test_cmd.iter().any(|s| s.contains("nose")) {
+            info.test_framework = Some("nose".into());
+        } else {
+            info.test_framework = Some("pytest".into()); // default
+        }
+
+        // Check python
+        let python = Self::resolve_python();
+        if let Ok(output) = std::process::Command::new(python).arg("--version").output() {
+            if output.status.success() {
+                let ver = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                info.available_tools.push(("python".into(), ver));
+            }
+        } else {
+            info.missing_tools.push("python3".into());
+        }
+
+        // Check for PEP 668
+        if Self::is_externally_managed(target) {
+            info.warnings.push(
+                "PEP 668 externally-managed Python detected; a venv will be created automatically".into(),
+            );
+            info.extra.push(("pep668".into(), "true".into()));
+        }
+
+        // Check for existing venv
+        if let Some(venv_path) = Self::find_venv_python(target) {
+            info.extra.push(("venv_python".into(), venv_path));
+            info.deps_installed = true;
+        }
+
+        // Check if this is a stdlib source dir (no setup.py/pyproject.toml)
+        let has_project_file = target.join("pyproject.toml").exists()
+            || target.join("setup.py").exists()
+            || target.join("setup.cfg").exists();
+        if !has_project_file && target.join("Lib").exists() {
+            info.extra
+                .push(("stdlib_source_dir".into(), "true".into()));
+            info.warnings.push(
+                "stdlib source directory detected (no setup.py/pyproject.toml); using --rootdir".into(),
+            );
+        }
+
+        // Check coverage.py and pytest availability
+        if let Some(ref _uv) = Self::resolve_uv() {
+            info.available_tools
+                .push(("uv".into(), "available".into()));
+        }
+
+        // Check for requirements.txt or pyproject.toml
+        if target.join("requirements.txt").exists() {
+            info.extra
+                .push(("requirements_file".into(), "requirements.txt".into()));
+        }
+        if target.join("pyproject.toml").exists() {
+            info.extra
+                .push(("project_file".into(), "pyproject.toml".into()));
+        }
+
+        Ok(info)
     }
 }
 
@@ -1275,6 +1357,102 @@ mod tests {
             cmd[0].contains(".venv"),
             "expected venv python, got: {}",
             cmd[0]
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // preflight_check tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn preflight_check_basic_pip_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("requirements.txt"), "pytest\n").unwrap();
+        let runner = PythonRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.package_manager.as_deref(), Some("pip"));
+        assert_eq!(info.test_framework.as_deref(), Some("pytest"));
+    }
+
+    #[test]
+    fn preflight_check_uv_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("uv.lock"), "").unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), "[project]\nname = 'foo'\n").unwrap();
+        let runner = PythonRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        // If uv is on PATH, should detect uv; otherwise pip
+        assert!(info.package_manager.is_some());
+    }
+
+    #[test]
+    fn preflight_check_poetry_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("poetry.lock"), "").unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), "[tool.poetry]\nname = 'foo'\n").unwrap();
+        let runner = PythonRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.package_manager.as_deref(), Some("poetry"));
+    }
+
+    #[test]
+    fn preflight_check_detects_venv() {
+        let dir = tempfile::tempdir().unwrap();
+        let venv_bin = dir.path().join(".venv").join("bin");
+        std::fs::create_dir_all(&venv_bin).unwrap();
+        std::fs::write(venv_bin.join("python"), "").unwrap();
+        let runner = PythonRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, _)| k == "venv_python"));
+        assert!(info.deps_installed);
+    }
+
+    #[test]
+    fn preflight_check_stdlib_source_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("Lib")).unwrap();
+        let runner = PythonRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "stdlib_source_dir" && v == "true"));
+        assert!(info.warnings.iter().any(|w| w.contains("stdlib")));
+    }
+
+    #[test]
+    fn preflight_check_detects_pyproject() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pyproject.toml"), "[project]\n").unwrap();
+        let runner = PythonRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(
+            info.extra
+                .iter()
+                .any(|(k, v)| k == "project_file" && v == "pyproject.toml")
+        );
+    }
+
+    #[test]
+    fn preflight_check_detects_requirements() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("requirements.txt"), "flask\n").unwrap();
+        let runner = PythonRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(
+            info.extra
+                .iter()
+                .any(|(k, v)| k == "requirements_file" && v == "requirements.txt")
+        );
+    }
+
+    #[test]
+    fn preflight_check_reports_python_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = PythonRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        // python3 should be available in CI/dev
+        assert!(
+            info.available_tools.iter().any(|(name, _)| name == "python"),
+            "python should be available: {:?}",
+            info.available_tools
         );
     }
 }

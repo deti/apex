@@ -1,7 +1,7 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
-    traits::{LanguageRunner, TestRunOutput},
+    traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
 };
 use async_trait::async_trait;
@@ -35,6 +35,22 @@ impl KotlinRunner {
 impl<R: CommandRunner> KotlinRunner<R> {
     pub fn with_runner(runner: R) -> Self {
         KotlinRunner { runner }
+    }
+
+    /// Detect Kotlin Multiplatform from build.gradle.kts.
+    fn is_multiplatform(target: &Path) -> bool {
+        if let Ok(content) = std::fs::read_to_string(target.join("build.gradle.kts")) {
+            content.contains("kotlin(\"multiplatform\")")
+                || content.contains("multiplatform")
+                || content.contains("KotlinMultiplatform")
+        } else {
+            false
+        }
+    }
+
+    /// Check if gradlew exists.
+    fn has_gradle_wrapper(target: &Path) -> bool {
+        target.join("gradlew").exists()
     }
 }
 
@@ -181,6 +197,53 @@ impl<R: CommandRunner> LanguageRunner for KotlinRunner<R> {
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             duration_ms,
         })
+    }
+
+    fn preflight_check(&self, target: &Path) -> Result<PreflightInfo> {
+        let mut info = PreflightInfo::default();
+        let build_tool = detect_build_tool(target);
+        info.build_system = Some(build_tool.into());
+        info.test_framework = Some("JUnit".into());
+
+        if build_tool == "gradle" {
+            info.package_manager = Some("gradle".into());
+
+            if Self::has_gradle_wrapper(target) {
+                info.extra.push(("gradlew".into(), "true".into()));
+            } else {
+                info.warnings.push("no gradlew wrapper found".into());
+            }
+
+            // Detect coverage tool
+            if detect_kover_plugin(target) {
+                info.extra.push(("coverage_tool".into(), "kover".into()));
+            } else {
+                info.extra.push(("coverage_tool".into(), "jacoco".into()));
+            }
+        } else {
+            info.package_manager = Some("maven".into());
+            info.extra.push(("coverage_tool".into(), "jacoco".into()));
+        }
+
+        // Detect multiplatform
+        if Self::is_multiplatform(target) {
+            info.extra.push(("multiplatform".into(), "true".into()));
+            info.warnings.push(
+                "Kotlin Multiplatform detected: coverage may only work for JVM targets".into(),
+            );
+        }
+
+        // Check JAVA_HOME
+        if let Ok(java_home) = std::env::var("JAVA_HOME") {
+            info.env_vars.push(("JAVA_HOME".into(), java_home));
+        } else {
+            info.warnings.push("JAVA_HOME not set".into());
+        }
+
+        // Deps installed check
+        info.deps_installed = target.join(".gradle").exists() || target.join("build").exists();
+
+        Ok(info)
     }
 }
 
@@ -482,5 +545,96 @@ mod tests {
         let runner = KotlinRunner::with_runner(mock);
         let result = runner.collect_coverage(dir.path()).await;
         assert!(result.is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // preflight_check tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn preflight_check_gradle_kts() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle.kts"), "").unwrap();
+        let runner = KotlinRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("gradle"));
+        assert_eq!(info.test_framework.as_deref(), Some("JUnit"));
+    }
+
+    #[test]
+    fn preflight_check_kover_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("build.gradle.kts"),
+            r#"plugins { id("kotlinx.kover") }"#,
+        )
+        .unwrap();
+        let runner = KotlinRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "coverage_tool" && v == "kover"));
+    }
+
+    #[test]
+    fn preflight_check_jacoco_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("build.gradle.kts"),
+            r#"plugins { id("java") }"#,
+        )
+        .unwrap();
+        let runner = KotlinRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "coverage_tool" && v == "jacoco"));
+    }
+
+    #[test]
+    fn preflight_check_multiplatform() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("build.gradle.kts"),
+            r#"plugins { kotlin("multiplatform") }"#,
+        )
+        .unwrap();
+        let runner = KotlinRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "multiplatform" && v == "true"));
+        assert!(info.warnings.iter().any(|w| w.contains("Multiplatform")));
+    }
+
+    #[test]
+    fn preflight_check_gradlew_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle.kts"), "").unwrap();
+        std::fs::write(dir.path().join("gradlew"), "#!/bin/sh\n").unwrap();
+        let runner = KotlinRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "gradlew" && v == "true"));
+    }
+
+    #[test]
+    fn preflight_check_warns_no_gradlew() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle.kts"), "").unwrap();
+        let runner = KotlinRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.warnings.iter().any(|w| w.contains("gradlew")));
+    }
+
+    #[test]
+    fn is_multiplatform_true() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("build.gradle.kts"),
+            r#"kotlin("multiplatform")"#,
+        )
+        .unwrap();
+        assert!(KotlinRunner::<RealCommandRunner>::is_multiplatform(dir.path()));
+    }
+
+    #[test]
+    fn is_multiplatform_false() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("build.gradle.kts"), r#"kotlin("jvm")"#).unwrap();
+        assert!(!KotlinRunner::<RealCommandRunner>::is_multiplatform(dir.path()));
     }
 }

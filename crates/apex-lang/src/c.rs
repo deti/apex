@@ -1,7 +1,7 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
-    traits::{LanguageRunner, TestRunOutput},
+    traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
 };
 use async_trait::async_trait;
@@ -200,6 +200,101 @@ impl<R: CommandRunner> LanguageRunner for CRunner<R> {
             duration_ms: start.elapsed().as_millis() as u64,
         })
     }
+
+    fn preflight_check(&self, target: &Path) -> Result<PreflightInfo> {
+        let mut info = PreflightInfo::default();
+
+        // Detect build system
+        let build_sys = Self::detect_build_system(target);
+        info.build_system = Some(match &build_sys {
+            BuildSystem::Xmake => "xmake",
+            BuildSystem::CMake => "cmake",
+            BuildSystem::Make => "make",
+            BuildSystem::Autoconf => "autoconf",
+            BuildSystem::None => "none",
+        }
+        .into());
+
+        // Check compilers
+        if which("clang") {
+            if let Some(ver) = tool_version_stdout("clang", &["--version"]) {
+                info.available_tools.push(("clang".into(), ver));
+            }
+        } else if which("gcc") {
+            if let Some(ver) = tool_version_stdout("gcc", &["--version"]) {
+                info.available_tools.push(("gcc".into(), ver));
+            }
+        } else if which("cc") {
+            info.available_tools.push(("cc".into(), "system".into()));
+        } else {
+            info.missing_tools.push("clang or gcc".into());
+        }
+
+        // Check coverage tools
+        if which("gcov") {
+            info.available_tools.push(("gcov".into(), "available".into()));
+        }
+        if which("llvm-profdata") {
+            info.available_tools
+                .push(("llvm-profdata".into(), "available".into()));
+        }
+        if which("llvm-cov") {
+            info.available_tools
+                .push(("llvm-cov".into(), "available".into()));
+        }
+
+        // Check build system tools
+        match &build_sys {
+            BuildSystem::CMake => {
+                if !which("cmake") {
+                    info.missing_tools.push("cmake".into());
+                }
+            }
+            BuildSystem::Make => {
+                if !which("make") {
+                    info.missing_tools.push("make".into());
+                }
+            }
+            BuildSystem::Xmake => {
+                if !which("xmake") {
+                    info.missing_tools.push("xmake".into());
+                }
+            }
+            BuildSystem::Autoconf => {
+                if !which("autoconf") {
+                    info.missing_tools.push("autoconf".into());
+                }
+            }
+            BuildSystem::None => {
+                info.warnings.push(
+                    "no build system detected; may be a kernel subsystem or header-only project".into(),
+                );
+            }
+        }
+
+        // Detect if this looks like a kernel/subsystem dir
+        if target.join("Kconfig").exists() || target.join("Kbuild").exists() {
+            info.extra.push(("kernel_subsystem".into(), "true".into()));
+            info.warnings.push(
+                "kernel subsystem detected: standalone build not possible without kernel source tree".into(),
+            );
+        }
+
+        info.test_framework = Some("ctest".into());
+        info.deps_installed = target.join("build").exists();
+
+        Ok(info)
+    }
+}
+
+/// Get first line of stdout from a command.
+fn tool_version_stdout(bin: &str, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new(bin).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Some(stdout.lines().next().unwrap_or("").trim().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1887,5 +1982,65 @@ mod tests {
         }
         let files = walkdir_c_files(dir.path());
         assert_eq!(files.len(), 4);
+    }
+
+    // ------------------------------------------------------------------
+    // preflight_check tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn preflight_check_cmake_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CMakeLists.txt"), "project(test)").unwrap();
+        std::fs::write(dir.path().join("main.c"), "int main() {}").unwrap();
+        let runner = CRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("cmake"));
+    }
+
+    #[test]
+    fn preflight_check_make_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Makefile"), "all:").unwrap();
+        let runner = CRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("make"));
+    }
+
+    #[test]
+    fn preflight_check_no_build_system() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = CRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("none"));
+        assert!(info.warnings.iter().any(|w| w.contains("no build system")));
+    }
+
+    #[test]
+    fn preflight_check_kernel_subsystem() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Kconfig"), "").unwrap();
+        let runner = CRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "kernel_subsystem" && v == "true"));
+        assert!(info.warnings.iter().any(|w| w.contains("kernel")));
+    }
+
+    #[test]
+    fn preflight_check_xmake_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("xmake.lua"), "target('hello')").unwrap();
+        let runner = CRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("xmake"));
+    }
+
+    #[test]
+    fn preflight_check_autoconf_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("configure.ac"), "").unwrap();
+        let runner = CRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("autoconf"));
     }
 }

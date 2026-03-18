@@ -1,7 +1,7 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
-    traits::{LanguageRunner, TestRunOutput},
+    traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
 };
 use async_trait::async_trait;
@@ -69,6 +69,41 @@ impl<R: CommandRunner> JavaScriptRunner<R> {
             return "pnpm";
         }
         "npm"
+    }
+}
+
+impl<R: CommandRunner> JavaScriptRunner<R> {
+    /// Check if a binary is on PATH and return its version string.
+    fn tool_version(bin: &str, args: &[&str]) -> Option<String> {
+        let output = std::process::Command::new(bin).args(args).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Some(stdout.lines().next().unwrap_or("").trim().to_string())
+    }
+
+    /// Detect monorepo patterns.
+    fn detect_monorepo(target: &Path) -> Option<&'static str> {
+        if target.join("lerna.json").exists() {
+            return Some("lerna");
+        }
+        if target.join("nx.json").exists() {
+            return Some("nx");
+        }
+        if target.join("pnpm-workspace.yaml").exists() {
+            return Some("pnpm-workspaces");
+        }
+        if target.join("turbo.json").exists() {
+            return Some("turborepo");
+        }
+        // Check package.json for workspaces field
+        if let Ok(content) = std::fs::read_to_string(target.join("package.json")) {
+            if content.contains("\"workspaces\"") {
+                return Some("npm-workspaces");
+            }
+        }
+        None
     }
 }
 
@@ -146,6 +181,73 @@ impl<R: CommandRunner> LanguageRunner for JavaScriptRunner<R> {
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             duration_ms,
         })
+    }
+
+    fn preflight_check(&self, target: &Path) -> Result<PreflightInfo> {
+        let mut info = PreflightInfo::default();
+
+        // Detect package manager
+        let pm = Self::detect_package_manager(target);
+        info.package_manager = Some(pm.into());
+
+        // Detect test runner
+        let (bin, args) = Self::detect_test_runner(target);
+        let test_name = if args.first().map(|s| s.as_str()) == Some("test") && bin == "npm" {
+            "npm-test-script".to_string()
+        } else {
+            args.first().cloned().unwrap_or_else(|| bin.clone())
+        };
+        info.test_framework = Some(test_name);
+
+        // Check runtime
+        if let Some(ver) = Self::tool_version("node", &["--version"]) {
+            info.available_tools.push(("node".into(), ver.clone()));
+            // Check Node version for V8 coverage format
+            let major: Option<u32> = ver
+                .trim_start_matches('v')
+                .split('.')
+                .next()
+                .and_then(|s| s.parse().ok());
+            if let Some(m) = major {
+                info.extra.push(("node_major_version".into(), m.to_string()));
+                if m < 16 {
+                    info.warnings.push(format!(
+                        "Node.js v{m} detected; V8 coverage requires Node >= 16"
+                    ));
+                }
+            }
+        } else {
+            // Check for Bun or Deno as alternatives
+            if let Some(ver) = Self::tool_version("bun", &["--version"]) {
+                info.available_tools.push(("bun".into(), ver));
+            } else if let Some(ver) = Self::tool_version("deno", &["--version"]) {
+                info.available_tools.push(("deno".into(), ver));
+            } else {
+                info.missing_tools.push("node (or bun/deno)".into());
+            }
+        }
+
+        // Check if node_modules exists
+        info.deps_installed = target.join("node_modules").exists();
+
+        // Detect monorepo
+        if let Some(mono_kind) = Self::detect_monorepo(target) {
+            info.extra.push(("monorepo".into(), mono_kind.into()));
+            info.warnings.push(format!(
+                "{mono_kind} monorepo detected: test commands may need workspace-aware invocation"
+            ));
+        }
+
+        // Detect TypeScript
+        let is_ts = target.join("tsconfig.json").exists();
+        if is_ts {
+            info.extra.push(("typescript".into(), "true".into()));
+        }
+
+        // Build system
+        info.build_system = Some(pm.into());
+
+        Ok(info)
     }
 }
 
@@ -791,5 +893,117 @@ mod tests {
         let (bin, args) = JavaScriptRunner::<RealCommandRunner>::detect_test_runner(dir.path());
         assert_eq!(bin, "deno");
         assert_eq!(args, vec!["test"]);
+    }
+
+    // ------------------------------------------------------------------
+    // preflight_check tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn preflight_check_basic_npm() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        let runner = JavaScriptRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.package_manager.as_deref(), Some("npm"));
+        assert!(info.test_framework.is_some());
+    }
+
+    #[test]
+    fn preflight_check_deps_installed_with_node_modules() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("node_modules")).unwrap();
+        let runner = JavaScriptRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.deps_installed);
+    }
+
+    #[test]
+    fn preflight_check_deps_not_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = JavaScriptRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(!info.deps_installed);
+    }
+
+    #[test]
+    fn preflight_check_detects_typescript() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("tsconfig.json"), "{}").unwrap();
+        let runner = JavaScriptRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "typescript" && v == "true"));
+    }
+
+    #[test]
+    fn preflight_check_detects_lerna_monorepo() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("lerna.json"), "{}").unwrap();
+        let runner = JavaScriptRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "monorepo" && v == "lerna"));
+    }
+
+    #[test]
+    fn preflight_check_detects_nx_monorepo() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("nx.json"), "{}").unwrap();
+        let runner = JavaScriptRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "monorepo" && v == "nx"));
+    }
+
+    #[test]
+    fn preflight_check_detects_turborepo() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("turbo.json"), "{}").unwrap();
+        let runner = JavaScriptRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "monorepo" && v == "turborepo"));
+    }
+
+    #[test]
+    fn preflight_check_detects_pnpm_workspaces() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("pnpm-workspace.yaml"), "").unwrap();
+        let runner = JavaScriptRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(
+            info.extra
+                .iter()
+                .any(|(k, v)| k == "monorepo" && v == "pnpm-workspaces")
+        );
+    }
+
+    #[test]
+    fn preflight_check_detects_npm_workspaces() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"root","workspaces":["packages/*"]}"#,
+        )
+        .unwrap();
+        let runner = JavaScriptRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(
+            info.extra
+                .iter()
+                .any(|(k, v)| k == "monorepo" && v == "npm-workspaces")
+        );
+    }
+
+    #[test]
+    fn detect_monorepo_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(JavaScriptRunner::<RealCommandRunner>::detect_monorepo(dir.path()).is_none());
+    }
+
+    #[test]
+    fn preflight_check_yarn_pm() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("yarn.lock"), "").unwrap();
+        let runner = JavaScriptRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.package_manager.as_deref(), Some("yarn"));
     }
 }

@@ -1,7 +1,7 @@
 use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
-    traits::{LanguageRunner, TestRunOutput},
+    traits::{LanguageRunner, PreflightInfo, TestRunOutput},
     types::Language,
 };
 use async_trait::async_trait;
@@ -65,6 +65,61 @@ impl CSharpRunner {
 impl<R: CommandRunner> CSharpRunner<R> {
     pub fn with_runner(runner: R) -> Self {
         CSharpRunner { runner }
+    }
+
+    /// Check if a binary is on the augmented dotnet PATH and return its version string.
+    fn dotnet_version() -> Option<String> {
+        let output = std::process::Command::new("dotnet")
+            .arg("--version")
+            .env("PATH", dotnet_path())
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        Some(
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_string(),
+        )
+    }
+
+    /// Detect whether the project has a solution file or just project files.
+    fn detect_project_structure(target: &Path) -> (&'static str, Vec<String>) {
+        let mut projects = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(target) {
+            for entry in entries.flatten() {
+                if let Some(ext) = entry.path().extension() {
+                    if ext == "sln" {
+                        return ("solution", vec![entry.file_name().to_string_lossy().into()]);
+                    }
+                    if ext == "csproj" {
+                        projects.push(entry.file_name().to_string_lossy().into());
+                    }
+                }
+            }
+        }
+        if projects.is_empty() {
+            ("none", projects)
+        } else {
+            ("project", projects)
+        }
+    }
+
+    /// Check if coverlet is referenced in any csproj file.
+    fn has_coverlet(target: &Path) -> bool {
+        if let Ok(entries) = std::fs::read_dir(target) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("csproj") {
+                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                        if content.contains("coverlet") || content.contains("Coverlet") {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 }
 
@@ -144,6 +199,62 @@ impl<R: CommandRunner> LanguageRunner for CSharpRunner<R> {
             stderr,
             duration_ms: duration.as_millis() as u64,
         })
+    }
+
+    fn preflight_check(&self, target: &Path) -> Result<PreflightInfo> {
+        let mut info = PreflightInfo::default();
+        info.build_system = Some("dotnet".into());
+        info.package_manager = Some("nuget".into());
+
+        // Check dotnet CLI
+        if let Some(ver) = Self::dotnet_version() {
+            info.available_tools.push(("dotnet".into(), ver));
+        } else {
+            info.missing_tools.push("dotnet".into());
+            info.warnings.push(
+                "dotnet not found on PATH (checked ~/.dotnet, DOTNET_ROOT, /usr/local/share/dotnet)".into(),
+            );
+        }
+
+        // Detect project structure
+        let (structure, projects) = Self::detect_project_structure(target);
+        info.extra.push(("project_structure".into(), structure.into()));
+        for p in &projects {
+            info.extra.push(("project_file".into(), p.clone()));
+        }
+
+        // Detect test framework from csproj contents
+        let mut test_framework = None;
+        if let Ok(entries) = std::fs::read_dir(target) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("csproj") {
+                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                        if content.contains("xunit") || content.contains("xUnit") {
+                            test_framework = Some("xUnit");
+                        } else if content.contains("NUnit") || content.contains("nunit") {
+                            test_framework = Some("NUnit");
+                        } else if content.contains("MSTest") {
+                            test_framework = Some("MSTest");
+                        }
+                    }
+                }
+            }
+        }
+        info.test_framework = test_framework.map(|s| s.to_string());
+
+        // Check coverlet
+        if Self::has_coverlet(target) {
+            info.extra.push(("coverlet".into(), "true".into()));
+        } else {
+            info.warnings.push(
+                "coverlet not found in project dependencies; code coverage collection may fail".into(),
+            );
+        }
+
+        // Check if obj/ or bin/ exist (project has been built)
+        info.deps_installed = target.join("obj").exists() || target.join("bin").exists();
+
+        Ok(info)
     }
 }
 
@@ -304,5 +415,126 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = runner.run_tests(tmp.path(), &[]).await.unwrap();
         assert_eq!(result.exit_code, 0);
+    }
+
+    // ------------------------------------------------------------------
+    // preflight_check tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn preflight_check_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = CSharpRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.build_system.as_deref(), Some("dotnet"));
+        assert_eq!(info.package_manager.as_deref(), Some("nuget"));
+    }
+
+    #[test]
+    fn preflight_check_detects_solution() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("MyApp.sln"), "").unwrap();
+        let runner = CSharpRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(
+            info.extra
+                .iter()
+                .any(|(k, v)| k == "project_structure" && v == "solution"),
+            "extra: {:?}",
+            info.extra
+        );
+    }
+
+    #[test]
+    fn preflight_check_detects_project() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("MyApp.csproj"), "<Project />").unwrap();
+        let runner = CSharpRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(
+            info.extra
+                .iter()
+                .any(|(k, v)| k == "project_structure" && v == "project"),
+            "extra: {:?}",
+            info.extra
+        );
+    }
+
+    #[test]
+    fn preflight_check_detects_xunit() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Tests.csproj"),
+            r#"<Project><ItemGroup><PackageReference Include="xunit" /></ItemGroup></Project>"#,
+        )
+        .unwrap();
+        let runner = CSharpRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.test_framework.as_deref(), Some("xUnit"));
+    }
+
+    #[test]
+    fn preflight_check_detects_nunit() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Tests.csproj"),
+            r#"<Project><ItemGroup><PackageReference Include="NUnit" /></ItemGroup></Project>"#,
+        )
+        .unwrap();
+        let runner = CSharpRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert_eq!(info.test_framework.as_deref(), Some("NUnit"));
+    }
+
+    #[test]
+    fn preflight_check_detects_coverlet() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Tests.csproj"),
+            r#"<Project><ItemGroup><PackageReference Include="coverlet.msbuild" /></ItemGroup></Project>"#,
+        )
+        .unwrap();
+        let runner = CSharpRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.extra.iter().any(|(k, v)| k == "coverlet" && v == "true"));
+    }
+
+    #[test]
+    fn preflight_check_warns_no_coverlet() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Tests.csproj"),
+            r#"<Project><ItemGroup><PackageReference Include="xunit" /></ItemGroup></Project>"#,
+        )
+        .unwrap();
+        let runner = CSharpRunner::new();
+        let info = runner.preflight_check(dir.path()).unwrap();
+        assert!(info.warnings.iter().any(|w| w.contains("coverlet")));
+    }
+
+    #[test]
+    fn has_coverlet_true() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Test.csproj"),
+            "<PackageReference Include=\"coverlet.collector\" />",
+        )
+        .unwrap();
+        assert!(CSharpRunner::<RealCommandRunner>::has_coverlet(dir.path()));
+    }
+
+    #[test]
+    fn has_coverlet_false() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Test.csproj"), "<Project />").unwrap();
+        assert!(!CSharpRunner::<RealCommandRunner>::has_coverlet(dir.path()));
+    }
+
+    #[test]
+    fn detect_project_structure_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let (s, p) = CSharpRunner::<RealCommandRunner>::detect_project_structure(dir.path());
+        assert_eq!(s, "none");
+        assert!(p.is_empty());
     }
 }
