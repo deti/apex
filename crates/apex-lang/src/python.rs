@@ -602,23 +602,47 @@ mod tests {
 
     // ---- Mock-based tests ----
 
+    /// Create a fake .apex-venv so install_deps() skips PEP 668 venv creation
+    /// (which would trigger unexpected mock calls).
+    fn create_fake_venv(dir: &std::path::Path) {
+        let venv_bin = dir.join(".apex-venv").join("bin");
+        std::fs::create_dir_all(&venv_bin).unwrap();
+        std::fs::write(venv_bin.join("python"), "#!/bin/sh\nexec python3 \"$@\"").unwrap();
+        std::fs::write(venv_bin.join("pip"), "#!/bin/sh\nexec pip3 \"$@\"").unwrap();
+    }
+
+    /// Check if a program path ends with "pip" or "pip3" (handles both system and venv pip).
+    fn is_pip_program(program: &str) -> bool {
+        let p = std::path::Path::new(program);
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        name == "pip" || name == "pip3"
+    }
+
+    /// Check if a program path ends with "python" or "python3" (handles both system and venv).
+    fn is_python_program(program: &str) -> bool {
+        let p = std::path::Path::new(program);
+        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        name == "python" || name == "python3"
+    }
+
     #[tokio::test]
     async fn install_deps_requirements_txt_success() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("requirements.txt"), "requests\n").unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         // pip3 install -r requirements.txt
         mock.expect_run_command()
             .withf(|spec| {
-                spec.program == PythonRunner::<MockCmd>::resolve_pip()
+                is_pip_program(&spec.program)
                     && spec.args.contains(&"-r".to_string())
             })
             .times(1)
             .returning(|_| Ok(CommandOutput::success(b"Successfully installed".to_vec())));
         // python3 -c "import coverage"
         mock.expect_run_command()
-            .withf(|spec| spec.program == PythonRunner::<MockCmd>::resolve_python())
+            .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| Ok(CommandOutput::success(b"".to_vec())));
 
@@ -631,11 +655,12 @@ mod tests {
     async fn install_deps_requirements_txt_failure() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("requirements.txt"), "nonexistent-pkg\n").unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         mock.expect_run_command()
             .withf(|spec| {
-                spec.program == PythonRunner::<MockCmd>::resolve_pip()
+                is_pip_program(&spec.program)
                     && spec.args.contains(&"-r".to_string())
             })
             .times(1)
@@ -661,19 +686,20 @@ mod tests {
             "[project]\nname = \"foo\"\n",
         )
         .unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         // pip3 install -e .
         mock.expect_run_command()
             .withf(|spec| {
-                spec.program == PythonRunner::<MockCmd>::resolve_pip()
+                is_pip_program(&spec.program)
                     && spec.args.contains(&"-e".to_string())
             })
             .times(1)
             .returning(|_| Ok(CommandOutput::success(b"".to_vec())));
         // python3 -c "import coverage" -- coverage already installed
         mock.expect_run_command()
-            .withf(|spec| spec.program == PythonRunner::<MockCmd>::resolve_python())
+            .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| Ok(CommandOutput::success(b"".to_vec())));
 
@@ -685,20 +711,21 @@ mod tests {
     #[tokio::test]
     async fn install_deps_coverage_not_found_installs_it() {
         let dir = tempfile::tempdir().unwrap();
+        create_fake_venv(dir.path());
         // No requirements.txt or pyproject.toml, so skip dep install
         // but coverage check fails, so it installs coverage+pytest
 
         let mut mock = MockCmd::new();
         // python3 -c "import coverage" fails
         mock.expect_run_command()
-            .withf(|spec| spec.program == PythonRunner::<MockCmd>::resolve_python())
+            .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| Ok(CommandOutput::failure(1, b"ModuleNotFoundError".to_vec())));
         // uv pip install or pip3 install coverage pytest
         mock.expect_run_command()
             .withf(|spec| {
                 spec.args.contains(&"coverage".to_string())
-                    && (spec.program == PythonRunner::<MockCmd>::resolve_pip()
+                    && (is_pip_program(&spec.program)
                         || spec.program == "uv")
             })
             .times(1)
@@ -712,18 +739,19 @@ mod tests {
     #[tokio::test]
     async fn install_deps_coverage_install_fails() {
         let dir = tempfile::tempdir().unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         // python3 -c "import coverage" fails
         mock.expect_run_command()
-            .withf(|spec| spec.program == PythonRunner::<MockCmd>::resolve_python())
+            .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| Ok(CommandOutput::failure(1, b"ModuleNotFoundError".to_vec())));
         // uv pip install or pip3 install also fails
         mock.expect_run_command()
             .withf(|spec| {
                 spec.args.contains(&"coverage".to_string())
-                    && (spec.program == PythonRunner::<MockCmd>::resolve_pip()
+                    && (is_pip_program(&spec.program)
                         || spec.program == "uv")
             })
             .times(1)
@@ -745,7 +773,7 @@ mod tests {
 
         let mut mock = MockCmd::new();
         mock.expect_run_command()
-            .withf(|spec| spec.program == PythonRunner::<MockCmd>::resolve_python())
+            .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| Ok(CommandOutput::success(b"3 passed in 0.5s".to_vec())));
 
@@ -876,19 +904,20 @@ mod tests {
             "from setuptools import setup; setup()",
         )
         .unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         // pip3 install -e .
         mock.expect_run_command()
             .withf(|spec| {
-                spec.program == PythonRunner::<MockCmd>::resolve_pip()
+                is_pip_program(&spec.program)
                     && spec.args.contains(&"-e".to_string())
             })
             .times(1)
             .returning(|_| Ok(CommandOutput::success(b"".to_vec())));
         // python3 -c "import coverage" — already installed
         mock.expect_run_command()
-            .withf(|spec| spec.program == PythonRunner::<MockCmd>::resolve_python())
+            .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| Ok(CommandOutput::success(b"".to_vec())));
 
@@ -905,11 +934,12 @@ mod tests {
             "from setuptools import setup; setup()",
         )
         .unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         mock.expect_run_command()
             .withf(|spec| {
-                spec.program == PythonRunner::<MockCmd>::resolve_pip()
+                is_pip_program(&spec.program)
                     && spec.args.contains(&"-e".to_string())
             })
             .times(1)
@@ -926,11 +956,12 @@ mod tests {
     async fn install_deps_pyproject_editable_install_fails() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("pyproject.toml"), "[project]\nname=\"x\"\n").unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         mock.expect_run_command()
             .withf(|spec| {
-                spec.program == PythonRunner::<MockCmd>::resolve_pip()
+                is_pip_program(&spec.program)
                     && spec.args.contains(&"-e".to_string())
             })
             .times(1)
@@ -948,11 +979,12 @@ mod tests {
         // Spawn error (not nonzero exit) from pip3 install -r
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("requirements.txt"), "requests\n").unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         mock.expect_run_command()
             .withf(|spec| {
-                spec.program == PythonRunner::<MockCmd>::resolve_pip()
+                is_pip_program(&spec.program)
                     && spec.args.contains(&"-r".to_string())
             })
             .times(1)
@@ -975,11 +1007,12 @@ mod tests {
         // Spawn error from pip3 install -e .
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("pyproject.toml"), "[project]\nname=\"x\"\n").unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         mock.expect_run_command()
             .withf(|spec| {
-                spec.program == PythonRunner::<MockCmd>::resolve_pip()
+                is_pip_program(&spec.program)
                     && spec.args.contains(&"-e".to_string())
             })
             .times(1)
@@ -1001,10 +1034,11 @@ mod tests {
     async fn install_deps_coverage_check_command_error() {
         // Spawn error from the python3 -c "import coverage" check
         let dir = tempfile::tempdir().unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         mock.expect_run_command()
-            .withf(|spec| spec.program == PythonRunner::<MockCmd>::resolve_python())
+            .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| {
                 Err(ApexError::Subprocess {
@@ -1022,18 +1056,19 @@ mod tests {
     async fn install_deps_coverage_install_command_error() {
         // Spawn error from pip3 install coverage pytest
         let dir = tempfile::tempdir().unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         // python3 -c "import coverage" fails with nonzero (not spawn error)
         mock.expect_run_command()
-            .withf(|spec| spec.program == PythonRunner::<MockCmd>::resolve_python())
+            .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| Ok(CommandOutput::failure(1, b"ModuleNotFoundError".to_vec())));
         // uv pip install or pip3 install coverage pytest fails with spawn error
         mock.expect_run_command()
             .withf(|spec| {
                 spec.args.contains(&"coverage".to_string())
-                    && (spec.program == PythonRunner::<MockCmd>::resolve_pip()
+                    && (is_pip_program(&spec.program)
                         || spec.program == "uv")
             })
             .times(1)
@@ -1084,11 +1119,12 @@ mod tests {
         // verify the invariant: one of the two install commands is called and
         // succeeds, without caring which path was taken.
         let dir = tempfile::tempdir().unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         // python3 -c "import coverage" fails
         mock.expect_run_command()
-            .withf(|spec| spec.program == PythonRunner::<MockCmd>::resolve_python())
+            .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| Ok(CommandOutput::failure(1, b"ModuleNotFoundError".to_vec())));
         // Either `uv pip install --system coverage pytest`
@@ -1099,7 +1135,7 @@ mod tests {
                     && spec.args.contains(&"--system".to_string())
                     && spec.args.contains(&"coverage".to_string()))
                     || (spec.args.contains(&"coverage".to_string())
-                        && spec.program == PythonRunner::<MockCmd>::resolve_pip())
+                        && is_pip_program(&spec.program))
             })
             .times(1)
             .returning(|_| Ok(CommandOutput::success(b"".to_vec())));
@@ -1116,10 +1152,11 @@ mod tests {
         // We test this by verifying that an empty directory (Pip pkg manager)
         // with coverage already present returns Ok(()).
         let dir = tempfile::tempdir().unwrap();
+        create_fake_venv(dir.path());
 
         let mut mock = MockCmd::new();
         mock.expect_run_command()
-            .withf(|spec| spec.program == PythonRunner::<MockCmd>::resolve_python())
+            .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| Ok(CommandOutput::success(b"".to_vec())));
 
@@ -1162,7 +1199,7 @@ mod tests {
         let mut mock = MockCmd::new();
         mock.expect_run_command()
             .withf(|spec| {
-                spec.program == PythonRunner::<MockCmd>::resolve_python()
+                is_python_program(&spec.program)
                     && spec.args.contains(&"-m".to_string())
                     && spec.args.contains(&"pytest".to_string())
             })
@@ -1181,12 +1218,13 @@ mod tests {
     #[tokio::test]
     async fn install_deps_no_deps_only_coverage_check_passes() {
         let dir = tempfile::tempdir().unwrap();
+        create_fake_venv(dir.path());
         // No requirements.txt, no pyproject.toml, no setup.py
         // So we skip directly to coverage check
 
         let mut mock = MockCmd::new();
         mock.expect_run_command()
-            .withf(|spec| spec.program == PythonRunner::<MockCmd>::resolve_python())
+            .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| Ok(CommandOutput::success(b"".to_vec())));
 
