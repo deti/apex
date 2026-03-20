@@ -267,7 +267,8 @@ mod tests {
     // Target: parse_simplecov_json — unicode file path is stored correctly
     #[test]
     fn parse_simplecov_unicode_file_path() {
-        let json = "{\"coverage\":{\"\u{4e2d}\u{6587}/\u{6a21}\u{578b}.rb\":{\"lines\":[1,null,2]}}}";
+        let json =
+            "{\"coverage\":{\"\u{4e2d}\u{6587}/\u{6a21}\u{578b}.rb\":{\"lines\":[1,null,2]}}}";
         let (all, exec, files) = parse_simplecov_json(json);
         assert_eq!(all.len(), 2);
         assert_eq!(exec.len(), 2);

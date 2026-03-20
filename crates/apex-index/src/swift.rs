@@ -362,7 +362,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let json = r#"{"data": [{"files": [{"filename": "a.swift", "segments": [[1,2]]}]}]}"#;
         let (branches, _) = parse_swift_coverage(json, tmp.path());
-        assert!(branches.is_empty(), "segment with < 3 elements must be skipped");
+        assert!(
+            branches.is_empty(),
+            "segment with < 3 elements must be skipped"
+        );
     }
 
     // Target: parse_swift_coverage — segment with non-integer line/col/count (lines 56-64)
@@ -371,7 +374,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let json = r#"{"data": [{"files": [{"filename": "a.swift", "segments": [["bad",1,1,true,true],[5,2,3,true,true]]}]}]}"#;
         let (branches, _) = parse_swift_coverage(json, tmp.path());
-        assert_eq!(branches.len(), 1, "only the valid segment should be indexed");
+        assert_eq!(
+            branches.len(),
+            1,
+            "only the valid segment should be indexed"
+        );
         assert_eq!(branches[0].line, 5);
     }
 
@@ -426,7 +433,8 @@ mod tests {
     // Target: derive_relative_path with no match returns original
     #[test]
     fn derive_relative_path_no_match_returns_original() {
-        let rel = derive_relative_path("/unrelated/path.swift", std::path::Path::new("/other/root"));
+        let rel =
+            derive_relative_path("/unrelated/path.swift", std::path::Path::new("/other/root"));
         assert_eq!(rel, "/unrelated/path.swift");
     }
 
@@ -444,7 +452,10 @@ mod tests {
         // "Test Case '" prefix present but no "' " separator — must be skipped
         let stdout = "Test Case 'missingclose passed (0.001 seconds).\n";
         let traces = build_traces_from_output(stdout, &[]);
-        assert!(traces.is_empty(), "malformed Test Case line must be skipped");
+        assert!(
+            traces.is_empty(),
+            "malformed Test Case line must be skipped"
+        );
     }
 
     // Target: build_traces_from_output — status part is neither "passed" nor "failed" (line 112-114)
@@ -453,7 +464,10 @@ mod tests {
         // "skipped" status — neither passed nor failed, must be skipped
         let stdout = "Test Case '-[MyTests.Foo testBar]' skipped (0.000 seconds).\n";
         let traces = build_traces_from_output(stdout, &[]);
-        assert!(traces.is_empty(), "unknown status (skipped) must produce no trace");
+        assert!(
+            traces.is_empty(),
+            "unknown status (skipped) must produce no trace"
+        );
     }
 
     // Target: parse_seconds_parens — open paren but no " seconds" substring (line 134-136)
@@ -498,7 +512,11 @@ mod tests {
         let (branches, file_paths) = parse_swift_coverage(json, tmp.path());
         assert_eq!(branches.len(), 2);
         // The or_insert_with path: second entry is a dup, file_paths should have 1 key.
-        assert_eq!(file_paths.len(), 1, "duplicate file must appear once in file_paths");
+        assert_eq!(
+            file_paths.len(),
+            1,
+            "duplicate file must appear once in file_paths"
+        );
     }
 
     // Target: parse_swift_coverage — segment col value extracted correctly (line 68-69).

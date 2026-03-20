@@ -60,10 +60,7 @@ fn try_parse_instanceof(line: &str) -> Option<ConditionTree> {
     let expr = cond[..pos].trim();
     let type_name = cond[pos + " instanceof ".len()..].trim();
     // Strip trailing `)` or `{` if present
-    let type_name = type_name
-        .trim_end_matches(')')
-        .trim_end_matches('{')
-        .trim();
+    let type_name = type_name.trim_end_matches(')').trim_end_matches('{').trim();
     if expr.is_empty() || type_name.is_empty() {
         return None;
     }

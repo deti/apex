@@ -122,7 +122,11 @@ impl HuntHints {
                     // If the finding has no line, treat the whole file as in-window.
                     None => true,
                 };
-                if in_window { *boost } else { 0.0 }
+                if in_window {
+                    *boost
+                } else {
+                    0.0
+                }
             })
             .fold(0.0_f64, |acc, b| acc + b)
     }
@@ -191,7 +195,10 @@ mod tests {
 
     #[test]
     fn boost_within_proximity_window() {
-        let cfg = HuntHintConfig { proximity_window: 5, ..Default::default() };
+        let cfg = HuntHintConfig {
+            proximity_window: 5,
+            ..Default::default()
+        };
         let findings = vec![make_finding("src/auth.rs", Some(100), Severity::High)];
         let hints = HuntHints::from_findings(&findings, cfg);
 
@@ -205,7 +212,10 @@ mod tests {
 
     #[test]
     fn boost_below_window() {
-        let cfg = HuntHintConfig { proximity_window: 5, ..Default::default() };
+        let cfg = HuntHintConfig {
+            proximity_window: 5,
+            ..Default::default()
+        };
         let findings = vec![make_finding("src/auth.rs", Some(100), Severity::High)];
         let hints = HuntHints::from_findings(&findings, cfg);
 
@@ -254,7 +264,10 @@ mod tests {
             make_finding("src/vuln.rs", Some(10), Severity::High),
             make_finding("src/vuln.rs", Some(15), Severity::Medium),
         ];
-        let cfg = HuntHintConfig { proximity_window: 10, ..Default::default() };
+        let cfg = HuntHintConfig {
+            proximity_window: 10,
+            ..Default::default()
+        };
         let hints = HuntHints::from_findings(&findings, cfg.clone());
 
         // Line 12 is within both finding windows (10±10 and 15±10)

@@ -81,7 +81,11 @@ pub fn config_path(editor: &str, global: bool) -> Result<PathBuf> {
             .join(".codeium")
             .join("windsurf")
             .join("mcp_config.json"),
-        (other, _) => return Err(eyre!("unknown editor '{other}'; use claude, cursor, or windsurf")),
+        (other, _) => {
+            return Err(eyre!(
+                "unknown editor '{other}'; use claude, cursor, or windsurf"
+            ))
+        }
     };
 
     Ok(path)
@@ -145,10 +149,7 @@ pub fn write_config(path: &Path, config: &Value) -> Result<()> {
     }
 
     // Merge the apex entry from config into existing["mcpServers"].
-    if let Some(apex_entry) = config
-        .get("mcpServers")
-        .and_then(|s| s.get("apex"))
-    {
+    if let Some(apex_entry) = config.get("mcpServers").and_then(|s| s.get("apex")) {
         existing["mcpServers"]["apex"] = apex_entry.clone();
     }
 
@@ -229,7 +230,10 @@ mod tests {
     fn generate_config_encodes_binary_path_verbatim() {
         let binary = Path::new("/home/user/.cargo/bin/apex");
         let config = generate_config(binary);
-        assert_eq!(config["mcpServers"]["apex"]["command"], "/home/user/.cargo/bin/apex");
+        assert_eq!(
+            config["mcpServers"]["apex"]["command"],
+            "/home/user/.cargo/bin/apex"
+        );
     }
 
     // --- config_path ---
@@ -298,7 +302,10 @@ mod tests {
         let result = config_path("vscode", false);
         assert!(result.is_err(), "expected error for unknown editor");
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("vscode"), "error should mention the editor name");
+        assert!(
+            msg.contains("vscode"),
+            "error should mention the editor name"
+        );
     }
 
     // --- write_config ---
@@ -316,8 +323,14 @@ mod tests {
         assert!(path.exists(), "file should have been created");
         let raw = std::fs::read_to_string(&path).unwrap();
         let parsed: Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(parsed["mcpServers"]["apex"]["command"], "/usr/local/bin/apex");
-        assert_eq!(parsed["mcpServers"]["apex"]["args"], serde_json::json!(["mcp"]));
+        assert_eq!(
+            parsed["mcpServers"]["apex"]["command"],
+            "/usr/local/bin/apex"
+        );
+        assert_eq!(
+            parsed["mcpServers"]["apex"]["args"],
+            serde_json::json!(["mcp"])
+        );
     }
 
     #[test]
@@ -352,7 +365,10 @@ mod tests {
             parsed["mcpServers"].get("apex").is_some(),
             "apex entry should be added"
         );
-        assert_eq!(parsed["mcpServers"]["apex"]["command"], "/usr/local/bin/apex");
+        assert_eq!(
+            parsed["mcpServers"]["apex"]["command"],
+            "/usr/local/bin/apex"
+        );
     }
 
     #[test]
@@ -390,7 +406,10 @@ mod tests {
         let config = generate_config(Path::new("/usr/local/bin/apex"));
         write_config(&path, &config).unwrap();
 
-        assert!(path.exists(), "file should exist after creating parent dirs");
+        assert!(
+            path.exists(),
+            "file should exist after creating parent dirs"
+        );
     }
 
     // --- dry_run ---
@@ -404,10 +423,16 @@ mod tests {
         let path = dir.path().join("should_not_exist.json");
 
         // Simulate dry-run: do NOT call write_config.
-        assert!(!path.exists(), "file must not exist without write_config call");
+        assert!(
+            !path.exists(),
+            "file must not exist without write_config call"
+        );
 
         // Calling generate_config alone (no write) must not create files.
         let _config = generate_config(Path::new("/usr/bin/apex"));
-        assert!(!path.exists(), "generate_config must not touch the filesystem");
+        assert!(
+            !path.exists(),
+            "generate_config must not touch the filesystem"
+        );
     }
 }

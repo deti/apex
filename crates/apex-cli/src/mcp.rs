@@ -418,12 +418,7 @@ pub(crate) fn validate_target_path(target: &str) -> Result<String, McpError> {
     std::path::Path::new(target)
         .canonicalize()
         .map(|p| p.to_string_lossy().into_owned())
-        .map_err(|e| {
-            McpError::invalid_params(
-                format!("invalid target path '{target}': {e}"),
-                None,
-            )
-        })
+        .map_err(|e| McpError::invalid_params(format!("invalid target path '{target}': {e}"), None))
 }
 
 // ---------------------------------------------------------------------------
@@ -544,14 +539,9 @@ impl ApexMcpService {
         &self,
         Parameters(params): Parameters<ReachParams>,
     ) -> Result<CallToolResult, McpError> {
-        let output = run_apex_command(&[
-            "reach",
-            "--target",
-            &params.target,
-            "--lang",
-            &params.lang,
-        ])
-        .await?;
+        let output =
+            run_apex_command(&["reach", "--target", &params.target, "--lang", &params.lang])
+                .await?;
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
@@ -623,14 +613,9 @@ impl ApexMcpService {
         Parameters(params): Parameters<ComplexityParams>,
     ) -> Result<CallToolResult, McpError> {
         let target = validate_target_path(&params.target)?;
-        let output = run_apex_command(&[
-            "complexity",
-            "--target",
-            &target,
-            "--output-format",
-            "json",
-        ])
-        .await?;
+        let output =
+            run_apex_command(&["complexity", "--target", &target, "--output-format", "json"])
+                .await?;
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
@@ -644,14 +629,9 @@ impl ApexMcpService {
         Parameters(params): Parameters<DeadCodeParams>,
     ) -> Result<CallToolResult, McpError> {
         let target = validate_target_path(&params.target)?;
-        let output = run_apex_command(&[
-            "dead-code",
-            "--target",
-            &target,
-            "--output-format",
-            "json",
-        ])
-        .await?;
+        let output =
+            run_apex_command(&["dead-code", "--target", &target, "--output-format", "json"])
+                .await?;
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
@@ -691,21 +671,13 @@ impl ApexMcpService {
         Parameters(params): Parameters<HotpathsParams>,
     ) -> Result<CallToolResult, McpError> {
         let target = validate_target_path(&params.target)?;
-        let output = run_apex_command(&[
-            "hotpaths",
-            "--target",
-            &target,
-            "--output-format",
-            "json",
-        ])
-        .await?;
+        let output =
+            run_apex_command(&["hotpaths", "--target", &target, "--output-format", "json"]).await?;
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
     /// Identify redundant tests that can be removed to save CI time.
-    #[tool(
-        description = "Identify redundant tests that can be removed to save CI time."
-    )]
+    #[tool(description = "Identify redundant tests that can be removed to save CI time.")]
     async fn apex_test_optimize(
         &self,
         Parameters(params): Parameters<TestOptimizeParams>,
@@ -775,9 +747,7 @@ impl ApexMcpService {
     }
 
     /// Scan for hardcoded secrets, API keys, and high-entropy strings.
-    #[tool(
-        description = "Scan for hardcoded secrets, API keys, and high-entropy strings."
-    )]
+    #[tool(description = "Scan for hardcoded secrets, API keys, and high-entropy strings.")]
     async fn apex_secret_scan(
         &self,
         Parameters(params): Parameters<SecretScanParams>,
@@ -797,9 +767,7 @@ impl ApexMcpService {
     }
 
     /// Trace data flow and taint paths through the codebase.
-    #[tool(
-        description = "Trace data flow and taint paths through the codebase."
-    )]
+    #[tool(description = "Trace data flow and taint paths through the codebase.")]
     async fn apex_data_flow(
         &self,
         Parameters(params): Parameters<DataFlowParams>,
@@ -847,9 +815,7 @@ impl ApexMcpService {
     }
 
     /// Check for coverage regressions against the stored baseline.
-    #[tool(
-        description = "Check for coverage regressions against the stored baseline."
-    )]
+    #[tool(description = "Check for coverage regressions against the stored baseline.")]
     async fn apex_regression_check(
         &self,
         Parameters(params): Parameters<RegressionCheckParams>,
@@ -869,9 +835,7 @@ impl ApexMcpService {
     }
 
     /// Run code quality lints including complexity, naming, and style checks.
-    #[tool(
-        description = "Run code quality lints including complexity, naming, and style checks."
-    )]
+    #[tool(description = "Run code quality lints including complexity, naming, and style checks.")]
     async fn apex_lint(
         &self,
         Parameters(params): Parameters<LintParams>,
@@ -921,14 +885,9 @@ impl ApexMcpService {
         Parameters(params): Parameters<ContractsParams>,
     ) -> Result<CallToolResult, McpError> {
         let target = validate_target_path(&params.target)?;
-        let output = run_apex_command(&[
-            "contracts",
-            "--target",
-            &target,
-            "--output-format",
-            "json",
-        ])
-        .await?;
+        let output =
+            run_apex_command(&["contracts", "--target", &target, "--output-format", "json"])
+                .await?;
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
@@ -999,14 +958,8 @@ impl ApexMcpService {
         Parameters(params): Parameters<IndexParams>,
     ) -> Result<CallToolResult, McpError> {
         let target = validate_target_path(&params.target)?;
-        let output = run_apex_command(&[
-            "index",
-            "--target",
-            &target,
-            "--lang",
-            &params.lang,
-        ])
-        .await?;
+        let output =
+            run_apex_command(&["index", "--target", &target, "--lang", &params.lang]).await?;
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
@@ -1017,14 +970,8 @@ impl ApexMcpService {
         Parameters(params): Parameters<DocsParams>,
     ) -> Result<CallToolResult, McpError> {
         let target = validate_target_path(&params.target)?;
-        let output = run_apex_command(&[
-            "docs",
-            "--target",
-            &target,
-            "--output-format",
-            "json",
-        ])
-        .await?;
+        let output =
+            run_apex_command(&["docs", "--target", &target, "--output-format", "json"]).await?;
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
@@ -1090,9 +1037,7 @@ impl ApexMcpService {
     }
 
     /// Export compliance report (ASVS, STRIDE, SSDF) for audit purposes.
-    #[tool(
-        description = "Export compliance report (ASVS, STRIDE, SSDF) for audit purposes."
-    )]
+    #[tool(description = "Export compliance report (ASVS, STRIDE, SSDF) for audit purposes.")]
     async fn apex_compliance_export(
         &self,
         Parameters(params): Parameters<ComplianceExportParams>,
@@ -1112,9 +1057,7 @@ impl ApexMcpService {
     }
 
     /// Measure API endpoint test coverage against an OpenAPI spec.
-    #[tool(
-        description = "Measure API endpoint test coverage against an OpenAPI spec."
-    )]
+    #[tool(description = "Measure API endpoint test coverage against an OpenAPI spec.")]
     async fn apex_api_coverage(
         &self,
         Parameters(params): Parameters<ApiCoverageParams>,
@@ -1182,14 +1125,9 @@ impl ApexMcpService {
         Parameters(params): Parameters<TestDataParams>,
     ) -> Result<CallToolResult, McpError> {
         let target = validate_target_path(&params.target)?;
-        let output = run_apex_command(&[
-            "test-data",
-            "--target",
-            &target,
-            "--output-format",
-            "json",
-        ])
-        .await?;
+        let output =
+            run_apex_command(&["test-data", "--target", &target, "--output-format", "json"])
+                .await?;
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 }
@@ -1563,8 +1501,7 @@ mod tests {
         assert!(required_names.contains(&"changed_files"));
 
         // blast_radius: target, lang, changed_files all required
-        let schema =
-            serde_json::to_value(rmcp::schemars::schema_for!(BlastRadiusParams)).unwrap();
+        let schema = serde_json::to_value(rmcp::schemars::schema_for!(BlastRadiusParams)).unwrap();
         let required = schema.get("required").unwrap().as_array().unwrap();
         let required_names: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
         assert!(required_names.contains(&"target"));

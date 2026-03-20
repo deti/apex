@@ -685,7 +685,11 @@ mod tests {
         fs::write(dir.join("Page.vue"), "<template/>").unwrap();
         fs::write(dir.join("Layout.svelte"), "<slot/>").unwrap();
         let artifacts = discover_artifacts(&dir);
-        assert_eq!(artifacts.frontend_files.len(), 4, "jsx/tsx/vue/svelte should all be discovered");
+        assert_eq!(
+            artifacts.frontend_files.len(),
+            4,
+            "jsx/tsx/vue/svelte should all be discovered"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -711,7 +715,11 @@ mod tests {
         fs::write(dir.join("schema.sql"), "CREATE TABLE x (id int);").unwrap(); // not under migrations/
         fs::write(migrations.join("001_init.sql"), "CREATE TABLE y (id int);").unwrap();
         let artifacts = discover_artifacts(&dir);
-        assert_eq!(artifacts.sql_migrations.len(), 1, "only migrations/ sql should be discovered");
+        assert_eq!(
+            artifacts.sql_migrations.len(),
+            1,
+            "only migrations/ sql should be discovered"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -725,9 +733,16 @@ mod tests {
         fs::write(dir.join(".env.local"), "KEY=local").unwrap();
         fs::write(dir.join(".env.example"), "KEY=example").unwrap(); // must NOT be discovered
         let artifacts = discover_artifacts(&dir);
-        assert_eq!(artifacts.env_files.len(), 2, ".env.example must be excluded");
+        assert_eq!(
+            artifacts.env_files.len(),
+            2,
+            ".env.example must be excluded"
+        );
         for p in &artifacts.env_files {
-            assert!(!p.to_string_lossy().ends_with(".example"), "example file leaked into env_files");
+            assert!(
+                !p.to_string_lossy().ends_with(".example"),
+                "example file leaked into env_files"
+            );
         }
         let _ = fs::remove_dir_all(&dir);
     }
@@ -757,7 +772,10 @@ mod tests {
         let _ = fs::create_dir_all(&sub);
         fs::write(sub.join("Cargo.toml"), "[package]\nname = \"sub\"").unwrap();
         let artifacts = discover_artifacts(&dir);
-        assert!(artifacts.cargo_toml.is_some(), "root Cargo.toml should be discovered");
+        assert!(
+            artifacts.cargo_toml.is_some(),
+            "root Cargo.toml should be discovered"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -771,7 +789,11 @@ mod tests {
         fs::write(dir.join("README.md"), "# top level md").unwrap(); // should NOT match
         fs::write(runbooks.join("deploy.md"), "# deploy").unwrap();
         let artifacts = discover_artifacts(&dir);
-        assert_eq!(artifacts.runbook_files.len(), 1, "only runbooks/*.md should match");
+        assert_eq!(
+            artifacts.runbook_files.len(),
+            1,
+            "only runbooks/*.md should match"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -799,7 +821,11 @@ mod tests {
         fs::write(locales.join("fr.yaml"), "---").unwrap();
         fs::write(locales.join("de.yml"), "---").unwrap();
         let artifacts = discover_artifacts(&dir);
-        assert_eq!(artifacts.i18n_files.len(), 3, "locales/ json/yaml/yml should all be i18n");
+        assert_eq!(
+            artifacts.i18n_files.len(),
+            3,
+            "locales/ json/yaml/yml should all be i18n"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -812,7 +838,10 @@ mod tests {
         let _ = fs::create_dir_all(&apex_dir);
         fs::write(apex_dir.join("index.json"), "{}").unwrap();
         let artifacts = discover_artifacts(&dir);
-        assert!(artifacts.has_apex_index, ".apex/index.json should set has_apex_index");
+        assert!(
+            artifacts.has_apex_index,
+            ".apex/index.json should set has_apex_index"
+        );
         // total_count includes the index as 1
         assert_eq!(artifacts.total_count(), 1);
         let _ = fs::remove_dir_all(&dir);
@@ -827,7 +856,10 @@ mod tests {
         let _ = fs::create_dir_all(&node_mods);
         fs::write(node_mods.join("Dockerfile"), "FROM alpine").unwrap();
         let artifacts = discover_artifacts(&dir);
-        assert!(artifacts.dockerfiles.is_empty(), "node_modules should be skipped");
+        assert!(
+            artifacts.dockerfiles.is_empty(),
+            "node_modules should be skipped"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -871,7 +903,9 @@ mod tests {
     fn sql_migrations_trigger_schema_check() {
         // Target: lines 300-306
         let mut artifacts = Artifacts::default();
-        artifacts.sql_migrations.push(PathBuf::from("migrations/001.sql"));
+        artifacts
+            .sql_migrations
+            .push(PathBuf::from("migrations/001.sql"));
         let names = analyzer_names(&artifacts, Language::Rust);
         assert!(names.contains(&"schema-check"));
     }
@@ -916,14 +950,20 @@ mod tests {
         artifacts.package_json = Some(PathBuf::from("package.json"));
         let analyzers = applicable_analyzers(&artifacts, Language::Rust);
         let dep_graph = analyzers.iter().find(|a| a.name == "dep-graph").unwrap();
-        assert_eq!(dep_graph.artifacts_used.len(), 2, "both manifest files should be in artifacts_used");
+        assert_eq!(
+            dep_graph.artifacts_used.len(),
+            2,
+            "both manifest files should be in artifacts_used"
+        );
     }
 
     #[test]
     fn runbook_files_trigger_runbook_check() {
         // Target: lines 348-354
         let mut artifacts = Artifacts::default();
-        artifacts.runbook_files.push(PathBuf::from("runbooks/deploy.md"));
+        artifacts
+            .runbook_files
+            .push(PathBuf::from("runbooks/deploy.md"));
         let names = analyzer_names(&artifacts, Language::Rust);
         assert!(names.contains(&"runbook-check"));
     }
@@ -981,7 +1021,8 @@ mod tests {
             description: "does not exist",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert_eq!(results.len(), 1);
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         assert_eq!(results[0].report, serde_json::Value::Null);
@@ -1000,7 +1041,8 @@ mod tests {
             description: "service map",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].name, "service-map");
         // duration_ms is a u64; we just verify it is populated (not a sentinel bad value)
@@ -1025,7 +1067,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1042,7 +1085,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1059,7 +1103,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1076,7 +1121,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert_eq!(results[0].report, serde_json::Value::Null);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1097,7 +1143,8 @@ mod tests {
             description: "desc",
             artifacts_used: artifacts.dockerfiles.clone(),
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         assert_ne!(results[0].report, serde_json::Value::Null);
         let _ = fs::remove_dir_all(&dir);
@@ -1115,7 +1162,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1132,7 +1180,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert_eq!(results[0].report, serde_json::Value::Null);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1156,7 +1205,8 @@ mod tests {
             description: "desc",
             artifacts_used: artifacts.env_files.clone(),
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1173,7 +1223,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert_eq!(results[0].report, serde_json::Value::Null);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1190,7 +1241,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert_eq!(results[0].report, serde_json::Value::Null);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1212,7 +1264,8 @@ mod tests {
             description: "desc",
             artifacts_used: artifacts.sql_migrations.clone(),
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         // Should have found issues — the report is a non-empty array
         assert!(results[0].report.is_array());
@@ -1231,7 +1284,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1248,7 +1302,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1265,7 +1320,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1287,7 +1343,8 @@ mod tests {
             description: "desc",
             artifacts_used: artifacts.runbook_files.clone(),
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         assert!(results[0].report.is_array());
         let _ = fs::remove_dir_all(&dir);
@@ -1305,7 +1362,8 @@ mod tests {
             description: "desc",
             artifacts_used: vec![],
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert_eq!(results[0].report, serde_json::Value::Null);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1326,7 +1384,8 @@ mod tests {
             description: "desc",
             artifacts_used: artifacts.slo_files.clone(),
         }];
-        let results = run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
+        let results =
+            run_applicable_analyzers(&dir, Language::Rust, &cache, &artifacts, &analyzers).await;
         assert!(matches!(results[0].status, AnalyzerStatus::Ok));
         let _ = fs::remove_dir_all(&dir);
     }

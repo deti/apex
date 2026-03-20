@@ -239,7 +239,9 @@ mod tests {
         let r = analyze_migration("TRUNCATE TABLE audit_log;");
         assert_eq!(r.dangerous_count, 1);
         assert_eq!(r.issues[0].risk, MigrationRisk::Dangerous);
-        assert!(r.issues[0].description.contains("removes all data permanently"));
+        assert!(r.issues[0]
+            .description
+            .contains("removes all data permanently"));
     }
 
     #[test]
@@ -325,27 +327,21 @@ CREATE INDEX idx_posts_title ON posts(title);\n\
     #[test]
     fn not_null_with_default_is_safe() {
         // ADD COLUMN NOT NULL DEFAULT x should not fire
-        let r = analyze_migration(
-            "ALTER TABLE users ADD COLUMN score integer NOT NULL DEFAULT 0;",
-        );
+        let r = analyze_migration("ALTER TABLE users ADD COLUMN score integer NOT NULL DEFAULT 0;");
         assert_eq!(r.dangerous_count, 0);
     }
 
     #[test]
     fn add_column_not_null_missing_default_fires() {
         // No DEFAULT — should be dangerous
-        let r = analyze_migration(
-            "ALTER TABLE users ADD score integer NOT NULL;",
-        );
+        let r = analyze_migration("ALTER TABLE users ADD score integer NOT NULL;");
         assert_eq!(r.dangerous_count, 1);
     }
 
     #[test]
     fn add_column_with_column_keyword_not_null_no_default() {
         // "ADD COLUMN col_name type NOT NULL" — with COLUMN keyword
-        let r = analyze_migration(
-            "ALTER TABLE users ADD COLUMN active boolean NOT NULL;",
-        );
+        let r = analyze_migration("ALTER TABLE users ADD COLUMN active boolean NOT NULL;");
         assert_eq!(r.dangerous_count, 1);
     }
 }

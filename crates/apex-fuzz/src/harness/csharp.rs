@@ -75,8 +75,7 @@ mod tests {
 
     #[test]
     fn csharp_harness_multiple_params_picks_stream_when_present() {
-        let harness =
-            csharp_fuzz_harness("Acme.Codec", "Decode", &["int flags", "Stream source"]);
+        let harness = csharp_fuzz_harness("Acme.Codec", "Decode", &["int flags", "Stream source"]);
         assert!(harness.contains("stream =>"));
     }
 }

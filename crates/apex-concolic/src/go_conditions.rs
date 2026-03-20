@@ -94,7 +94,10 @@ fn try_parse_len_check(line: &str) -> Option<ConditionTree> {
         ("<", CompareOp::Lt),
     ] {
         if let Some(pos) = rest.find(op_str) {
-            let val = rest[pos + op_str.len()..].trim().trim_end_matches('{').trim();
+            let val = rest[pos + op_str.len()..]
+                .trim()
+                .trim_end_matches('{')
+                .trim();
             return Some(ConditionTree::LengthCheck {
                 expr: Box::new(Expr::Variable(var.trim().to_string())),
                 op: *op,

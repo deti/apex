@@ -106,8 +106,8 @@ impl Sandbox for RubyTestSandbox {
         let code = std::str::from_utf8(&input.data)
             .map_err(|e| ApexError::Sandbox(format!("candidate not valid UTF-8: {e}")))?;
 
-        let tmp_dir = tempfile::tempdir()
-            .map_err(|e| ApexError::Sandbox(format!("tempdir: {e}")))?;
+        let tmp_dir =
+            tempfile::tempdir().map_err(|e| ApexError::Sandbox(format!("tempdir: {e}")))?;
 
         let test_file = tmp_dir.path().join("apex_probe_test.rb");
         let coverage_dir = tmp_dir.path().join("coverage");
@@ -245,45 +245,33 @@ mod tests {
 
     #[test]
     fn ruby_sandbox_language() {
-        let sandbox = RubyTestSandbox::new(
-            make_oracle(),
-            make_file_paths(),
-            PathBuf::from("/tmp/test"),
-        );
+        let sandbox =
+            RubyTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/tmp/test"));
         use apex_core::traits::Sandbox;
         assert_eq!(sandbox.language(), Language::Ruby);
     }
 
     #[test]
     fn ruby_sandbox_constructs() {
-        let sandbox = RubyTestSandbox::new(
-            make_oracle(),
-            make_file_paths(),
-            PathBuf::from("/tmp/test"),
-        );
+        let sandbox =
+            RubyTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/tmp/test"));
         assert_eq!(sandbox.timeout_ms, 30_000);
     }
 
     #[test]
     fn with_timeout_overrides() {
-        let sandbox = RubyTestSandbox::new(
-            make_oracle(),
-            make_file_paths(),
-            PathBuf::from("/tmp/test"),
-        )
-        .with_timeout(5_000);
+        let sandbox =
+            RubyTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/tmp/test"))
+                .with_timeout(5_000);
         assert_eq!(sandbox.timeout_ms, 5_000);
     }
 
     #[test]
     fn with_timeout_chains() {
-        let sandbox = RubyTestSandbox::new(
-            make_oracle(),
-            make_file_paths(),
-            PathBuf::from("/tmp/test"),
-        )
-        .with_timeout(1_000)
-        .with_timeout(2_000);
+        let sandbox =
+            RubyTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/tmp/test"))
+                .with_timeout(1_000)
+                .with_timeout(2_000);
         assert_eq!(sandbox.timeout_ms, 2_000);
     }
 
@@ -373,11 +361,8 @@ mod tests {
 
     #[test]
     fn snapshot_not_supported() {
-        let sandbox = RubyTestSandbox::new(
-            make_oracle(),
-            make_file_paths(),
-            PathBuf::from("/tmp/test"),
-        );
+        let sandbox =
+            RubyTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/tmp/test"));
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -390,11 +375,8 @@ mod tests {
 
     #[test]
     fn restore_not_supported() {
-        let sandbox = RubyTestSandbox::new(
-            make_oracle(),
-            make_file_paths(),
-            PathBuf::from("/tmp/test"),
-        );
+        let sandbox =
+            RubyTestSandbox::new(make_oracle(), make_file_paths(), PathBuf::from("/tmp/test"));
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();

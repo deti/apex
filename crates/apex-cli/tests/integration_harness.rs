@@ -81,11 +81,7 @@ fn test_run_nonexistent_target_fails() {
 #[ignore = "requires pytest installed in PATH"]
 async fn test_run_python_baseline_succeeds() {
     let target = fixture_path("tiny-python");
-    assert!(
-        target.exists(),
-        "fixture missing: {}",
-        target.display()
-    );
+    assert!(target.exists(), "fixture missing: {}", target.display());
     let cfg = default_cfg();
     let cli = Cli::parse_from([
         "apex",
@@ -247,7 +243,11 @@ fn tiny_js_fixture_exists() {
 async fn test_audit_js_succeeds() {
     let target = fixture_path("tiny-js");
     let cli = Cli::parse_from([
-        "apex", "audit", "--lang", "js", "--target",
+        "apex",
+        "audit",
+        "--lang",
+        "js",
+        "--target",
         target.to_str().unwrap(),
     ]);
     let result = run_cli(cli, &default_cfg()).await;
@@ -258,5 +258,9 @@ async fn test_audit_js_succeeds() {
 async fn test_features_js() {
     let cli = Cli::parse_from(["apex", "features", "--lang", "js"]);
     let result = run_cli(cli, &default_cfg()).await;
-    assert!(result.is_ok(), "apex features --lang js failed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "apex features --lang js failed: {:?}",
+        result
+    );
 }

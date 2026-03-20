@@ -1158,7 +1158,9 @@ mod tests {
         // ": test" → "" matches (trim_end_matches strips ": test")
         assert!(tests.contains(&"real_test".to_string()));
         // bench and info lines must not be included
-        assert!(!tests.iter().any(|t| t.contains("running") || t.contains("bench")));
+        assert!(!tests
+            .iter()
+            .any(|t| t.contains("running") || t.contains("bench")));
     }
 
     /// Target: lines 46-50 — enumerate_tests with only noise returns empty.
@@ -1221,7 +1223,11 @@ mod tests {
             ],
         };
         let (paths, total, covered) = parse_coverage_stats(&json, "/proj");
-        assert_eq!(paths.len(), 2, "both data entries' files should be in file_paths");
+        assert_eq!(
+            paths.len(),
+            2,
+            "both data entries' files should be in file_paths"
+        );
         assert_eq!(total, 2, "both segments counted");
         assert_eq!(covered, 1, "only first segment has count > 0");
     }
@@ -1699,8 +1705,7 @@ mod tests {
     #[test]
     fn resolve_llvm_env_parses_cargo_target_dir_logic() {
         // Simulate the parsing loop from resolve_llvm_env
-        let stdout =
-            "CARGO_TARGET_DIR=\"/home/user/project/target/llvm-cov-target\"\nother=val\n";
+        let stdout = "CARGO_TARGET_DIR=\"/home/user/project/target/llvm-cov-target\"\nother=val\n";
         let mut target_dir: Option<std::path::PathBuf> = None;
         for line in stdout.lines() {
             if let Some(val) = line.strip_prefix("CARGO_TARGET_DIR=") {
@@ -1725,8 +1730,7 @@ mod tests {
             }
         }
         let base = std::path::Path::new("/fake/target");
-        let result =
-            target_dir.unwrap_or_else(|| base.join("target/llvm-cov-target"));
+        let result = target_dir.unwrap_or_else(|| base.join("target/llvm-cov-target"));
         assert_eq!(result, base.join("target/llvm-cov-target"));
     }
 

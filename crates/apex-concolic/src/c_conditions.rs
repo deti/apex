@@ -94,7 +94,10 @@ fn try_parse_null_check(line: &str) -> Option<ConditionTree> {
             (cond.as_str(), false)
         };
         // Heuristic: single identifier likely a pointer check
-        if var.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '>') {
+        if var
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '>')
+        {
             return Some(ConditionTree::NullCheck {
                 expr: Box::new(Expr::Variable(var.to_string())),
                 is_null: negated,

@@ -48,7 +48,7 @@ pub mod vuln_pipeline;
 pub use config::{DetectConfig, DetectMode};
 pub use context::AnalysisContext;
 pub use finding::{Evidence, Finding, FindingCategory, Fix, Severity};
-pub use hunt_hints::{HuntHintConfig, HuntHint, HuntHints};
+pub use hunt_hints::{HuntHint, HuntHintConfig, HuntHints};
 pub use pipeline::DetectorPipeline;
 pub use report::{AnalysisReport, SecuritySummary};
 

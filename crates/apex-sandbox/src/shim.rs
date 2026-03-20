@@ -604,8 +604,11 @@ mod tests {
                 // Compilation failed — error should mention the failure cause
                 let msg = format!("{e}");
                 assert!(
-                    msg.contains("shim") || msg.contains("compile") || msg.contains("run")
-                        || msg.contains("cc") || msg.contains("clang"),
+                    msg.contains("shim")
+                        || msg.contains("compile")
+                        || msg.contains("run")
+                        || msg.contains("cc")
+                        || msg.contains("clang"),
                     "error message should describe compilation failure: {msg}"
                 );
             }

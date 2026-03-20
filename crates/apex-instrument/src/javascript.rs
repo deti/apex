@@ -424,8 +424,9 @@ impl Instrumentor for JavaScriptInstrumentor {
 
         // Create the NODE_V8_COVERAGE output directory if needed.
         if let Some(v8_dir) = &config.node_v8_coverage_dir {
-            std::fs::create_dir_all(v8_dir)
-                .map_err(|e| ApexError::Instrumentation(format!("create bun v8 coverage dir: {e}")))?;
+            std::fs::create_dir_all(v8_dir).map_err(|e| {
+                ApexError::Instrumentation(format!("create bun v8 coverage dir: {e}"))
+            })?;
         }
 
         info!(
@@ -503,9 +504,9 @@ impl Instrumentor for JavaScriptInstrumentor {
 
                         // Gather all .json files written by bun into the coverage dir.
                         let json_files: Vec<PathBuf> = std::fs::read_dir(v8_dir)
-                            .map_err(|e| ApexError::Instrumentation(format!(
-                                "read bun v8 coverage dir: {e}"
-                            )))?
+                            .map_err(|e| {
+                                ApexError::Instrumentation(format!("read bun v8 coverage dir: {e}"))
+                            })?
                             .filter_map(|entry| entry.ok())
                             .map(|e| e.path())
                             .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
@@ -537,11 +538,9 @@ impl Instrumentor for JavaScriptInstrumentor {
                                     json_file.display()
                                 ))
                             })?;
-                            match v8_coverage::parse_v8_coverage(
-                                &json_str,
-                                &target.root,
-                                &|path| std::fs::read_to_string(path).ok(),
-                            ) {
+                            match v8_coverage::parse_v8_coverage(&json_str, &target.root, &|path| {
+                                std::fs::read_to_string(path).ok()
+                            }) {
                                 Ok((branches, executed, file_paths)) => {
                                     all_branches.extend(branches);
                                     all_executed.extend(executed);
@@ -2434,7 +2433,11 @@ mod tests {
 
         let src_dir = repo_root.join("src");
         std::fs::create_dir_all(&src_dir).unwrap();
-        std::fs::write(src_dir.join("index.js"), "function foo() {\n  return 1;\n}\n").unwrap();
+        std::fs::write(
+            src_dir.join("index.js"),
+            "function foo() {\n  return 1;\n}\n",
+        )
+        .unwrap();
 
         // Write a V8-format JSON file into the bun_v8 directory.
         let v8_json = sample_v8_coverage_json(repo_root.to_str().unwrap());

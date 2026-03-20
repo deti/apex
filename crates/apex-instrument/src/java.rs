@@ -60,11 +60,7 @@ fn jvm_command(program: &str, target: &Path, timeout_ms: u64) -> CommandSpec {
 }
 
 /// Run JaCoCo instrumented tests and return the path to the produced XML report.
-async fn run_jacoco(
-    target: &Path,
-    runner: &dyn CommandRunner,
-    timeout_ms: u64,
-) -> Result<PathBuf> {
+async fn run_jacoco(target: &Path, runner: &dyn CommandRunner, timeout_ms: u64) -> Result<PathBuf> {
     let build_tool = detect_build_tool(target);
 
     info!(
@@ -93,9 +89,8 @@ async fn run_jacoco_gradle(
     if needs_init {
         // Write a temporary init.gradle that applies JaCoCo to all sub-projects.
         let init_path = target.join(".apex-jacoco-init.gradle");
-        std::fs::write(&init_path, JACOCO_INIT_GRADLE).map_err(|e| {
-            ApexError::Instrumentation(format!("write init.gradle: {e}"))
-        })?;
+        std::fs::write(&init_path, JACOCO_INIT_GRADLE)
+            .map_err(|e| ApexError::Instrumentation(format!("write init.gradle: {e}")))?;
         info!("injecting JaCoCo via init script (project lacks jacoco plugin)");
         args.push("--init-script".into());
         args.push(init_path.to_string_lossy().into_owned());
@@ -300,8 +295,12 @@ impl Default for JavaInstrumentor {
 #[async_trait]
 impl Instrumentor for JavaInstrumentor {
     async fn instrument(&self, target: &Target) -> Result<InstrumentedTarget> {
-        let xml_path =
-            run_jacoco(&target.root, self.runner.as_ref(), self.timeouts.jvm_build_ms).await?;
+        let xml_path = run_jacoco(
+            &target.root,
+            self.runner.as_ref(),
+            self.timeouts.jvm_build_ms,
+        )
+        .await?;
 
         let xml_content = std::fs::read_to_string(&xml_path)
             .map_err(|e| ApexError::Instrumentation(format!("read JaCoCo XML: {e}")))?;
@@ -378,10 +377,7 @@ mod tests {
 
     #[async_trait]
     impl CommandRunner for FakeRunner {
-        async fn run_command(
-            &self,
-            spec: &CommandSpec,
-        ) -> apex_core::error::Result<CommandOutput> {
+        async fn run_command(&self, spec: &CommandSpec) -> apex_core::error::Result<CommandOutput> {
             *self.last_spec.lock().unwrap() = Some(spec.clone());
             if self.fail {
                 return Err(ApexError::Subprocess {
@@ -1002,11 +998,7 @@ mod tests {
     #[test]
     fn test_gradle_has_jacoco_with_plugin() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("build.gradle"),
-            "apply plugin: 'jacoco'\n",
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("build.gradle"), "apply plugin: 'jacoco'\n").unwrap();
         assert!(gradle_has_jacoco(tmp.path()));
     }
 
@@ -1024,11 +1016,7 @@ mod tests {
     #[test]
     fn test_gradle_has_jacoco_without_plugin() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("build.gradle"),
-            "apply plugin: 'java'\n",
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("build.gradle"), "apply plugin: 'java'\n").unwrap();
         assert!(!gradle_has_jacoco(tmp.path()));
     }
 
@@ -1086,11 +1074,7 @@ mod tests {
         let repo_root = tmp.path();
 
         // Gradle project WITH jacoco plugin
-        std::fs::write(
-            repo_root.join("build.gradle"),
-            "apply plugin: 'jacoco'\n",
-        )
-        .unwrap();
+        std::fs::write(repo_root.join("build.gradle"), "apply plugin: 'jacoco'\n").unwrap();
 
         let report_dir = repo_root.join("build/reports/jacoco/test");
         std::fs::create_dir_all(&report_dir).unwrap();

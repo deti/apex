@@ -64,10 +64,7 @@ fn try_parse_optional_binding(line: &str) -> Option<ConditionTree> {
         return None;
     }
     let expr = rest[eq_pos + 1..].trim();
-    let expr = expr
-        .trim_end_matches('{')
-        .trim_end_matches("else")
-        .trim();
+    let expr = expr.trim_end_matches('{').trim_end_matches("else").trim();
 
     if expr.is_empty() {
         return Some(ConditionTree::NullCheck {
@@ -144,8 +141,7 @@ fn try_parse_if_comparison(line: &str) -> Option<ConditionTree> {
     if let Some(pos) = cond.find(", ") {
         let left = parse_simple_swift_condition(&cond[..pos]);
         let right = parse_simple_swift_condition(&cond[pos + 2..]);
-        if !matches!(left, ConditionTree::Unknown(_))
-            || !matches!(right, ConditionTree::Unknown(_))
+        if !matches!(left, ConditionTree::Unknown(_)) || !matches!(right, ConditionTree::Unknown(_))
         {
             return Some(ConditionTree::And(Box::new(left), Box::new(right)));
         }
@@ -180,10 +176,7 @@ fn extract_swift_condition(line: &str) -> Option<String> {
         return None;
     };
 
-    let rest = rest
-        .trim_end_matches('{')
-        .trim_end_matches("else")
-        .trim();
+    let rest = rest.trim_end_matches('{').trim_end_matches("else").trim();
 
     Some(rest.to_string())
 }

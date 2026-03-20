@@ -1,5 +1,7 @@
 use apex_core::{
-    command::{adaptive_timeout, count_source_files, CommandRunner, CommandSpec, OpKind, RealCommandRunner},
+    command::{
+        adaptive_timeout, count_source_files, CommandRunner, CommandSpec, OpKind, RealCommandRunner,
+    },
     error::{ApexError, Result},
     hash::fnv1a_hash,
     traits::Instrumentor,
@@ -237,7 +239,9 @@ impl PythonInstrumentor {
             args.extend(test_cmd);
             let file_count = count_source_files(&target.root);
             let timeout = adaptive_timeout(file_count, Language::Python, OpKind::TestRun);
-            CommandSpec::new(&uv, &target.root).args(args).timeout(timeout)
+            CommandSpec::new(&uv, &target.root)
+                .args(args)
+                .timeout(timeout)
         } else {
             // Use .apex-venv python if it exists (created by PEP 668 venv logic).
             let python = resolve_venv_python(&target.root);
@@ -245,7 +249,9 @@ impl PythonInstrumentor {
             args.extend(test_cmd);
             let file_count = count_source_files(&target.root);
             let timeout = adaptive_timeout(file_count, Language::Python, OpKind::TestRun);
-            CommandSpec::new(&python, &target.root).args(args).timeout(timeout)
+            CommandSpec::new(&python, &target.root)
+                .args(args)
+                .timeout(timeout)
         };
         let output = self
             .runner
@@ -868,7 +874,10 @@ mod tests {
         // The custom command itself should be "python -m unittest", not "pytest".
         // Note: when uv is available, "--with pytest" appears as a dep specifier
         // (before "--"), but "pytest" should NOT appear after the script path.
-        let script_idx = args.iter().position(|a| a.contains("apex_instrument.py")).unwrap();
+        let script_idx = args
+            .iter()
+            .position(|a| a.contains("apex_instrument.py"))
+            .unwrap();
         let post_script: Vec<&String> = args[script_idx + 1..].iter().collect();
         assert!(
             !post_script.iter().any(|a| *a == "pytest"),

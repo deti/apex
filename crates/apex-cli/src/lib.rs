@@ -1824,7 +1824,7 @@ pub fn make_synthesizer(
     output_dir: impl Into<std::path::PathBuf>,
 ) -> Box<dyn apex_core::traits::TestSynthesizer> {
     use apex_synth::{
-        CargoTestSynthesizer, CSharpTestSynthesizer, CTestSynthesizer, CppTestSynthesizer,
+        CSharpTestSynthesizer, CTestSynthesizer, CargoTestSynthesizer, CppTestSynthesizer,
         GoTestSynthesizer, JUnitSynthesizer, JestSynthesizer, KotlinTestSynthesizer,
         PytestSynthesizer, RubyTestSynthesizer, SwiftTestSynthesizer, WasmTestSynthesizer,
     };
@@ -1845,7 +1845,11 @@ pub fn make_synthesizer(
     }
 }
 
-fn walkdir(root: &std::path::Path, extensions: &[&str], max_files: usize) -> std::io::Result<Vec<PathBuf>> {
+fn walkdir(
+    root: &std::path::Path,
+    extensions: &[&str],
+    max_files: usize,
+) -> std::io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     walk_recursive(root, extensions, &mut files, max_files)?;
     Ok(files)
@@ -4083,8 +4087,8 @@ fn validate_git_ref(s: &str) -> Result<()> {
     }
     // Tilde (~) is a valid git ref character (e.g. HEAD~1) so it is NOT banned.
     const SHELL_META: &[char] = &[
-        '`', '!', '$', '&', '*', '(', ')', '[', ']', '{', '}', '|', ';', '<', '>', '?', '\\',
-        '\'', '"', ' ', '\t', '\n',
+        '`', '!', '$', '&', '*', '(', ')', '[', ']', '{', '}', '|', ';', '<', '>', '?', '\\', '\'',
+        '"', ' ', '\t', '\n',
     ];
     if let Some(bad) = s.chars().find(|c| SHELL_META.contains(c)) {
         return Err(color_eyre::eyre::eyre!(
@@ -4566,10 +4570,7 @@ mod tests {
             validate_git_ref("--exec").is_err(),
             "--exec should be rejected"
         );
-        assert!(
-            validate_git_ref("-c").is_err(),
-            "-c should be rejected"
-        );
+        assert!(validate_git_ref("-c").is_err(), "-c should be rejected");
     }
 
     #[test]

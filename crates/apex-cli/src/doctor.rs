@@ -206,8 +206,14 @@ async fn checks_version_managers(runner: &dyn CommandRunner) -> (Vec<Check>, Vec
         },
     };
 
-    let asdf_check =
-        check_optional(runner, "asdf", "Alternative version manager (optional)", "asdf", &["--version"]).await;
+    let asdf_check = check_optional(
+        runner,
+        "asdf",
+        "Alternative version manager (optional)",
+        "asdf",
+        &["--version"],
+    )
+    .await;
 
     (vec![mise_check, asdf_check], managed_tools)
 }
@@ -251,7 +257,14 @@ async fn checks_python(runner: &dyn CommandRunner, mise_managed: &[String]) -> V
         }
     }
 
-    let uv = check_optional(runner, "uv", "Fast Python package manager", "uv", &["--version"]).await;
+    let uv = check_optional(
+        runner,
+        "uv",
+        "Fast Python package manager",
+        "uv",
+        &["--version"],
+    )
+    .await;
     let uv_available = matches!(uv.status, Status::Ok(_));
 
     let pip3 = if uv_available {
@@ -261,7 +274,14 @@ async fn checks_python(runner: &dyn CommandRunner, mise_managed: &[String]) -> V
             status: Status::Warn("pip not needed (uv available)".into()),
         }
     } else {
-        check_required(runner, "pip3", "pip package manager", "pip3", &["--version"]).await
+        check_required(
+            runner,
+            "pip3",
+            "pip package manager",
+            "pip3",
+            &["--version"],
+        )
+        .await
     };
 
     let pytest = if uv_available {
@@ -312,7 +332,9 @@ async fn checks_javascript(runner: &dyn CommandRunner, mise_managed: &[String]) 
         description: "Bun JavaScript runtime and test runner (preferred)",
         status: match bun_version {
             Some(v) => Status::Ok(format!("{v} (preferred test runner)")),
-            None => Status::Warn("bun not found (optional — node --test or nyc used instead)".into()),
+            None => {
+                Status::Warn("bun not found (optional — node --test or nyc used instead)".into())
+            }
         },
     };
 
@@ -1417,16 +1439,28 @@ mod tests {
         let checks = checks_python(&runner, &[]).await;
         // python3 and uv should be Ok
         let py = checks.iter().find(|c| c.name == "python3").unwrap();
-        assert!(matches!(&py.status, Status::Ok(_)), "expected Ok for python3");
+        assert!(
+            matches!(&py.status, Status::Ok(_)),
+            "expected Ok for python3"
+        );
         let uv = checks.iter().find(|c| c.name == "uv").unwrap();
         assert!(matches!(&uv.status, Status::Ok(_)), "expected Ok for uv");
         // pip3/pytest/coverage.py are Warn because uv is available
         let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
-        assert!(matches!(&pip.status, Status::Warn(_)), "expected Warn for pip3 when uv available");
+        assert!(
+            matches!(&pip.status, Status::Warn(_)),
+            "expected Warn for pip3 when uv available"
+        );
         let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
-        assert!(matches!(&pytest.status, Status::Warn(_)), "expected Warn for pytest when uv available");
+        assert!(
+            matches!(&pytest.status, Status::Warn(_)),
+            "expected Warn for pytest when uv available"
+        );
         let cov = checks.iter().find(|c| c.name == "coverage.py").unwrap();
-        assert!(matches!(&cov.status, Status::Warn(_)), "expected Warn for coverage.py when uv available");
+        assert!(
+            matches!(&cov.status, Status::Warn(_)),
+            "expected Warn for coverage.py when uv available"
+        );
     }
 
     #[tokio::test]
@@ -1680,7 +1714,10 @@ mod tests {
         );
         // pip3, pytest, coverage.py must all be Warn (downgraded)
         let pip = checks.iter().find(|c| c.name == "pip3").unwrap();
-        assert!(matches!(&pip.status, Status::Warn(_)), "pip3 should be Warn when uv present");
+        assert!(
+            matches!(&pip.status, Status::Warn(_)),
+            "pip3 should be Warn when uv present"
+        );
         let pytest = checks.iter().find(|c| c.name == "pytest").unwrap();
         assert!(
             matches!(&pytest.status, Status::Warn(_)),
@@ -1703,7 +1740,9 @@ mod tests {
                     stderr: "not found".into(),
                 })
             } else if spec.program == "pip3" {
-                Ok(CommandOutput::success(b"pip 23.3 from /usr/lib/python3".to_vec()))
+                Ok(CommandOutput::success(
+                    b"pip 23.3 from /usr/lib/python3".to_vec(),
+                ))
             } else {
                 Ok(CommandOutput::success(b"Python 3.14.3".to_vec()))
             }
@@ -1813,7 +1852,9 @@ mod tests {
                     stderr: "not found".into(),
                 })
             } else {
-                Ok(CommandOutput::success(b"Coverage.py, version 7.3.2".to_vec()))
+                Ok(CommandOutput::success(
+                    b"Coverage.py, version 7.3.2".to_vec(),
+                ))
             }
         });
         let checks = checks_python(&runner, &[]).await;
@@ -1890,7 +1931,10 @@ mod tests {
         match &bun.status {
             Status::Ok(v) => {
                 assert!(v.contains("1.2.4"), "version should appear: {v}");
-                assert!(v.contains("preferred"), "preferred label should appear: {v}");
+                assert!(
+                    v.contains("preferred"),
+                    "preferred label should appear: {v}"
+                );
             }
             other => panic!("expected Ok for bun, got {other:?}"),
         }

@@ -197,12 +197,7 @@ mod tests {
         let synth = CppTestSynthesizer::new(dir.path());
         // 11 unique candidates => chunk_size=10 => 2 files
         let candidates: Vec<TestCandidate> = (0..11)
-            .map(|i| {
-                make_candidate(
-                    &format!("TEST(S, T{i}) {{ EXPECT_EQ({i}, {i}); }}"),
-                    vec![],
-                )
-            })
+            .map(|i| make_candidate(&format!("TEST(S, T{i}) {{ EXPECT_EQ({i}, {i}); }}"), vec![]))
             .collect();
         let results = synth.synthesize(&candidates).unwrap();
         assert_eq!(results.len(), 2);

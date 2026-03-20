@@ -66,13 +66,25 @@ fn float_boundary(op: CompareOp, f: f64) -> Vec<String> {
     let eps = 0.001;
     match op {
         CompareOp::Gt | CompareOp::GtEq => {
-            vec![format!("{f}"), format!("{}", f + eps), format!("{}", f - eps)]
+            vec![
+                format!("{f}"),
+                format!("{}", f + eps),
+                format!("{}", f - eps),
+            ]
         }
         CompareOp::Lt | CompareOp::LtEq => {
-            vec![format!("{f}"), format!("{}", f - eps), format!("{}", f + eps)]
+            vec![
+                format!("{f}"),
+                format!("{}", f - eps),
+                format!("{}", f + eps),
+            ]
         }
         CompareOp::Eq | CompareOp::NotEq => {
-            vec![format!("{f}"), format!("{}", f + eps), format!("{}", f - eps)]
+            vec![
+                format!("{f}"),
+                format!("{}", f + eps),
+                format!("{}", f - eps),
+            ]
         }
     }
 }
@@ -86,12 +98,7 @@ fn type_boundary_values(type_name: &str) -> Vec<String> {
             vec!["0".into(), "\"text\"".into(), "null".into(), "true".into()]
         }
         "boolean" | "bool" | "Bool" => {
-            vec![
-                "true".into(),
-                "false".into(),
-                "0".into(),
-                "null".into(),
-            ]
+            vec!["true".into(), "false".into(), "0".into(), "null".into()]
         }
         _ => vec!["null".into(), "0".into(), "\"\"".into()],
     }

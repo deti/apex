@@ -1199,8 +1199,8 @@ tests/real.py::test_z\n\
         // Simulate: empty tests + !status.success() → warn path
         let tests: Vec<String> = vec![];
         let would_warn = !tests.is_empty() || tests.is_empty(); // always true; check condition
-        // The real condition is: !output.status.success() && tests.is_empty()
-        // We just verify our understanding: if tests is empty and status failed, warn.
+                                                                // The real condition is: !output.status.success() && tests.is_empty()
+                                                                // We just verify our understanding: if tests is empty and status failed, warn.
         assert!(tests.is_empty(), "empty tests vector triggers warn path");
         let _ = would_warn; // suppress unused
     }

@@ -982,10 +982,7 @@ mod tests {
         ));
         // The sandbox will fail to spawn the nonexistent binary, and the
         // error propagates via `?` at line 83.
-        assert!(
-            result.is_err(),
-            "expected Err from sandbox failure, got Ok"
-        );
+        assert!(result.is_err(), "expected Err from sandbox failure, got Ok");
     }
 
     /// Target: lines 70-72 — coverage target already reached at the start of

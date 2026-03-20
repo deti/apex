@@ -137,7 +137,9 @@ mod tests {
         let results = synth.synthesize(&[candidate]).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].path.extension().unwrap(), "kt");
-        assert!(results[0].content.contains("import org.junit.jupiter.api.Test"));
+        assert!(results[0]
+            .content
+            .contains("import org.junit.jupiter.api.Test"));
         assert!(results[0].content.contains("@Test"));
         assert!(results[0].content.contains("assertEquals"));
     }

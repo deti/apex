@@ -86,8 +86,8 @@ pub async fn build_kotlin_index(
     let xml_content = std::fs::read_to_string(&jacoco_xml)
         .map_err(|e| format!("failed to read JaCoCo XML at {}: {e}", jacoco_xml.display()))?;
 
-    let coverage = parse_jacoco_xml(&xml_content)
-        .map_err(|e| format!("JaCoCo XML parse error: {e}"))?;
+    let coverage =
+        parse_jacoco_xml(&xml_content).map_err(|e| format!("JaCoCo XML parse error: {e}"))?;
 
     // Build synthetic traces — one per test, each covering all branches found.
     // For full per-test granularity, each test would need its own JaCoCo run.
@@ -155,10 +155,7 @@ mod tests {
         );
         assert_eq!(
             names,
-            vec![
-                "com.example.FooTest.testBar",
-                "com.example.FooTest.testBaz"
-            ]
+            vec!["com.example.FooTest.testBar", "com.example.FooTest.testBaz"]
         );
     }
 
@@ -169,7 +166,10 @@ mod tests {
         );
         assert_eq!(
             names,
-            vec!["com.example.FooTest.testPass", "com.example.FooTest.testFail"]
+            vec![
+                "com.example.FooTest.testPass",
+                "com.example.FooTest.testFail"
+            ]
         );
     }
 
@@ -182,9 +182,7 @@ mod tests {
     #[test]
     fn parse_gradle_test_list_no_test_lines() {
         // Lines without PASSED or FAILED are ignored
-        let names = parse_gradle_test_list(
-            "> Task :test\nBUILD SUCCESSFUL in 3s\n",
-        );
+        let names = parse_gradle_test_list("> Task :test\nBUILD SUCCESSFUL in 3s\n");
         assert!(names.is_empty());
     }
 

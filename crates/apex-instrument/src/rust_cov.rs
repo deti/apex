@@ -68,12 +68,7 @@ impl Instrumentor for RustCovInstrumentor {
         // Propagate PATH explicitly so cargo-llvm-cov is found even when the
         // subprocess doesn't inherit the user's shell profile (e.g. cron, CI).
         let mut spec = CommandSpec::new("cargo", root)
-            .args([
-                "llvm-cov",
-                "--json",
-                "--output-path",
-                &json_path_str,
-            ])
+            .args(["llvm-cov", "--json", "--output-path", &json_path_str])
             .timeout(300_000); // 5 min — large projects need more than 30s
 
         if let Ok(path) = std::env::var("PATH") {
@@ -756,7 +751,10 @@ mod tests {
         };
 
         let result = inst.instrument(&target).await;
-        assert!(result.is_err(), "should error when cargo-llvm-cov is not found");
+        assert!(
+            result.is_err(),
+            "should error when cargo-llvm-cov is not found"
+        );
         let err_msg = format!("{}", result.unwrap_err());
         assert!(
             err_msg.contains("cargo-llvm-cov not found"),
@@ -840,7 +838,10 @@ mod tests {
         };
 
         let result = inst.instrument(&target).await;
-        assert!(result.is_err(), "should error when cargo llvm-cov exits non-zero");
+        assert!(
+            result.is_err(),
+            "should error when cargo llvm-cov exits non-zero"
+        );
         let err_msg = format!("{}", result.unwrap_err());
         assert!(
             err_msg.contains("exited with code 1"),

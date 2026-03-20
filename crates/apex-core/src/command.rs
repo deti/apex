@@ -89,21 +89,21 @@ pub fn adaptive_timeout(file_count: usize, lang: crate::types::Language, op: OpK
     use crate::types::Language;
 
     let (base_ms, per_file_ms, min_ms, max_ms): (u64, u64, u64, u64) = match op {
-        OpKind::DepInstall  => (60_000,   0, 60_000, 300_000),
-        OpKind::Compile     => (60_000,  50, 60_000, 600_000),
-        OpKind::TestRun     => (60_000, 100, 60_000, 600_000),
-        OpKind::PostProcess => (30_000,  10, 30_000, 120_000),
+        OpKind::DepInstall => (60_000, 0, 60_000, 300_000),
+        OpKind::Compile => (60_000, 50, 60_000, 600_000),
+        OpKind::TestRun => (60_000, 100, 60_000, 600_000),
+        OpKind::PostProcess => (30_000, 10, 30_000, 120_000),
     };
 
     let multiplier: f64 = match lang {
-        Language::C | Language::Cpp     => 2.0,
-        Language::Rust                  => 1.5,
+        Language::C | Language::Cpp => 2.0,
+        Language::Rust => 1.5,
         Language::Java | Language::Kotlin => 1.5,
-        Language::Swift                 => 1.5,
-        Language::Go                    => 1.0,
-        Language::CSharp                => 1.2,
+        Language::Swift => 1.5,
+        Language::Go => 1.0,
+        Language::CSharp => 1.2,
         Language::Python | Language::JavaScript | Language::Ruby => 0.5,
-        Language::Wasm                  => 1.0,
+        Language::Wasm => 1.0,
     };
 
     let raw = base_ms + (file_count as u64) * per_file_ms;
@@ -114,22 +114,57 @@ pub fn adaptive_timeout(file_count: usize, lang: crate::types::Language, op: OpK
 /// Count source files in a directory (non-recursive quick scan for timeout estimation).
 /// Counts files with common source extensions, skipping build/vendor dirs.
 pub fn count_source_files(dir: &std::path::Path) -> usize {
-    let skip = ["target", "node_modules", "vendor", ".git", "build", "dist", "__pycache__", ".tox", "venv", ".venv"];
+    let skip = [
+        "target",
+        "node_modules",
+        "vendor",
+        ".git",
+        "build",
+        "dist",
+        "__pycache__",
+        ".tox",
+        "venv",
+        ".venv",
+    ];
     let mut count = 0;
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if skip.contains(&name) { continue; }
+                if skip.contains(&name) {
+                    continue;
+                }
             }
             if path.is_dir() {
                 count += count_source_files(&path);
             } else if path.is_file() {
-                let is_source = path.extension().and_then(|e| e.to_str()).is_some_and(|ext| {
-                    matches!(ext, "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "go" | "java" | "kt"
-                        | "c" | "h" | "cpp" | "hpp" | "cs" | "swift" | "rb" | "wasm")
-                });
-                if is_source { count += 1; }
+                let is_source = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|ext| {
+                        matches!(
+                            ext,
+                            "rs" | "py"
+                                | "js"
+                                | "ts"
+                                | "jsx"
+                                | "tsx"
+                                | "go"
+                                | "java"
+                                | "kt"
+                                | "c"
+                                | "h"
+                                | "cpp"
+                                | "hpp"
+                                | "cs"
+                                | "swift"
+                                | "rb"
+                                | "wasm"
+                        )
+                    });
+                if is_source {
+                    count += 1;
+                }
             }
         }
     }

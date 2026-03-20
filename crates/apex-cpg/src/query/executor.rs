@@ -91,7 +91,13 @@ pub fn execute_query_with_limit(
     // If no select fields specified, we default to all bindings' locations.
     if select_fields.is_empty() && !bindings.is_empty() {
         // Return a row count equal to the cartesian product, projected as empty rows.
-        let rows = compute_matching_rows(cpg, &bindings, &where_conditions, taint_rules, max_query_rows)?;
+        let rows = compute_matching_rows(
+            cpg,
+            &bindings,
+            &where_conditions,
+            taint_rules,
+            max_query_rows,
+        )?;
         let result_rows: Vec<Vec<(String, String)>> = rows
             .iter()
             .map(|row| {
@@ -108,7 +114,13 @@ pub fn execute_query_with_limit(
     }
 
     // Phase 2+3: compute matching rows and project selected fields.
-    let rows = compute_matching_rows(cpg, &bindings, &where_conditions, taint_rules, max_query_rows)?;
+    let rows = compute_matching_rows(
+        cpg,
+        &bindings,
+        &where_conditions,
+        taint_rules,
+        max_query_rows,
+    )?;
 
     let result_rows: Vec<Vec<(String, String)>> = rows
         .iter()

@@ -13,9 +13,7 @@ pub fn swift_fuzz_harness(type_name: &str, method: &str, _params: &[&str]) -> St
     harness.push_str("@_cdecl(\"LLVMFuzzerTestOneInput\")\n");
     harness.push_str("func fuzzTest(_ data: UnsafePointer<UInt8>, _ size: Int) -> Int32 {\n");
     harness.push_str("    let bytes = Data(bytes: data, count: size)\n");
-    harness.push_str(&format!(
-        "    let _ = try? {type_name}.{method}(bytes)\n"
-    ));
+    harness.push_str(&format!("    let _ = try? {type_name}.{method}(bytes)\n"));
     harness.push_str("    return 0\n");
     harness.push_str("}\n");
     harness

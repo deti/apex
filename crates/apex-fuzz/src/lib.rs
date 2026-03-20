@@ -3,13 +3,13 @@
 
 pub mod cmplog;
 pub mod control;
-pub mod harness;
 pub mod corpus;
 pub mod de_scheduler;
 pub mod directed;
 pub mod distill;
 pub mod grammar;
 pub mod grammar_mutator;
+pub mod harness;
 pub mod hgfuzzer;
 pub mod libafl_backend;
 pub mod llm_mutator;

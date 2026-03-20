@@ -297,7 +297,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (branches, _) = parse_csharp_coverage(xml, tmp.path());
         // Only the well-formed line should be parsed
-        assert_eq!(branches.len(), 1, "line missing 'number' attr must be skipped");
+        assert_eq!(
+            branches.len(),
+            1,
+            "line missing 'number' attr must be skipped"
+        );
         assert_eq!(branches[0].line, 10);
     }
 
@@ -313,7 +317,11 @@ mod tests {
 </classes></package></packages></coverage>"#;
         let tmp = tempfile::tempdir().unwrap();
         let (branches, _) = parse_csharp_coverage(xml, tmp.path());
-        assert_eq!(branches.len(), 1, "line missing 'hits' attr must be skipped");
+        assert_eq!(
+            branches.len(),
+            1,
+            "line missing 'hits' attr must be skipped"
+        );
         assert_eq!(branches[0].line, 7);
     }
 
@@ -470,7 +478,8 @@ mod tests {
     #[test]
     fn build_traces_empty_output() {
         let branches = vec![BranchId::new(1, 1, 0, 0)];
-        let traces = build_traces_from_output("  Running test suite...\n  Build succeeded.\n", &branches);
+        let traces =
+            build_traces_from_output("  Running test suite...\n  Build succeeded.\n", &branches);
         assert!(traces.is_empty());
     }
 
@@ -499,7 +508,10 @@ mod tests {
         assert_eq!(branches.len(), 1);
         // Path should be stored as relative
         let stored = file_paths.values().next().unwrap();
-        assert!(!stored.to_string_lossy().starts_with('/'), "path should be relative, got: {stored:?}");
+        assert!(
+            !stored.to_string_lossy().starts_with('/'),
+            "path should be relative, got: {stored:?}"
+        );
     }
 
     // Target: multiple classes, same file registered only once
@@ -523,7 +535,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (branches, file_paths) = parse_csharp_coverage(xml, tmp.path());
         assert_eq!(branches.len(), 2);
-        assert_eq!(file_paths.len(), 1, "same file should appear once in file_paths");
+        assert_eq!(
+            file_paths.len(),
+            1,
+            "same file should appear once in file_paths"
+        );
     }
 
     // WRONG: The line-based parser cannot handle elements crammed on one line.
@@ -539,7 +555,11 @@ mod tests {
         let (branches, _) = parse_csharp_coverage(xml, tmp.path());
         // WRONG: branches is empty, but should be 1 for compact XML
         // This documents the known limitation of the line-based parser.
-        assert_eq!(branches.len(), 0, "documented limitation: inline XML elements are silently dropped");
+        assert_eq!(
+            branches.len(),
+            0,
+            "documented limitation: inline XML elements are silently dropped"
+        );
     }
 
     // Target: <class> without filename attribute — should not crash, just skips
@@ -667,10 +687,7 @@ mod tests {
     // Target: lines 87-100 — branches slice is correctly cloned into each trace.
     #[test]
     fn build_traces_branches_correctly_propagated() {
-        let branches = vec![
-            BranchId::new(10, 5, 0, 0),
-            BranchId::new(10, 7, 0, 1),
-        ];
+        let branches = vec![BranchId::new(10, 5, 0, 0), BranchId::new(10, 7, 0, 1)];
         let stdout = "  Passed MyTest.Run\n  Failed MyTest.Fail\n";
         let traces = build_traces_from_output(stdout, &branches);
         assert_eq!(traces.len(), 2);

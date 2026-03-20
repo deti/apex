@@ -244,7 +244,10 @@ mod tests {
         // A node pointing to itself is a cycle (stack contains it when we see it again)
         let edges = vec![("a".to_string(), "a".to_string())];
         let cycles = detect_cycles(&edges);
-        assert!(!cycles.is_empty(), "self-loop should be detected as a cycle");
+        assert!(
+            !cycles.is_empty(),
+            "self-loop should be detected as a cycle"
+        );
     }
 
     #[test]
@@ -304,7 +307,10 @@ mod tests {
             ("d".to_string(), "c".to_string()),
         ];
         let cycles = detect_cycles(&edges);
-        assert!(!cycles.is_empty(), "should detect cycle in second component");
+        assert!(
+            !cycles.is_empty(),
+            "should detect cycle in second component"
+        );
     }
 
     #[test]
@@ -318,8 +324,10 @@ mod tests {
         let cycles = detect_cycles(&edges);
         assert!(!cycles.is_empty());
         let flat: Vec<&str> = cycles.iter().flatten().map(|s| s.as_str()).collect();
-        assert!(flat.contains(&"a") || flat.contains(&"b") || flat.contains(&"c"),
-            "cycle path should include nodes from the cycle");
+        assert!(
+            flat.contains(&"a") || flat.contains(&"b") || flat.contains(&"c"),
+            "cycle path should include nodes from the cycle"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -355,7 +363,11 @@ mod tests {
         )
         .unwrap();
         let report = analyze_cargo(&dir);
-        assert_eq!(report.fan_out.get("myapp").copied(), Some(2), "myapp depends on 2 crates");
+        assert_eq!(
+            report.fan_out.get("myapp").copied(),
+            Some(2),
+            "myapp depends on 2 crates"
+        );
         assert_eq!(report.fan_in.get("serde").copied(), Some(1));
         assert_eq!(report.fan_in.get("tokio").copied(), Some(1));
         let _ = std::fs::remove_dir_all(&dir);
@@ -406,7 +418,10 @@ mod tests {
         .unwrap();
         let report = analyze_cargo(&dir);
         let node_names: Vec<&str> = report.nodes.iter().map(|n| n.name.as_str()).collect();
-        assert!(node_names.contains(&"mylib"), "workspace member should be discovered");
+        assert!(
+            node_names.contains(&"mylib"),
+            "workspace member should be discovered"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -464,7 +479,10 @@ mod tests {
         .unwrap();
         let report = analyze_cargo(&dir);
         let serde_count = report.nodes.iter().filter(|n| n.name == "serde").count();
-        assert_eq!(serde_count, 1, "deduplication should ensure serde appears once");
+        assert_eq!(
+            serde_count, 1,
+            "deduplication should ensure serde appears once"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -480,7 +498,10 @@ mod tests {
         .unwrap();
         let report = analyze_cargo(&dir);
         let node_names: Vec<&str> = report.nodes.iter().map(|n| n.name.as_str()).collect();
-        assert!(node_names.contains(&"cc"), "build-dependencies should be included");
+        assert!(
+            node_names.contains(&"cc"),
+            "build-dependencies should be included"
+        );
         assert_eq!(report.fan_in.get("cc").copied(), Some(1));
         let _ = std::fs::remove_dir_all(&dir);
     }

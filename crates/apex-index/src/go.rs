@@ -309,7 +309,10 @@ example.com/foo/handler.go:5.14,8.2 2 1
         // file_range = "nocoLon" (no ':')
         let input = "mode: atomic\nnoColon 1 3\n";
         let (branches, _) = parse_go_coverage(input, tmp.path());
-        assert!(branches.is_empty(), "file range without ':' must be skipped");
+        assert!(
+            branches.is_empty(),
+            "file range without ':' must be skipped"
+        );
     }
 
     // Target: lines 39-41 — range_part has no ',' separator
@@ -329,7 +332,10 @@ example.com/foo/handler.go:5.14,8.2 2 1
         // Start part lacks '.': "pkg/main.go:10,12.15 1 3"
         let input = "mode: atomic\npkg/main.go:10,12.15 1 3\n";
         let (branches, _) = parse_go_coverage(input, tmp.path());
-        assert!(branches.is_empty(), "start part without '.' must be skipped");
+        assert!(
+            branches.is_empty(),
+            "start part without '.' must be skipped"
+        );
     }
 
     // Target: lines 46-48 — non-numeric start_line
@@ -338,7 +344,10 @@ example.com/foo/handler.go:5.14,8.2 2 1
         let tmp = tempfile::tempdir().unwrap();
         let input = "mode: atomic\npkg/main.go:x.2,12.15 1 3\n";
         let (branches, _) = parse_go_coverage(input, tmp.path());
-        assert!(branches.is_empty(), "non-numeric start_line must be skipped");
+        assert!(
+            branches.is_empty(),
+            "non-numeric start_line must be skipped"
+        );
     }
 
     // Target: lines 50-52 — non-numeric start_col
@@ -372,7 +381,10 @@ example.com/foo/handler.go:5.14,8.2 2 1
         // Coverage path uses a module prefix that doesn't match the root
         let cov_path = "github.com/user/repo/pkg/main.go";
         let result = derive_relative_path(cov_path, tmp.path());
-        assert_eq!(result, "pkg/main.go", "suffix matching should find pkg/main.go");
+        assert_eq!(
+            result, "pkg/main.go",
+            "suffix matching should find pkg/main.go"
+        );
     }
 
     // Target: lines 75-87 — derive_relative_path falls through to return original
@@ -401,7 +413,10 @@ example.com/foo/handler.go:5.14,8.2 2 1
         // "--- PASS: TestFoo" with no space after test name — split_once fails, no trace
         let stdout = "--- PASS: TestFoo\n";
         let traces = build_traces_from_verbose(stdout, &[]);
-        assert!(traces.is_empty(), "PASS line without duration part must be skipped");
+        assert!(
+            traces.is_empty(),
+            "PASS line without duration part must be skipped"
+        );
     }
 
     // Target: lines 174-182 — FAIL line with no whitespace after name
@@ -472,7 +487,11 @@ pkg/main.go:5.1,6.2 1 2\n";
         let (branches, file_paths) = parse_go_coverage(input, tmp.path());
         assert_eq!(branches.len(), 3);
         // All three lines belong to the same file — file_paths should have exactly 1 key.
-        assert_eq!(file_paths.len(), 1, "same file must appear once in file_paths");
+        assert_eq!(
+            file_paths.len(),
+            1,
+            "same file must appear once in file_paths"
+        );
     }
 
     // Target: parse_go_coverage — count=0 produces direction=1 (line 66).
@@ -502,7 +521,10 @@ pkg/main.go:5.1,6.2 1 2\n";
         let stdout = "--- FAIL: TestBroken (0.050s)\n";
         let traces = build_traces_from_verbose(stdout, &[]);
         assert_eq!(traces.len(), 1);
-        assert_eq!(traces[0].duration_ms, 0, "FAIL traces always have duration_ms=0");
+        assert_eq!(
+            traces[0].duration_ms, 0,
+            "FAIL traces always have duration_ms=0"
+        );
         assert_eq!(traces[0].status, ExecutionStatus::Fail);
     }
 

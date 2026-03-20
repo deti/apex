@@ -249,7 +249,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_worker_id_is_uuid() {
-        let Some((worker, _service, _oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((worker, _service, _oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
         let id = worker.worker_id();
         assert!(
             uuid::Uuid::parse_str(id).is_ok(),
@@ -260,7 +262,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_register_succeeds() {
-        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
         let session_id = worker.register(4).await.unwrap();
         assert!(!session_id.is_empty());
         assert!(
@@ -272,7 +276,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_heartbeat_succeeds() {
-        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
         let ok = worker.heartbeat(0).await.unwrap();
         assert!(ok);
     }
@@ -280,7 +286,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_get_seeds_empty() {
-        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
         let seeds = worker.get_seeds(10).await.unwrap();
         assert!(seeds.is_empty());
     }
@@ -288,7 +296,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_enqueue_and_get_seeds() {
-        let Some((mut worker, service, _oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, service, _oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         service
             .enqueue_seeds(vec![
@@ -314,7 +324,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_submit_results_updates_coverage() {
-        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         let results = vec![make_result("s1", vec![make_branch(1), make_branch(2)])];
         let (new_count, pct) = worker.submit_results(results).await.unwrap();
@@ -327,7 +339,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_get_coverage_snapshot() {
-        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         // Initially empty
         let snap = worker.get_coverage().await.unwrap();
@@ -357,7 +371,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_pull_once_empty_queue() {
-        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         let (count, pct) = worker
             .pull_once(10, |_seed| {
@@ -373,7 +389,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_pull_once_with_callback() {
-        let Some((mut worker, service, oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, service, oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         service
             .enqueue_seeds(vec![
@@ -407,7 +425,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_pull_once_callback_returns_none() {
-        let Some((mut worker, service, _oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, service, _oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         service
             .enqueue_seeds(vec![
@@ -553,7 +573,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_pull_once_partial_skip() {
-        let Some((mut worker, service, oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, service, oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         service
             .enqueue_seeds(vec![
@@ -600,7 +622,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_pull_once_with_max_seeds_limit() {
-        let Some((mut worker, service, oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, service, oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         service
             .enqueue_seeds(vec![
@@ -646,7 +670,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_submit_results_empty_vec() {
-        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         let (count, pct) = worker.submit_results(vec![]).await.unwrap();
         assert_eq!(count, 0);
@@ -657,7 +683,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_submit_results_duplicate_branches() {
-        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         // Submit same branch twice in one batch
         let results = vec![
@@ -675,7 +703,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_register_rejected_returns_permission_denied() {
-        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else {
+            return;
+        };
         let result = worker.register(4).await;
         assert!(result.is_err());
         let status = result.unwrap_err();
@@ -695,7 +725,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_rejecting_heartbeat_returns_false() {
-        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else {
+            return;
+        };
         let ok = worker.heartbeat(5).await.unwrap();
         assert!(!ok, "rejecting coordinator should return ok=false");
     }
@@ -703,7 +735,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_rejecting_get_seeds_returns_empty() {
-        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else {
+            return;
+        };
         let seeds = worker.get_seeds(10).await.unwrap();
         assert!(seeds.is_empty());
     }
@@ -711,7 +745,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_rejecting_submit_results_returns_zeros() {
-        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else {
+            return;
+        };
         let results = vec![make_result("s1", vec![make_branch(1)])];
         let (count, pct) = worker.submit_results(results).await.unwrap();
         assert_eq!(count, 0);
@@ -721,7 +757,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_rejecting_get_coverage_returns_empty_snapshot() {
-        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else {
+            return;
+        };
         let snap = worker.get_coverage().await.unwrap();
         assert_eq!(snap.total_branches, 0);
         assert_eq!(snap.covered_branches, 0);
@@ -732,7 +770,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_rejecting_pull_once_empty_seeds() {
-        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_rejecting_worker_uds().await else {
+            return;
+        };
         // Rejecting coordinator returns empty seeds, so pull_once should
         // short-circuit with (0, 0.0) without calling the callback.
         let (count, pct) = worker
@@ -817,7 +857,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_error_register_propagates_status() {
-        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else {
+            return;
+        };
         let err = worker.register(4).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::Internal);
         assert!(err.message().contains("register error"));
@@ -826,7 +868,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_error_heartbeat_propagates_status() {
-        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else {
+            return;
+        };
         let err = worker.heartbeat(0).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unavailable);
         assert!(err.message().contains("heartbeat error"));
@@ -835,7 +879,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_error_get_seeds_propagates_status() {
-        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else {
+            return;
+        };
         let err = worker.get_seeds(5).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::ResourceExhausted);
     }
@@ -843,7 +889,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_error_submit_results_propagates_status() {
-        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else {
+            return;
+        };
         let results = vec![make_result("s1", vec![make_branch(1)])];
         let err = worker.submit_results(results).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::DeadlineExceeded);
@@ -852,7 +900,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_error_get_coverage_propagates_status() {
-        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else {
+            return;
+        };
         let err = worker.get_coverage().await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
     }
@@ -860,7 +910,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_error_pull_once_propagates_get_seeds_error() {
-        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_error_worker_uds().await else {
+            return;
+        };
         // pull_once should propagate the get_seeds error
         let err = worker
             .pull_once(10, |_| panic!("should not be called"))
@@ -957,7 +1009,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_pull_once_submit_error_propagated() {
-        let Some((mut worker, _tmp)) = setup_submit_error_worker_uds().await else { return };
+        let Some((mut worker, _tmp)) = setup_submit_error_worker_uds().await else {
+            return;
+        };
         // pull_once gets seeds successfully but submit_results fails
         let err = worker
             .pull_once(10, |seed| Some(make_result(&seed.id, vec![make_branch(1)])))
@@ -974,7 +1028,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_sequential_submit_accumulates_coverage() {
-        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         // First submit: cover branch 1
         let (count1, pct1) = worker
@@ -1008,7 +1064,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_multiple_heartbeats_succeed() {
-        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
         // Multiple heartbeats with different active_seeds counts
         for active in [0, 1, 5, 100] {
             let ok = worker.heartbeat(active).await.unwrap();
@@ -1019,7 +1077,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_get_seeds_zero_max() {
-        let Some((mut worker, service, _oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, service, _oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         service
             .enqueue_seeds(vec![InputSeed {
@@ -1037,7 +1097,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_submit_results_with_stdout_stderr() {
-        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         // Submit a result with non-empty stdout/stderr
         let result = ProtoResult {
@@ -1055,7 +1117,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_submit_results_multiple_results_multiple_branches() {
-        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         let results = vec![
             make_result("s1", vec![make_branch(1), make_branch(2)]),
@@ -1070,7 +1134,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_register_then_heartbeat_then_coverage() {
-        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, _service, _oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         // Full workflow: register, heartbeat, check coverage
         let session_id = worker.register(8).await.unwrap();
@@ -1112,7 +1178,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_pull_once_single_seed_single_branch() {
-        let Some((mut worker, service, oracle, _tmp)) = setup_worker_uds().await else { return };
+        let Some((mut worker, service, oracle, _tmp)) = setup_worker_uds().await else {
+            return;
+        };
 
         service
             .enqueue_seeds(vec![InputSeed {
@@ -1136,5 +1204,4 @@ mod tests {
         assert!((pct - 25.0).abs() < 0.01);
         assert_eq!(oracle.covered_count(), 1);
     }
-
 }

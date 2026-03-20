@@ -84,10 +84,7 @@ fn try_parse_is_type(line: &str) -> Option<ConditionTree> {
     }
 
     // `x is Type` (possibly with variable binding: `x is Type name`)
-    let type_name = type_part
-        .split_whitespace()
-        .next()
-        .unwrap_or(type_part);
+    let type_name = type_part.split_whitespace().next().unwrap_or(type_part);
     if type_name == "null" {
         return Some(ConditionTree::NullCheck {
             expr: Box::new(Expr::Variable(expr.to_string())),
@@ -135,7 +132,8 @@ fn try_parse_null_coalescing(line: &str) -> Option<ConditionTree> {
     }
     let left = line[..qq_pos].trim();
     // Extract the variable name (last token before ??)
-    let var = left.rsplit_once(['=', '(', ','])
+    let var = left
+        .rsplit_once(['=', '(', ','])
         .map(|(_, v)| v.trim())
         .unwrap_or(left);
     if var.is_empty() {

@@ -88,8 +88,9 @@ pub fn parse_v8_coverage(
         })
         .or_else(|_| {
             // Try single ScriptCoverage object (NODE_V8_COVERAGE per-file format)
-            serde_json::from_str::<V8ScriptCoverage>(json_str)
-                .map(|script| V8CoverageResult { result: vec![script] })
+            serde_json::from_str::<V8ScriptCoverage>(json_str).map(|script| V8CoverageResult {
+                result: vec![script],
+            })
         })
         .map_err(|e| {
             format!(

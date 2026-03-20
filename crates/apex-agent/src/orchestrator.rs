@@ -120,7 +120,10 @@ impl AgentCluster {
                     .await;
             let strategy_err_count = raw_suggestions.iter().filter(|r| r.is_err()).count();
             if strategy_err_count > 0 {
-                warn!(errors = strategy_err_count, "strategy suggest_inputs failed");
+                warn!(
+                    errors = strategy_err_count,
+                    "strategy suggest_inputs failed"
+                );
             }
             let suggestions: Vec<_> = raw_suggestions
                 .into_iter()
@@ -131,19 +134,15 @@ impl AgentCluster {
             if suggestions.is_empty() {
                 stall_count += 1;
             } else {
-                let raw_results: Vec<apex_core::error::Result<_>> =
-                    futures::future::join_all(
-                        suggestions.iter().map(|seed| self.sandbox.run(seed)),
-                    )
-                    .await;
+                let raw_results: Vec<apex_core::error::Result<_>> = futures::future::join_all(
+                    suggestions.iter().map(|seed| self.sandbox.run(seed)),
+                )
+                .await;
                 let sandbox_err_count = raw_results.iter().filter(|r| r.is_err()).count();
                 if sandbox_err_count > 0 {
                     warn!(errors = sandbox_err_count, "sandbox run failed");
                 }
-                let results: Vec<_> = raw_results
-                    .into_iter()
-                    .filter_map(|r| r.ok())
-                    .collect();
+                let results: Vec<_> = raw_results.into_iter().filter_map(|r| r.ok()).collect();
 
                 let mut new_coverage = false;
                 for result in &results {
@@ -4198,13 +4197,12 @@ mod tests {
         oracle.register_branches([b]);
 
         let sandbox: Arc<dyn Sandbox> = Arc::new(ScriptedSandbox::pass_fallback());
-        let cluster = AgentCluster::new(oracle, sandbox, test_target()).with_config(
-            OrchestratorConfig {
+        let cluster =
+            AgentCluster::new(oracle, sandbox, test_target()).with_config(OrchestratorConfig {
                 coverage_target: 1.0,
                 deadline_secs: Some(0),
                 stall_threshold: 100,
-            },
-        );
+            });
         // deadline_secs=0 fires on every iteration; run() must return Ok.
         cluster.run().await.unwrap();
     }
@@ -4226,7 +4224,9 @@ mod tests {
     /// After run(), oracle coverage should reflect that branch.
     #[tokio::test]
     async fn run_processes_suggestions_and_merges_coverage() {
-        use crate::test_harness::{pass_with_branches, test_seed, ScriptedSandbox, ScriptedStrategy};
+        use crate::test_harness::{
+            pass_with_branches, test_seed, ScriptedSandbox, ScriptedStrategy,
+        };
 
         let oracle = Arc::new(CoverageOracle::new());
         let branch1 = apex_core::types::BranchId::new(202, 1, 0, 0);
