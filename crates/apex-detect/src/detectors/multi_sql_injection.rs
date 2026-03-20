@@ -10,7 +10,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 use uuid::Uuid;
 
-use super::util::{is_comment, is_test_file};
+use super::util::{is_comment, is_test_file, taint_reaches_sink};
 use crate::context::AnalysisContext;
 use crate::finding::{Finding, FindingCategory, Severity};
 use crate::Detector;
@@ -367,7 +367,7 @@ impl Detector for MultiSqlInjectionDetector {
                     if pattern.regex.is_match(trimmed) {
                         let line_1based = (line_num + 1) as u32;
 
-                        findings.push(Finding {
+                        let mut finding = Finding {
                             id: Uuid::new_v4(),
                             detector: self.name().into(),
                             severity: Severity::High,
@@ -394,7 +394,26 @@ impl Detector for MultiSqlInjectionDetector {
                             fix: None,
                             cwe_ids: vec![89],
                             noisy: false,
-                        });
+                        };
+
+                        // Check taint flow if CPG is available — downgrade instead of discard.
+                        if let Some(has_taint) = taint_reaches_sink(
+                            ctx,
+                            path,
+                            line_1based,
+                            &["user_input", "request", "args", "params", "query", "form"],
+                        ) {
+                            if !has_taint {
+                                finding.noisy = true;
+                                finding.severity = Severity::Low;
+                                finding.description = format!(
+                                    "{} (no taint flow detected — likely safe)",
+                                    finding.description
+                                );
+                            }
+                        }
+
+                        findings.push(finding);
                         break; // One finding per line max
                     }
                 }
@@ -621,5 +640,110 @@ mod tests {
     #[test]
     fn does_not_use_cargo_subprocess() {
         assert!(!MultiSqlInjectionDetector.uses_cargo_subprocess());
+    }
+
+    // -----------------------------------------------------------------------
+    // Taint flow integration via CPG
+    // -----------------------------------------------------------------------
+
+    fn make_ctx_with_cpg(
+        files: HashMap<PathBuf, String>,
+        lang: Language,
+        cpg: apex_cpg::Cpg,
+    ) -> AnalysisContext {
+        use std::sync::Arc;
+        AnalysisContext {
+            language: lang,
+            source_cache: files,
+            cpg: Some(Arc::new(cpg)),
+            ..AnalysisContext::test_default()
+        }
+    }
+
+    // CPG with taint flow → finding stays at original severity (High)
+    //
+    // For SQL injection the indicators include "params" and "query". We add an
+    // Identifier "params" on line 1, connected via ReachingDef from a Parameter
+    // (the taint source), so taint_reaches_sink returns Some(true).
+    #[tokio::test]
+    async fn taint_flow_present_keeps_original_severity() {
+        use apex_cpg::{EdgeKind, NodeKind};
+
+        let mut cpg = apex_cpg::Cpg::new();
+        let param = cpg.add_node(NodeKind::Parameter {
+            name: "params".into(),
+            index: 0,
+        });
+        let sink_id = cpg.add_node(NodeKind::Identifier {
+            name: "params".into(),
+            line: 1,
+        });
+        cpg.add_edge(param, sink_id, EdgeKind::ReachingDef { variable: "params".into() });
+
+        let files = single_file(
+            "src/db.py",
+            "cursor.execute(f\"SELECT * FROM users WHERE id={user_id}\")\n",
+        );
+        let ctx = make_ctx_with_cpg(files, Language::Python, cpg);
+        let findings = MultiSqlInjectionDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(!findings[0].noisy, "taint flow present — should not be noisy");
+        assert_eq!(
+            findings[0].severity,
+            Severity::High,
+            "taint flow present — should stay High"
+        );
+    }
+
+    // CPG with no taint flow → finding downgraded to noisy + Low
+    //
+    // We put a matching identifier on line 1 but no ReachingDef edge from any
+    // Parameter to it — so taint_reaches_sink returns Some(false).
+    #[tokio::test]
+    async fn no_taint_flow_downgrades_to_noisy_low() {
+        use apex_cpg::NodeKind;
+
+        let mut cpg = apex_cpg::Cpg::new();
+        // Sink candidate matches indicator "query", but no taint source connected.
+        cpg.add_node(NodeKind::Identifier {
+            name: "query".into(),
+            line: 1,
+        });
+
+        let files = single_file(
+            "src/db.py",
+            "cursor.execute(f\"SELECT * FROM users WHERE id={user_id}\")\n",
+        );
+        let ctx = make_ctx_with_cpg(files, Language::Python, cpg);
+        let findings = MultiSqlInjectionDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].noisy, "no taint flow — should be noisy");
+        assert_eq!(
+            findings[0].severity,
+            Severity::Low,
+            "no taint flow — should be downgraded to Low"
+        );
+        assert!(
+            findings[0].description.contains("no taint flow"),
+            "description should mention no taint flow"
+        );
+    }
+
+    // No CPG → finding stays at original severity (fallback to pattern matching)
+    #[tokio::test]
+    async fn no_cpg_falls_back_to_pattern_severity() {
+        let files = single_file(
+            "src/db.py",
+            "cursor.execute(f\"SELECT * FROM users WHERE id={user_id}\")\n",
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = MultiSqlInjectionDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(!findings[0].noisy, "no CPG — should not be noisy");
+        assert_eq!(
+            findings[0].severity,
+            Severity::High,
+            "no CPG — should stay at pattern severity"
+        );
     }
 }

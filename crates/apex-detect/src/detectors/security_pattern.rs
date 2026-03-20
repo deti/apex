@@ -4,7 +4,7 @@ use apex_core::types::Language;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use super::util::{in_test_block, is_comment, is_test_file, strip_string_literals};
+use super::util::{in_test_block, is_comment, is_test_file, strip_string_literals, taint_reaches_sink};
 use crate::context::AnalysisContext;
 use crate::finding::{Finding, FindingCategory, Severity};
 use crate::threat_model::should_suppress;
@@ -1172,7 +1172,13 @@ impl Detector for SecurityPatternDetector {
                                 (severity, false)
                             };
 
-                        findings.push(Finding {
+                        let description = format!(
+                            "Pattern `{}` found in {}:{}",
+                            pattern.sink,
+                            path.display(),
+                            line_1based
+                        );
+                        let mut finding = Finding {
                             id: Uuid::new_v4(),
                             detector: self.name().into(),
                             severity,
@@ -1180,12 +1186,7 @@ impl Detector for SecurityPatternDetector {
                             file: path.clone(),
                             line: Some(line_1based),
                             title: format!("{} at line {line_1based}", pattern.description),
-                            description: format!(
-                                "Pattern `{}` found in {}:{}",
-                                pattern.sink,
-                                path.display(),
-                                line_1based
-                            ),
+                            description,
                             evidence: vec![],
                             covered: false,
                             suggestion: "Validate and sanitize input before use".into(),
@@ -1193,7 +1194,26 @@ impl Detector for SecurityPatternDetector {
                             fix: None,
                             cwe_ids: pattern.cwe.to_vec(),
                             noisy,
-                        });
+                        };
+
+                        // Check taint flow if CPG is available — downgrade instead of discard.
+                        if let Some(has_taint) = taint_reaches_sink(
+                            ctx,
+                            path,
+                            line_1based,
+                            &["user_input", "request", "args", "params", "stdin", "env", "socket", "recv"],
+                        ) {
+                            if !has_taint {
+                                finding.noisy = true;
+                                finding.severity = Severity::Low;
+                                finding.description = format!(
+                                    "{} (no taint flow detected — likely safe)",
+                                    finding.description
+                                );
+                            }
+                        }
+
+                        findings.push(finding);
                         break; // One finding per line max
                     }
                 }
@@ -2193,5 +2213,115 @@ mod tests {
                 "SQL injection (CWE-89) should not be noisy even for CliTool, got {f:?}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Taint flow integration via CPG
+    // -----------------------------------------------------------------------
+
+    fn make_ctx_with_cpg(
+        source_files: HashMap<PathBuf, String>,
+        lang: Language,
+        cpg: apex_cpg::Cpg,
+    ) -> AnalysisContext {
+        AnalysisContext {
+            language: lang,
+            source_cache: source_files,
+            cpg: Some(Arc::new(cpg)),
+            ..AnalysisContext::test_default()
+        }
+    }
+
+    // CPG with taint flow → finding stays at original (High/Critical) severity
+    //
+    // taint_reaches_sink filters sink candidates by node name matching one of the
+    // source_indicators. For security_pattern the indicators include "request".
+    // We place an Identifier "request" on line 2 (the eval line), connected via
+    // ReachingDef from a Parameter — so taint_reaches_sink returns Some(true).
+    #[tokio::test]
+    async fn taint_flow_present_keeps_original_severity() {
+        use apex_cpg::{EdgeKind, NodeKind};
+
+        let mut cpg = apex_cpg::Cpg::new();
+        // Parameter is the taint source.
+        let param = cpg.add_node(NodeKind::Parameter {
+            name: "request".into(),
+            index: 0,
+        });
+        // Identifier "request" on line 2 is the sink candidate.
+        let sink_id = cpg.add_node(NodeKind::Identifier {
+            name: "request".into(),
+            line: 2,
+        });
+        cpg.add_edge(param, sink_id, EdgeKind::ReachingDef { variable: "request".into() });
+
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/app.py"),
+            "def handle(request):\n    result = eval(request)\n".into(),
+        );
+        let ctx = make_ctx_with_cpg(files, Language::Python, cpg);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(!findings[0].noisy, "taint flow present — should not be noisy");
+        // severity stays Critical or High (not downgraded)
+        assert!(
+            findings[0].severity == Severity::Critical || findings[0].severity == Severity::High,
+            "taint flow present — severity should not be Low, got {:?}",
+            findings[0].severity
+        );
+    }
+
+    // CPG with no taint flow → finding downgraded to noisy + Low
+    //
+    // We put a matching identifier on line 2 but no ReachingDef from any source.
+    #[tokio::test]
+    async fn no_taint_flow_downgrades_to_noisy_low() {
+        use apex_cpg::NodeKind;
+
+        let mut cpg = apex_cpg::Cpg::new();
+        // Sink candidate matches "request" indicator but no taint source connected.
+        cpg.add_node(NodeKind::Identifier {
+            name: "request".into(),
+            line: 2,
+        });
+
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/app.py"),
+            "def handle(request):\n    result = eval(request)\n".into(),
+        );
+        let ctx = make_ctx_with_cpg(files, Language::Python, cpg);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].noisy, "no taint flow — should be noisy");
+        assert_eq!(
+            findings[0].severity,
+            Severity::Low,
+            "no taint flow — should be downgraded to Low"
+        );
+        assert!(
+            findings[0].description.contains("no taint flow"),
+            "description should mention no taint flow"
+        );
+    }
+
+    // No CPG → finding stays at original severity (fallback to pattern matching)
+    #[tokio::test]
+    async fn no_cpg_falls_back_to_pattern_severity() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/app.py"),
+            "def handle(request):\n    data = request.get('expr')\n    result = eval(data)\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Python);
+        let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
+        assert_eq!(findings.len(), 1);
+        assert!(!findings[0].noisy, "no CPG — should not be noisy");
+        assert_ne!(
+            findings[0].severity,
+            Severity::Low,
+            "no CPG — severity should not be forcibly downgraded to Low"
+        );
     }
 }
