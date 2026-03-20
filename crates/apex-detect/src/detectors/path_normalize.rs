@@ -5,6 +5,7 @@ use super::util::{is_comment, is_test_file};
 use crate::context::AnalysisContext;
 use crate::finding::{Finding, FindingCategory, Severity};
 use crate::Detector;
+use apex_core::config::ThreatModelType;
 use apex_core::error::Result;
 use apex_core::types::Language;
 
@@ -331,6 +332,48 @@ const RUBY_EXPR_NORM: &[&str] = &[
     "file.expand_path", "cleanpath", "realpath", "sanitize",
 ];
 
+/// Returns true when the threat model indicates file-path arguments are
+/// intentionally user-controlled (CLI tools, console tools, CI pipelines).
+///
+/// For these project types, reading a file from an argument the user passes
+/// explicitly is the expected behaviour — not a path-traversal vulnerability.
+/// Findings are still emitted but marked `noisy: true` so that default report
+/// views can filter them out.
+fn is_trusted_input_model(ctx: &AnalysisContext) -> bool {
+    matches!(
+        ctx.threat_model.model_type,
+        Some(ThreatModelType::CliTool)
+            | Some(ThreatModelType::ConsoleTool)
+            | Some(ThreatModelType::CiPipeline)
+    )
+}
+
+/// Returns true when `source` contains web-handler annotations or patterns
+/// that indicate the file is part of a request-handling layer.
+///
+/// Used as a fallback when no threat model is configured: Rust `fs::` calls
+/// inside web handler functions are genuinely suspicious; those outside are
+/// almost always reading developer- or user-chosen config/target files.
+fn has_web_handler_context(source: &str) -> bool {
+    const WEB_MARKERS: &[&str] = &[
+        "#[get(",
+        "#[post(",
+        "#[put(",
+        "#[delete(",
+        "#[patch(",
+        "#[route(",
+        "async fn handler",
+        "async fn handle_request",
+        "HttpRequest",
+        "actix_web",
+        "axum::",
+        "warp::",
+        "rocket::",
+        "tide::",
+    ];
+    WEB_MARKERS.iter().any(|m| source.contains(m))
+}
+
 fn sinks_for(lang: Language) -> &'static [&'static str] {
     match lang {
         Language::Python => PYTHON_SINKS,
@@ -386,6 +429,7 @@ fn find_expression_sinks(
     lang: Language,
     path: &std::path::Path,
     detector_name: &str,
+    noisy: bool,
 ) -> Vec<Finding> {
     let sinks = sinks_for(lang);
     let input_indicators = user_input_indicators(lang);
@@ -432,10 +476,15 @@ fn find_expression_sinks(
         }
 
         let line_1based = (i + 1) as u32;
+        let (severity, finding_noisy) = if noisy {
+            (Severity::Low, true)
+        } else {
+            (Severity::High, false)
+        };
         findings.push(Finding {
             id: Uuid::new_v4(),
             detector: detector_name.into(),
-            severity: Severity::High,
+            severity,
             category: FindingCategory::PathTraversal,
             file: path.to_path_buf(),
             line: Some(line_1based),
@@ -455,7 +504,7 @@ fn find_expression_sinks(
             explanation: None,
             fix: None,
             cwe_ids: vec![22],
-                    noisy: false,
+            noisy: finding_noisy,
         });
     }
 
@@ -516,6 +565,14 @@ impl Detector for PathNormalizationDetector {
             return Ok(findings);
         }
 
+        // Determine project-level noisiness once before the file loop.
+        //
+        // CLI tools, console tools, and CI pipelines intentionally accept file
+        // paths from the user.  Flagging every path parameter produces hundreds
+        // of spurious findings.  We still emit findings but mark them noisy so
+        // default report views can filter them out.
+        let project_is_trusted_input = is_trusted_input_model(ctx);
+
         for (path, source) in &ctx.source_cache {
             // Skip test files.
             if is_test_file(path) {
@@ -551,6 +608,15 @@ impl Detector for PathNormalizationDetector {
                 continue;
             }
 
+            // For Rust with no explicit threat model, fall back to a heuristic:
+            // mark findings noisy when the file has no web-handler annotations.
+            // Almost every path parameter in a CLI crate is a developer- or
+            // user-chosen config/target file, not untrusted HTTP input.
+            let file_noisy = project_is_trusted_input
+                || (lang == Language::Rust
+                    && ctx.threat_model.model_type.is_none()
+                    && !has_web_handler_context(source));
+
             let lines: Vec<&str> = source.lines().collect();
             let ranges = collect_suspect_function_ranges(source, lang);
 
@@ -559,10 +625,18 @@ impl Detector for PathNormalizationDetector {
 
                 if !has_normalization(body, lang) {
                     let line_1based = (fn_start + 1) as u32;
+                    // Downgrade severity to Low for noisy findings so that
+                    // severity-threshold filters suppress them even when the
+                    // caller does not check the `noisy` flag.
+                    let (severity, noisy) = if file_noisy {
+                        (Severity::Low, true)
+                    } else {
+                        (Severity::Medium, false)
+                    };
                     findings.push(Finding {
                         id: Uuid::new_v4(),
                         detector: self.name().into(),
-                        severity: Severity::Medium,
+                        severity,
                         category: FindingCategory::PathTraversal,
                         file: path.clone(),
                         line: Some(line_1based),
@@ -582,13 +656,14 @@ impl Detector for PathNormalizationDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![22],
-                    noisy: false,
+                        noisy,
                     });
                 }
             }
 
             // Pass 2: expression-level file-operation sink scanning.
-            let expr_findings = find_expression_sinks(&lines, lang, path, self.name());
+            let expr_findings =
+                find_expression_sinks(&lines, lang, path, self.name(), file_noisy);
             findings.extend(expr_findings);
         }
 
@@ -601,6 +676,7 @@ mod tests {
     use super::*;
     use crate::config::DetectConfig;
     use apex_core::command::RealCommandRunner;
+    use apex_core::config::{ThreatModelConfig, ThreatModelType};
     use apex_coverage::CoverageOracle;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -613,6 +689,26 @@ mod tests {
         AnalysisContext {
             language: lang,
             source_cache,
+            ..AnalysisContext::test_default()
+        }
+    }
+
+    fn make_ctx_with_threat_model(
+        filename: &str,
+        source: &str,
+        lang: Language,
+        model_type: ThreatModelType,
+    ) -> AnalysisContext {
+        let mut source_cache = HashMap::new();
+        source_cache.insert(PathBuf::from(filename), source.to_string());
+
+        AnalysisContext {
+            language: lang,
+            source_cache,
+            threat_model: ThreatModelConfig {
+                model_type: Some(model_type),
+                ..ThreatModelConfig::default()
+            },
             ..AnalysisContext::test_default()
         }
     }
@@ -1192,5 +1288,91 @@ def download
             !findings.is_empty(),
             "should detect Ruby File.read with params input"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Threat-model awareness tests
+    // -----------------------------------------------------------------------
+
+    // CliTool threat model: path findings should be Low severity and noisy.
+    #[tokio::test]
+    async fn cli_tool_threat_model_findings_are_low_and_noisy() {
+        let src = "\
+fn read_file(path: &Path) -> Vec<u8> {
+    fs::read(path).unwrap()
+}
+";
+        let ctx = make_ctx_with_threat_model(
+            "src/main.rs",
+            src,
+            Language::Rust,
+            ThreatModelType::CliTool,
+        );
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should still emit findings for CLI tools");
+        for f in &findings {
+            assert_eq!(f.severity, Severity::Low, "CLI tool findings must be Low");
+            assert!(f.noisy, "CLI tool findings must be noisy");
+        }
+    }
+
+    // WebService threat model: path findings should be High/Medium and not noisy.
+    #[tokio::test]
+    async fn web_service_threat_model_findings_are_high_and_not_noisy() {
+        let src = "\
+fn serve_file(path: &Path) -> Vec<u8> {
+    fs::read(path).unwrap()
+}
+";
+        let ctx = make_ctx_with_threat_model(
+            "src/handler.rs",
+            src,
+            Language::Rust,
+            ThreatModelType::WebService,
+        );
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "web service findings must not be suppressed");
+        for f in &findings {
+            assert!(!f.noisy, "web service findings must not be noisy");
+            assert_ne!(
+                f.severity,
+                Severity::Low,
+                "web service findings must not be downgraded to Low"
+            );
+        }
+    }
+
+    // No threat model, Rust code, no web handler annotations: Low + noisy.
+    #[tokio::test]
+    async fn rust_no_threat_model_no_web_handlers_is_noisy() {
+        let src = "\
+fn load_config(path: &Path) -> String {
+    fs::read_to_string(path).unwrap()
+}
+";
+        let ctx = make_ctx_with_source("src/config.rs", src, Language::Rust);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should emit findings");
+        for f in &findings {
+            assert!(f.noisy, "Rust CLI-like code without threat model should be noisy");
+            assert_eq!(f.severity, Severity::Low);
+        }
+    }
+
+    // Python with no threat model: High (could be a web app).
+    #[tokio::test]
+    async fn python_no_threat_model_is_high_not_noisy() {
+        let src = "\
+def serve(path):
+    data = open(path).read()
+    return data
+";
+        let ctx = make_ctx_with_source("src/views.py", src, Language::Python);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should emit findings for Python");
+        // Python has no Rust heuristic fallback, so should not be noisy
+        for f in &findings {
+            assert!(!f.noisy, "Python with no threat model should not be noisy");
+        }
     }
 }

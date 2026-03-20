@@ -66,6 +66,7 @@ fn default_enabled() -> Vec<String> {
 /// in summaries while still showing them in full reports.
 pub const NOISY_DETECTORS: &[&str] = &[
     "panic",
+    "panic-pattern",
     "mixed-bool-ops",
     "static",
     "duplicated-fn",

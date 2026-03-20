@@ -1,3 +1,4 @@
+use apex_core::config::ThreatModelType;
 use apex_core::error::Result;
 use apex_core::types::Language;
 use async_trait::async_trait;
@@ -160,6 +161,18 @@ impl Detector for PanicPatternDetector {
                         break; // One finding per line max
                     }
                 }
+            }
+        }
+
+        // Threat-model awareness: in CLI/console tools, unwrap()/expect()/panic!() are
+        // acceptable — the program is expected to crash with a clear message on bad input.
+        // Only in library code (or web services) are panics real bugs.
+        if matches!(
+            ctx.threat_model.model_type,
+            Some(ThreatModelType::CliTool) | Some(ThreatModelType::ConsoleTool)
+        ) {
+            for finding in &mut findings {
+                finding.noisy = true;
             }
         }
 
@@ -435,6 +448,114 @@ mod tests {
             source_cache: source_files,
             ..AnalysisContext::test_default()
         }
+    }
+
+    fn make_ctx_threat_model(
+        source_files: HashMap<PathBuf, String>,
+        model_type: Option<apex_core::config::ThreatModelType>,
+    ) -> AnalysisContext {
+        use apex_core::config::ThreatModelConfig;
+        AnalysisContext {
+            source_cache: source_files,
+            threat_model: ThreatModelConfig {
+                model_type,
+                ..ThreatModelConfig::default()
+            },
+            ..AnalysisContext::test_default()
+        }
+    }
+
+    #[tokio::test]
+    async fn cli_tool_threat_model_marks_findings_noisy() {
+        // In a CLI binary, unwrap/panic are acceptable — findings should be noisy
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/main.rs"),
+            "fn run() {\n    let x = bar().unwrap();\n    panic!(\"bad arg\");\n}\n".into(),
+        );
+        let ctx =
+            make_ctx_threat_model(files, Some(apex_core::config::ThreatModelType::CliTool));
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should still produce findings for CLI tools");
+        assert!(
+            findings.iter().all(|f| f.noisy),
+            "all findings should be noisy for CLI tools"
+        );
+    }
+
+    #[tokio::test]
+    async fn console_tool_threat_model_marks_findings_noisy() {
+        // ConsoleTool is an alias for CliTool — same treatment
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/main.rs"),
+            "fn run() {\n    let x = bar().unwrap();\n}\n".into(),
+        );
+        let ctx = make_ctx_threat_model(
+            files,
+            Some(apex_core::config::ThreatModelType::ConsoleTool),
+        );
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty());
+        assert!(
+            findings.iter().all(|f| f.noisy),
+            "ConsoleTool findings should be noisy"
+        );
+    }
+
+    #[tokio::test]
+    async fn library_threat_model_keeps_findings_non_noisy() {
+        // In a library, panics are real bugs — callers cannot catch them easily
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/lib.rs"),
+            "pub fn parse(s: &str) -> i32 {\n    s.parse().unwrap()\n}\n".into(),
+        );
+        let ctx =
+            make_ctx_threat_model(files, Some(apex_core::config::ThreatModelType::Library));
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty());
+        assert!(
+            findings.iter().all(|f| !f.noisy),
+            "Library findings should NOT be noisy"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_threat_model_keeps_findings_non_noisy() {
+        // Conservative default: no threat model configured → findings are not noisy
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/main.rs"),
+            "fn main() {\n    bar().unwrap();\n}\n".into(),
+        );
+        let ctx = make_ctx_threat_model(files, None);
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty());
+        assert!(
+            findings.iter().all(|f| !f.noisy),
+            "findings should NOT be noisy when no threat model is set"
+        );
+    }
+
+    #[tokio::test]
+    async fn web_service_threat_model_keeps_findings_non_noisy() {
+        // In a web service, panics crash the server — not acceptable
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/handler.rs"),
+            "fn handle(req: Request) -> Response {\n    parse(req.body()).unwrap()\n}\n".into(),
+        );
+        let ctx = make_ctx_threat_model(
+            files,
+            Some(apex_core::config::ThreatModelType::WebService),
+        );
+        let findings = PanicPatternDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty());
+        assert!(
+            findings.iter().all(|f| !f.noisy),
+            "WebService findings should NOT be noisy"
+        );
     }
 
     #[tokio::test]
