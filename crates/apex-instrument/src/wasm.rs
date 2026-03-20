@@ -105,7 +105,8 @@ impl WasmInstrumentor {
                 "-o",
                 &inst_path.to_string_lossy(),
                 &wasm_path.to_string_lossy(),
-            ]);
+            ])
+            .timeout(300_000); // 5 min — wasm-opt can be slow on large modules
         let output = runner
             .run_command(&spec)
             .await
@@ -284,10 +285,11 @@ impl Instrumentor for WasmInstrumentor {
             // Fallback to synthetic branches
             let branches =
                 WasmInstrumentor::synthetic_branches_from_wasm(wasm_file, &mut file_paths);
-            info!(
+            warn!(
                 file = %wasm_file.display(),
                 branches = branches.len(),
-                "wasm: synthetic branch IDs"
+                "wasm: using synthetic branch IDs — coverage data is approximate; \
+                 install Binaryen (wasm-opt) for real instrumentation"
             );
             branch_ids.extend(branches);
         }

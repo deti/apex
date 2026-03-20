@@ -11,7 +11,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 pub struct SwiftInstrumentor<R: CommandRunner = RealCommandRunner> {
     runner: R,
@@ -157,7 +157,10 @@ impl<R: CommandRunner> Instrumentor for SwiftInstrumentor<R> {
 
         if output.exit_code != 0 {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!(exit = output.exit_code, %stderr, "swift test --enable-code-coverage returned non-zero");
+            return Err(ApexError::Instrumentation(format!(
+                "swift test --enable-code-coverage failed (exit {}): {}",
+                output.exit_code, stderr
+            )));
         }
 
         // Find the profdata and binary, then export with llvm-cov
@@ -172,6 +175,14 @@ impl<R: CommandRunner> Instrumentor for SwiftInstrumentor<R> {
         let codecov_path = String::from_utf8_lossy(&codecov_output.stdout)
             .trim()
             .to_string();
+
+        if codecov_path.is_empty() || !Path::new(&codecov_path).exists() {
+            return Err(ApexError::Instrumentation(format!(
+                "codecov JSON file does not exist: '{}'; \
+                 swift test --show-codecov-path returned a path that could not be found",
+                codecov_path
+            )));
+        }
 
         let content = std::fs::read_to_string(&codecov_path).map_err(|e| {
             ApexError::Instrumentation(format!("failed to read {codecov_path}: {e}"))

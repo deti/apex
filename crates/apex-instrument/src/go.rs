@@ -181,6 +181,14 @@ impl<R: CommandRunner> Instrumentor for GoInstrumentor<R> {
         let (all_branches, executed_branches, file_paths) =
             parse_coverage_out(&content, target_root);
 
+        if all_branches.is_empty() {
+            return Err(ApexError::Instrumentation(
+                "coverage.out contained 0 valid coverage lines; \
+                 the file may be malformed or the test run produced no coverage data"
+                    .into(),
+            ));
+        }
+
         debug!(
             total = all_branches.len(),
             executed = executed_branches.len(),

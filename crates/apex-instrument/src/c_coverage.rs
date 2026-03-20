@@ -289,13 +289,11 @@ async fn compile_and_run_llvm_cov(
 
     if !compile_out.status.success() {
         let stderr = String::from_utf8_lossy(&compile_out.stderr);
-        warn!(%stderr, "clang compilation failed");
-        return Ok((
-            Vec::new(),
-            Vec::new(),
-            HashMap::new(),
-            build_dir.to_path_buf(),
-        ));
+        return Err(ApexError::Instrumentation(format!(
+            "clang compilation failed (exit {}): {}",
+            compile_out.status.code().unwrap_or(-1),
+            stderr
+        )));
     }
 
     // Step 2: Run binary (produces .profraw)
@@ -577,13 +575,11 @@ async fn compile_and_run_gcc_gcov(
 
     if !compile_out.status.success() {
         let stderr = String::from_utf8_lossy(&compile_out.stderr);
-        warn!(%stderr, "gcov compilation failed; returning empty coverage");
-        return Ok((
-            Vec::new(),
-            Vec::new(),
-            HashMap::new(),
-            build_dir.to_path_buf(),
-        ));
+        return Err(ApexError::Instrumentation(format!(
+            "{compiler} compilation failed (exit {}): {}",
+            compile_out.status.code().unwrap_or(-1),
+            stderr
+        )));
     }
 
     info!("gcov compilation succeeded, running binary");
