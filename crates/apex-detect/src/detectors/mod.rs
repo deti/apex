@@ -54,6 +54,8 @@ pub mod multi_command_injection;
 pub mod multi_sql_injection;
 pub mod multi_crypto_failure;
 pub mod multi_insecure_deser;
+pub mod multi_path_traversal;
+pub mod multi_ssrf;
 
 // JS/TS detectors
 pub mod js_command_injection;
@@ -120,6 +122,8 @@ pub use multi_command_injection::MultiCommandInjectionDetector;
 pub use multi_sql_injection::MultiSqlInjectionDetector;
 pub use multi_crypto_failure::MultiCryptoFailureDetector;
 pub use multi_insecure_deser::MultiInsecureDeserDetector;
+pub use multi_path_traversal::MultiPathTraversalDetector;
+pub use multi_ssrf::MultiSsrfDetector;
 
 // JS/TS detectors
 pub use js_command_injection::JsCommandInjectionDetector;

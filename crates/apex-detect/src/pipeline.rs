@@ -136,6 +136,26 @@ impl DetectorPipeline {
             detectors.push(Box::new(DuplicatedFnDetector));
         }
 
+        // Multi-language security detectors (all languages)
+        if cfg.enabled.contains(&"multi-command-injection".into()) {
+            detectors.push(Box::new(MultiCommandInjectionDetector));
+        }
+        if cfg.enabled.contains(&"multi-sql-injection".into()) {
+            detectors.push(Box::new(MultiSqlInjectionDetector));
+        }
+        if cfg.enabled.contains(&"multi-crypto-failure".into()) {
+            detectors.push(Box::new(MultiCryptoFailureDetector));
+        }
+        if cfg.enabled.contains(&"multi-insecure-deser".into()) {
+            detectors.push(Box::new(MultiInsecureDeserDetector));
+        }
+        if cfg.enabled.contains(&"multi-ssrf".into()) {
+            detectors.push(Box::new(MultiSsrfDetector));
+        }
+        if cfg.enabled.contains(&"multi-path-traversal".into()) {
+            detectors.push(Box::new(MultiPathTraversalDetector));
+        }
+
         // JS/TS detectors
         if cfg.enabled.contains(&"js-sql-injection".into()) && lang == Language::JavaScript {
             detectors.push(Box::new(JsSqlInjectionDetector));

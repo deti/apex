@@ -29,6 +29,13 @@ fn default_enabled() -> Vec<String> {
         "js-timeout".into(),
         "js-insecure-deser".into(),
         "js-path-traversal".into(),
+        // Multi-language security detectors
+        "multi-command-injection".into(),
+        "multi-sql-injection".into(),
+        "multi-crypto-failure".into(),
+        "multi-insecure-deser".into(),
+        "multi-ssrf".into(),
+        "multi-path-traversal".into(),
         // Dig 2 high-confidence detectors
         "blocking-io-in-async".into(),
         "swallowed-errors".into(),
