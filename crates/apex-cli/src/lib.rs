@@ -821,9 +821,14 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
         }
     }
 
-    // ── 2. Install deps ─────────────────────────────────────────────────
+    // ── 2. Install deps (non-fatal — audit works without deps) ────────
     if !args.no_install {
-        install_deps(lang, &target_path).await?;
+        if let Err(e) = install_deps(lang, &target_path).await {
+            eprintln!(
+                "  \x1b[33m\u{26a0}\x1b[0m Dependency installation failed: {e}"
+            );
+            eprintln!("  Continuing with audit-only mode (no coverage)");
+        }
     }
 
     // ── 3. Instrument + coverage (graceful fallback) ────────────────────
