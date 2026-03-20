@@ -132,7 +132,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "apex-agent"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "apex-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-agent",
  "apex-concolic",
@@ -186,7 +186,7 @@ dependencies = [
 
 [[package]]
 name = "apex-concolic"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "apex-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -221,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "apex-coverage"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "dashmap",
@@ -234,7 +234,7 @@ dependencies = [
 
 [[package]]
 name = "apex-cpg"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "regex",
@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "apex-detect"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "apex-fuzz"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -291,7 +291,7 @@ dependencies = [
 
 [[package]]
 name = "apex-index"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "async-trait",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "apex-instrument"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "addr2line 0.21.0",
  "apex-core",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "apex-lang"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "async-trait",
@@ -344,7 +344,7 @@ dependencies = [
 
 [[package]]
 name = "apex-mir"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "proptest",
@@ -353,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "apex-reach"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "regex",
@@ -362,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "apex-rpc"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -382,7 +382,7 @@ dependencies = [
 
 [[package]]
 name = "apex-sandbox"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -408,7 +408,7 @@ dependencies = [
 
 [[package]]
 name = "apex-symbolic"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "proptest",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "apex-synth"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "apex-core",
  "async-trait",

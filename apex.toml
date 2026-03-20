@@ -73,3 +73,15 @@ category = "Tampering"
 description = "MCP server receives malicious JSON-RPC input"
 mitigation = "rmcp crate handles protocol parsing; target paths canonicalized"
 severity = "medium"
+
+[policy]
+min_coverage = 0.80
+max_critical_findings = 0
+max_high_findings = 5
+min_deploy_score = 70
+required_detectors = ["secret-scan", "security-pattern"]
+
+[history]
+auto_snapshot = true
+retention_days = 90
+max_snapshots = 1000
