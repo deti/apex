@@ -477,6 +477,8 @@ fn default_detect_severity() -> String {
 pub enum ThreatModelType {
     /// CLI tool — argv, env vars, config files are trusted.
     CliTool,
+    /// Console tool — same as CLI tool (alias).
+    ConsoleTool,
     /// Web service — request data is untrusted, env/config are trusted.
     WebService,
     /// Library — all external input is untrusted.
@@ -492,10 +494,31 @@ pub struct ThreatModelConfig {
     /// The type of software being analyzed.
     #[serde(rename = "type")]
     pub model_type: Option<ThreatModelType>,
+    /// Human-readable description.
+    pub description: Option<String>,
     /// Additional sources the user considers trusted (beyond the defaults for this type).
     pub trusted_sources: Vec<String>,
     /// Additional sources the user considers untrusted (overrides defaults).
     pub untrusted_sources: Vec<String>,
+    /// Assets to protect.
+    #[serde(default)]
+    pub assets: Vec<String>,
+    /// Trust boundary descriptions.
+    #[serde(default)]
+    pub trust_boundaries: Vec<String>,
+    /// STRIDE-aligned threats.
+    #[serde(default)]
+    pub threats: Vec<ThreatEntry>,
+}
+
+/// A single threat entry in the threat model.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ThreatEntry {
+    pub category: String,
+    pub description: String,
+    pub mitigation: String,
+    pub severity: String,
 }
 
 // ---------------------------------------------------------------------------

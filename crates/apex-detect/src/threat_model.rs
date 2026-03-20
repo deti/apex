@@ -205,7 +205,7 @@ fn lookup_trust(indicator: &str, model_type: ThreatModelType) -> TrustLevel {
     for entry in SOURCE_TRUST_TABLE {
         if indicator.contains(entry.pattern) {
             return match model_type {
-                ThreatModelType::CliTool => entry.cli_tool,
+                ThreatModelType::CliTool | ThreatModelType::ConsoleTool => entry.cli_tool,
                 ThreatModelType::WebService => entry.web_service,
                 ThreatModelType::Library => entry.library,
                 ThreatModelType::CiPipeline => entry.ci_pipeline,
@@ -225,6 +225,7 @@ mod tests {
             model_type: Some(ThreatModelType::CliTool),
             trusted_sources: vec![],
             untrusted_sources: vec![],
+            ..Default::default()
         }
     }
 
@@ -233,6 +234,7 @@ mod tests {
             model_type: Some(ThreatModelType::WebService),
             trusted_sources: vec![],
             untrusted_sources: vec![],
+            ..Default::default()
         }
     }
 
@@ -241,6 +243,7 @@ mod tests {
             model_type: Some(ThreatModelType::Library),
             trusted_sources: vec![],
             untrusted_sources: vec![],
+            ..Default::default()
         }
     }
 
@@ -249,6 +252,7 @@ mod tests {
             model_type: Some(ThreatModelType::CiPipeline),
             trusted_sources: vec![],
             untrusted_sources: vec![],
+            ..Default::default()
         }
     }
 
