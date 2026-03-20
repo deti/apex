@@ -179,6 +179,11 @@ pub struct RunArgs {
     /// Example: `--fuzz-cmd ./target_instrumented`
     #[arg(long, value_delimiter = ' ')]
     pub fuzz_cmd: Vec<String>,
+
+    /// Path to pre-existing coverage data file. Skips instrumentation.
+    /// Supported formats: LCOV, Cobertura XML, Go coverprofile, coverage.py JSON.
+    #[arg(long)]
+    pub coverage_file: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -238,6 +243,11 @@ pub struct AnalyzeArgs {
     /// Disable agentic coverage (use deterministic code path).
     #[arg(long)]
     pub no_agent: bool,
+
+    /// Path to pre-existing coverage data file. Skips instrumentation.
+    /// Supported formats: LCOV, Cobertura XML, Go coverprofile, coverage.py JSON.
+    #[arg(long)]
+    pub coverage_file: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -830,44 +840,81 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
         }
     }
 
-    // ── 2+3. Coverage: agentic or deterministic ───────────────────────
-    let use_agent = args.agentic && !args.no_agent;
-
+    // ── 2+3. Coverage: external file, agentic, or deterministic ────────
     let oracle = Arc::new(CoverageOracle::new());
-    let (has_coverage, instrumented) = if use_agent {
-        // Agentic path: dispatch a claude agent to install deps + run coverage
-        info!("using agentic coverage pipeline");
-        let preflight_info = preflight.as_ref().ok().cloned().unwrap_or_default();
-        match agent_dispatch::run_coverage_agent(
-            lang,
-            &target_path,
-            &preflight_info,
-            coverage_target,
-        )
-        .await
-        {
-            Ok(agent_result) => {
+    let (has_coverage, instrumented) = if let Some(ref cov_file) = args.coverage_file {
+        // External coverage file: skip install_deps + instrument entirely
+        info!(file = %cov_file.display(), "importing external coverage data");
+        match apex_instrument::import::load_coverage_file(cov_file, &target_path, None) {
+            Ok((all_branches, exec_branches, file_paths)) => {
+                oracle.register_branches(all_branches.iter().cloned());
+                let baseline_seed = SeedId::new();
+                for bid in &exec_branches {
+                    oracle.mark_covered(bid, baseline_seed);
+                }
+                // Build a synthetic InstrumentedTarget so exploration can proceed
+                let inst = apex_core::types::InstrumentedTarget {
+                    target: Target {
+                        root: target_path.clone(),
+                        language: lang,
+                        test_command: Vec::new(),
+                    },
+                    branch_ids: all_branches,
+                    executed_branch_ids: exec_branches,
+                    file_paths,
+                    work_dir: target_path.clone(),
+                };
                 info!(
-                    success = agent_result.success,
-                    pct = agent_result.coverage_pct,
-                    "agent coverage complete"
+                    total = oracle.total_count(),
+                    covered = oracle.covered_count(),
+                    coverage = %format!("{:.1}%", oracle.coverage_percent()),
+                    "imported external coverage"
                 );
-                // TODO(wave4): populate oracle from agent_result via
-                // CoverageOracle::from_agent_result() once wired up
-                (agent_result.success, None)
+                (true, Some(inst))
             }
             Err(e) => {
-                eprintln!(
-                    "  \x1b[33m\u{26a0}\x1b[0m Agent dispatch failed: {e}"
-                );
-                eprintln!("  Falling back to deterministic pipeline");
-                // Fall back to deterministic path
-                run_deterministic_coverage(lang, &target_path, &oracle, args.no_install).await
+                eprintln!("  \x1b[33m\u{26a0}\x1b[0m Failed to parse coverage file: {e}");
+                eprintln!("  Running audit-only mode");
+                (false, None)
             }
         }
     } else {
-        // Deterministic path: install_deps + instrument
-        run_deterministic_coverage(lang, &target_path, &oracle, args.no_install).await
+        let use_agent = args.agentic && !args.no_agent;
+        if use_agent {
+            // Agentic path: dispatch a claude agent to install deps + run coverage
+            info!("using agentic coverage pipeline");
+            let preflight_info = preflight.as_ref().ok().cloned().unwrap_or_default();
+            match agent_dispatch::run_coverage_agent(
+                lang,
+                &target_path,
+                &preflight_info,
+                coverage_target,
+            )
+            .await
+            {
+                Ok(agent_result) => {
+                    info!(
+                        success = agent_result.success,
+                        pct = agent_result.coverage_pct,
+                        "agent coverage complete"
+                    );
+                    // TODO(wave4): populate oracle from agent_result via
+                    // CoverageOracle::from_agent_result() once wired up
+                    (agent_result.success, None)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  \x1b[33m\u{26a0}\x1b[0m Agent dispatch failed: {e}"
+                    );
+                    eprintln!("  Falling back to deterministic pipeline");
+                    // Fall back to deterministic path
+                    run_deterministic_coverage(lang, &target_path, &oracle, args.no_install).await
+                }
+            }
+        } else {
+            // Deterministic path: install_deps + instrument
+            run_deterministic_coverage(lang, &target_path, &oracle, args.no_install).await
+        }
     };
 
     // ── 4. Exploration (skip if no coverage or already at target) ───────
@@ -893,6 +940,7 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
                 rounds: args.rounds,
                 fuzz_iters: args.fuzz_iters,
                 fuzz_cmd: args.fuzz_cmd.clone(),
+                coverage_file: None, // already imported above
             };
 
             // Compile sancov binary if needed
@@ -1279,14 +1327,42 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         }
     }
 
-    // 1. Install deps
-    if !args.no_install {
-        install_deps(lang, &target_path).await?;
-    }
-
-    // 2. Instrument -> populate oracle
+    // 1+2. Coverage: external file or install + instrument
     let oracle = Arc::new(CoverageOracle::new());
-    let instrumented = instrument(lang, &target_path, &oracle).await?;
+    let instrumented = if let Some(ref cov_file) = args.coverage_file {
+        // External coverage file: skip install_deps + instrument entirely
+        info!(file = %cov_file.display(), "importing external coverage data");
+        let (all_branches, exec_branches, file_paths) =
+            apex_instrument::import::load_coverage_file(cov_file, &target_path, None)?;
+        oracle.register_branches(all_branches.iter().cloned());
+        let baseline_seed = SeedId::new();
+        for bid in &exec_branches {
+            oracle.mark_covered(bid, baseline_seed);
+        }
+        let inst = apex_core::types::InstrumentedTarget {
+            target: Target {
+                root: target_path.clone(),
+                language: lang,
+                test_command: Vec::new(),
+            },
+            branch_ids: all_branches,
+            executed_branch_ids: exec_branches,
+            file_paths,
+            work_dir: target_path.clone(),
+        };
+        info!(
+            total = oracle.total_count(),
+            covered = oracle.covered_count(),
+            coverage = %format!("{:.1}%", oracle.coverage_percent()),
+            "imported external coverage"
+        );
+        inst
+    } else {
+        if !args.no_install {
+            install_deps(lang, &target_path).await?;
+        }
+        instrument(lang, &target_path, &oracle).await?
+    };
 
     // 2b. For fuzz/driller/all/agent strategies on Rust targets, compile binary
     //     with SanitizerCoverage so the SHM feedback loop works.
@@ -4710,6 +4786,7 @@ mod tests {
             rounds: Some(5),
             fuzz_iters: Some(10000),
             fuzz_cmd: vec!["./my_binary".into(), "--arg".into()],
+            coverage_file: None,
         };
         let cmd = fuzz_command(&args, std::path::Path::new("/repo"));
         assert_eq!(cmd, vec!["./my_binary", "--arg"]);
@@ -4728,6 +4805,7 @@ mod tests {
             rounds: Some(5),
             fuzz_iters: Some(10000),
             fuzz_cmd: vec![],
+            coverage_file: None,
         };
         let cmd = fuzz_command(&args, std::path::Path::new("/repo"));
         assert_eq!(cmd, vec!["/repo/apex_target"]);

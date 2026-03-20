@@ -6,6 +6,7 @@
 pub mod c_coverage;
 pub mod csharp;
 pub mod go;
+pub mod import;
 pub mod java;
 pub mod javascript;
 pub mod llvm;
