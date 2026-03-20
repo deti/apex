@@ -80,6 +80,7 @@ impl Detector for UnsafeSendSyncDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![362],
+                    noisy: false,
                     });
                 }
             }

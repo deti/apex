@@ -23,6 +23,11 @@ pub struct Finding {
     pub fix: Option<Fix>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwe_ids: Vec<u32>,
+    /// True for findings from detectors marked as noisy — code quality issues
+    /// that are valid but produce high volume. Consumers can filter these in
+    /// summaries while still showing them in full reports.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub noisy: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -150,6 +155,7 @@ mod tests {
             explanation: None,
             fix: None,
             cwe_ids: vec![],
+                    noisy: false,
         };
         let json = serde_json::to_string(&f).unwrap();
         assert!(json.contains("\"severity\":\"high\""));
@@ -279,6 +285,7 @@ mod tests {
                 diff: "+bounds check".into(),
             }),
             cwe_ids: vec![],
+                    noisy: false,
         };
         let json = serde_json::to_string(&f).unwrap();
         assert!(json.contains("\"explanation\":\"detailed explanation\""));
@@ -306,6 +313,7 @@ mod tests {
             explanation: None,
             fix: None,
             cwe_ids: vec![],
+                    noisy: false,
         };
         let json = serde_json::to_string(&f).unwrap();
         let f2: Finding = serde_json::from_str(&json).unwrap();
@@ -332,6 +340,7 @@ mod tests {
             explanation: None,
             fix: None,
             cwe_ids: vec![78, 94],
+                    noisy: false,
         };
         let json = serde_json::to_string(&f).unwrap();
         assert!(json.contains("\"cwe_ids\":[78,94]"));
@@ -354,6 +363,7 @@ mod tests {
             explanation: None,
             fix: None,
             cwe_ids: vec![],
+                    noisy: false,
         };
         let json = serde_json::to_string(&f).unwrap();
         assert!(!json.contains("cwe_ids"));

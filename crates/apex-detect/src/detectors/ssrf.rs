@@ -104,6 +104,7 @@ pub fn scan_ssrf(source: &str, file_path: &str) -> Vec<Finding> {
             explanation: None,
             fix: None,
             cwe_ids: vec![918],
+                    noisy: false,
         });
     }
 

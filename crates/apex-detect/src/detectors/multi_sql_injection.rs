@@ -393,6 +393,7 @@ impl Detector for MultiSqlInjectionDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: vec![89],
+                            noisy: false,
                         });
                         break; // One finding per line max
                     }

@@ -193,6 +193,7 @@ impl Detector for HardcodedSecretDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: vec![798],
+                    noisy: false,
                         });
                         break; // One finding per line max
                     }
@@ -297,6 +298,7 @@ pub fn scan_hardcoded_secrets(source: &str, file_path: &str) -> Vec<Finding> {
                     explanation: None,
                     fix: None,
                     cwe_ids: vec![798],
+                    noisy: false,
                 });
             }
         }

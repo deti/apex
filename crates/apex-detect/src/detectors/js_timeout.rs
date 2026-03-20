@@ -87,6 +87,7 @@ impl Detector for JsTimeoutDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![400],
+                    noisy: false,
                     });
                 }
             }

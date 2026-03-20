@@ -61,6 +61,7 @@ pub fn scan_command_injection(source: &str, file_path: &str) -> Vec<Finding> {
                 explanation: None,
                 fix: None,
                 cwe_ids: vec![78],
+                    noisy: false,
             });
         }
     }

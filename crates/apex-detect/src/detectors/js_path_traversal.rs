@@ -127,6 +127,7 @@ impl Detector for JsPathTraversalDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: vec![22],
+                    noisy: false,
                         });
                         break; // One finding per line max
                     }

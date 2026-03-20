@@ -52,6 +52,8 @@ pub mod vecdeque_partial;
 // Multi-language security detectors
 pub mod multi_command_injection;
 pub mod multi_sql_injection;
+pub mod multi_crypto_failure;
+pub mod multi_insecure_deser;
 
 // JS/TS detectors
 pub mod js_command_injection;
@@ -116,6 +118,8 @@ pub use vecdeque_partial::VecDequePartialDetector;
 // Multi-language security detectors
 pub use multi_command_injection::MultiCommandInjectionDetector;
 pub use multi_sql_injection::MultiSqlInjectionDetector;
+pub use multi_crypto_failure::MultiCryptoFailureDetector;
+pub use multi_insecure_deser::MultiInsecureDeserDetector;
 
 // JS/TS detectors
 pub use js_command_injection::JsCommandInjectionDetector;

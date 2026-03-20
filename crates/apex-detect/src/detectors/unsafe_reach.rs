@@ -93,6 +93,7 @@ pub fn parse_geiger_output(json_str: &str, target_pkg: &str) -> Result<Vec<Findi
                     explanation: None,
                     fix: None,
                     cwe_ids: vec![676],
+                    noisy: false,
                 });
             }
         }

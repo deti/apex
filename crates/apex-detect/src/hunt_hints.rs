@@ -184,6 +184,7 @@ mod tests {
             fix: None,
             explanation: None,
             cwe_ids: vec![],
+                    noisy: false,
         }
     }
 

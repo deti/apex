@@ -80,6 +80,7 @@ impl Detector for JsCryptoFailureDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![327, 328],
+                    noisy: false,
                     });
                     continue;
                 }
@@ -106,6 +107,7 @@ impl Detector for JsCryptoFailureDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![327, 328],
+                    noisy: false,
                     });
                     continue;
                 }
@@ -140,6 +142,7 @@ impl Detector for JsCryptoFailureDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: vec![327, 328],
+                    noisy: false,
                         });
                     }
                 }

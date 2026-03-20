@@ -91,6 +91,7 @@ mod tests {
             explanation: None,
             fix: None,
             cwe_ids: vec![],
+                    noisy: false,
         }
     }
 

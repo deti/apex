@@ -139,6 +139,7 @@ impl Detector for MutexAcrossAwaitDetector {
                                 explanation: None,
                                 fix: None,
                                 cwe_ids: vec![833],
+                    noisy: false,
                             });
                             // Report once per lock acquisition.
                             lock_line_idx = None;

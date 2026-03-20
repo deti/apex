@@ -71,6 +71,7 @@ impl Detector for PartialCmpUnwrapDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![754],
+                    noisy: false,
                     });
                 }
             }

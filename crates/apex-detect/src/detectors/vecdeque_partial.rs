@@ -68,6 +68,7 @@ impl Detector for VecDequePartialDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![682],
+                    noisy: false,
                     });
                 }
             }

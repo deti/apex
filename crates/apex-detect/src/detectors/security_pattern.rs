@@ -1168,6 +1168,7 @@ impl Detector for SecurityPatternDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: pattern.cwe.to_vec(),
+                            noisy: false,
                         });
                         break; // One finding per line max
                     }

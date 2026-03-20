@@ -293,6 +293,7 @@ fn find_expression_sinks(
             explanation: None,
             fix: None,
             cwe_ids: vec![22],
+                    noisy: false,
         });
     }
 
@@ -402,6 +403,7 @@ impl Detector for PathNormalizationDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![22],
+                    noisy: false,
                     });
                 }
             }

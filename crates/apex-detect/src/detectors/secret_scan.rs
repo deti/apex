@@ -440,6 +440,7 @@ impl Detector for SecretScanDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: vec![798],
+                    noisy: false,
                         });
                         continue; // one finding per line
                     }
@@ -475,6 +476,7 @@ impl Detector for SecretScanDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: vec![798],
+                    noisy: false,
                         });
                         break; // one finding per line
                     }

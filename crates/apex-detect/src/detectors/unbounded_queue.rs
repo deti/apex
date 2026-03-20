@@ -139,6 +139,7 @@ impl Detector for UnboundedQueueDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![400, 770],
+                    noisy: false,
                     });
                 }
             }

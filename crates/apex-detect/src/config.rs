@@ -54,15 +54,15 @@ fn default_enabled() -> Vec<String> {
     ]
 }
 
-/// Detectors excluded from audit mode — they generate too much noise without
-/// meaningful security signal in a code-review context.
-const AUDIT_EXCLUDED_DETECTORS: &[&str] = &[
+/// Detectors that produce high-volume code-quality findings. All enabled by
+/// default but findings are tagged `noisy: true` so consumers can filter them
+/// in summaries while still showing them in full reports.
+pub const NOISY_DETECTORS: &[&str] = &[
     "panic",
     "mixed-bool-ops",
     "static",
     "duplicated-fn",
     "process-exit-in-lib",
-    // Code quality detectors — too noisy for audit mode
     "string-concat-in-loop",
     "regex-in-loop",
     "hardcoded-env-values",
@@ -71,13 +71,15 @@ const AUDIT_EXCLUDED_DETECTORS: &[&str] = &[
     "poisoned-mutex-recovery",
 ];
 
-/// Returns the default enabled detector set with noisy detectors removed for
-/// audit (code-review) mode.
+/// Returns true if the detector name is marked as noisy.
+pub fn is_noisy_detector(name: &str) -> bool {
+    NOISY_DETECTORS.contains(&name)
+}
+
+/// Returns the default enabled detector set for audit mode.
+/// All detectors are enabled — noisy ones are tagged, not excluded.
 pub fn default_audit_enabled() -> Vec<String> {
     default_enabled()
-        .into_iter()
-        .filter(|name| !AUDIT_EXCLUDED_DETECTORS.contains(&name.as_str()))
-        .collect()
 }
 
 fn default_severity() -> String {
@@ -423,28 +425,22 @@ detect_mode = "Fast"
     // -----------------------------------------------------------------------
 
     #[test]
-    fn audit_enabled_excludes_noisy_detectors() {
+    fn audit_enabled_includes_all_detectors() {
         let audit = default_audit_enabled();
-        assert!(
-            !audit.contains(&"panic".to_string()),
-            "audit mode should exclude 'panic'"
-        );
-        assert!(
-            !audit.contains(&"mixed-bool-ops".to_string()),
-            "audit mode should exclude 'mixed-bool-ops'"
-        );
-        assert!(
-            !audit.contains(&"static".to_string()),
-            "audit mode should exclude 'static'"
-        );
-        assert!(
-            !audit.contains(&"duplicated-fn".to_string()),
-            "audit mode should exclude 'duplicated-fn'"
-        );
-        assert!(
-            !audit.contains(&"process-exit-in-lib".to_string()),
-            "audit mode should exclude 'process-exit-in-lib'"
-        );
+        let default = default_enabled();
+        // Audit mode now includes all detectors — noisy ones are tagged, not excluded
+        assert_eq!(audit.len(), default.len());
+        assert!(audit.contains(&"panic".to_string()));
+        assert!(audit.contains(&"mixed-bool-ops".to_string()));
+        assert!(audit.contains(&"static".to_string()));
+    }
+
+    #[test]
+    fn noisy_detectors_are_identified() {
+        assert!(is_noisy_detector("panic"));
+        assert!(is_noisy_detector("string-concat-in-loop"));
+        assert!(!is_noisy_detector("security"));
+        assert!(!is_noisy_detector("ffi-panic"));
     }
 
     #[test]

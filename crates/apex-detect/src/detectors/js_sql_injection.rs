@@ -149,6 +149,7 @@ impl Detector for JsSqlInjectionDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: vec![89],
+                    noisy: false,
                         });
                         break; // One finding per line max
                     }

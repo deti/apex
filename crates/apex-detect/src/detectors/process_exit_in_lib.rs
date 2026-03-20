@@ -121,6 +121,7 @@ impl Detector for ProcessExitInLibDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![],
+                    noisy: false,
                     });
                 }
             }

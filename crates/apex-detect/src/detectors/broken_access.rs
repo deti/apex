@@ -201,6 +201,7 @@ fn make_finding(
         explanation: None,
         fix: None,
         cwe_ids: vec![cwe],
+                    noisy: false,
     }
 }
 

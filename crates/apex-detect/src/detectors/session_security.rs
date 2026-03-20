@@ -115,6 +115,7 @@ impl Detector for SessionSecurityDetector {
                                 explanation: None,
                                 fix: None,
                                 cwe_ids: vec![798],
+                    noisy: false,
                             });
                         }
                     }
@@ -167,6 +168,7 @@ impl Detector for SessionSecurityDetector {
                                     explanation: None,
                                     fix: None,
                                     cwe_ids: vec![798],
+                    noisy: false,
                                 });
                             }
 
@@ -198,6 +200,7 @@ impl Detector for SessionSecurityDetector {
                                     explanation: None,
                                     fix: None,
                                     cwe_ids: vec![614],
+                    noisy: false,
                                 });
                             }
 
@@ -224,6 +227,7 @@ impl Detector for SessionSecurityDetector {
                                     explanation: None,
                                     fix: None,
                                     cwe_ids: vec![1004],
+                    noisy: false,
                                 });
                             }
 
@@ -248,6 +252,7 @@ impl Detector for SessionSecurityDetector {
                                     explanation: None,
                                     fix: None,
                                     cwe_ids: vec![352],
+                    noisy: false,
                                 });
                             }
                         }

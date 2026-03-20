@@ -63,6 +63,7 @@ fn analyze_source(path: &Path, source: &str) -> Vec<Finding> {
                     explanation: None,
                     fix: None,
                     cwe_ids: vec![400],
+                    noisy: false,
                 });
             }
         }

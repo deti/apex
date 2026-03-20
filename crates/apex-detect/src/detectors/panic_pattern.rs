@@ -155,6 +155,7 @@ impl Detector for PanicPatternDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: vec![248],
+                    noisy: false,
                         });
                         break; // One finding per line max
                     }

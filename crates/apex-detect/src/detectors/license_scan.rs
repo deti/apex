@@ -173,6 +173,7 @@ impl LicenseScanDetector {
                 explanation: None,
                 fix: None,
                 cwe_ids: vec![],
+                    noisy: false,
             }),
             PolicyVerdict::Unknown => Some(Finding {
                 id: Uuid::new_v4(),
@@ -197,6 +198,7 @@ impl LicenseScanDetector {
                 explanation: None,
                 fix: None,
                 cwe_ids: vec![],
+                    noisy: false,
             }),
         }
     }

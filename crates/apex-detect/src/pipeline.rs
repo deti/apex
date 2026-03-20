@@ -266,6 +266,14 @@ impl DetectorPipeline {
         }
 
         deduplicate(&mut findings);
+
+        // Tag findings from noisy detectors
+        for finding in &mut findings {
+            if crate::config::is_noisy_detector(&finding.detector) {
+                finding.noisy = true;
+            }
+        }
+
         findings.sort_by_key(|f| (f.severity.rank(), f.covered as u8));
 
         AnalysisReport {
@@ -386,6 +394,7 @@ mod tests {
             explanation: None,
             fix: None,
             cwe_ids: vec![],
+                    noisy: false,
         }
     }
 
@@ -1279,22 +1288,14 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn from_audit_config_excludes_panic_and_noise() {
+    fn from_audit_config_includes_all_detectors() {
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_audit_config(&cfg, Language::Rust);
         let names: Vec<&str> = pipeline.detectors.iter().map(|d| d.name()).collect();
-        assert!(
-            !names.contains(&"panic-pattern"),
-            "audit mode should exclude panic-pattern"
-        );
-        assert!(
-            !names.contains(&"mixed-bool-ops"),
-            "audit mode should exclude mixed-bool-ops"
-        );
-        assert!(
-            !names.contains(&"static-analysis"),
-            "audit mode should exclude static-analysis"
-        );
+        // Audit mode now includes all detectors — noisy ones tagged, not excluded
+        assert!(names.contains(&"panic-pattern"), "audit should include panic-pattern");
+        assert!(names.contains(&"mixed-bool-ops"), "audit should include mixed-bool-ops");
+        assert!(names.contains(&"static-analysis"), "audit should include static-analysis");
     }
 
     #[test]
