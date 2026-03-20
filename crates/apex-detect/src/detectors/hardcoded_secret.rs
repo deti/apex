@@ -67,6 +67,72 @@ const SECRET_PATTERNS: &[SecretPattern] = &[
         severity: Severity::High,
         description: "Slack token — rotate and use environment variables",
     },
+    // Java: setPassword("..."), new SecretKeySpec("...")
+    SecretPattern {
+        name: "Java Password Setter",
+        regex: r#"(?i)setPassword\s*\(\s*["'][^"']{8,}["']"#,
+        severity: Severity::High,
+        description: "Hardcoded password in setter — use secrets manager",
+    },
+    SecretPattern {
+        name: "Java SecretKeySpec",
+        regex: r#"new\s+SecretKeySpec\s*\(\s*["']"#,
+        severity: Severity::High,
+        description: "Hardcoded secret key material — use key management service",
+    },
+    // Go: password := "...", os.Setenv("SECRET", "...")
+    SecretPattern {
+        name: "Go Password Assignment",
+        regex: r#"(?i)(password|passwd|secret|apiKey)\s*:=\s*["'][^"']{8,}["']"#,
+        severity: Severity::High,
+        description: "Hardcoded secret in Go assignment — use environment variables",
+    },
+    SecretPattern {
+        name: "Go Setenv Secret",
+        regex: r#"(?i)os\.Setenv\s*\(\s*["'](SECRET|PASSWORD|API_KEY|TOKEN|AUTH)"#,
+        severity: Severity::High,
+        description: "Hardcoded secret in os.Setenv — use runtime configuration",
+    },
+    // C/C++: #define API_KEY "...", char *password = "..."
+    SecretPattern {
+        name: "C/C++ Define Secret",
+        regex: r#"(?i)#\s*define\s+(API_KEY|SECRET|PASSWORD|AUTH_TOKEN|PRIVATE_KEY)\s+["']"#,
+        severity: Severity::High,
+        description: "Hardcoded secret in preprocessor define — use configuration",
+    },
+    SecretPattern {
+        name: "C/C++ Password String",
+        regex: r#"(?i)(char\s*\*|const\s+char\s*\*)\s*(password|secret|api_key|auth_token)\s*=\s*["'][^"']{8,}["']"#,
+        severity: Severity::High,
+        description: "Hardcoded secret in C/C++ string variable — use secure configuration",
+    },
+    // C#: string password = "...", Password = "...", ConnectionString = "..."
+    SecretPattern {
+        name: "C# Password Property",
+        regex: r#"(?i)(Password|ConnectionString)\s*=\s*["'][^"']{8,}["']"#,
+        severity: Severity::High,
+        description: "Hardcoded secret in C# property — use secrets manager",
+    },
+    SecretPattern {
+        name: "C# String Secret",
+        regex: r#"(?i)string\s+(password|secret|apiKey|connectionString)\s*=\s*["'][^"']{8,}["']"#,
+        severity: Severity::High,
+        description: "Hardcoded secret in C# string variable — use secure configuration",
+    },
+    // Swift: let apiKey = "...", SecretKey = "..."
+    SecretPattern {
+        name: "Swift Let/Var Secret",
+        regex: r#"(?i)(let|var)\s+(apiKey|password|secret|secretKey|authToken)\s*=\s*["'][^"']{8,}["']"#,
+        severity: Severity::High,
+        description: "Hardcoded secret in Swift variable — use Keychain or environment",
+    },
+    // Kotlin: val password = "...", const val API_KEY = "..."
+    SecretPattern {
+        name: "Kotlin Val Secret",
+        regex: r#"(?i)(const\s+val|val|var)\s+(password|secret|apiKey|api_key|authToken|secretKey)\s*=\s*["'][^"']{8,}["']"#,
+        severity: Severity::High,
+        description: "Hardcoded secret in Kotlin variable — use secure configuration",
+    },
 ];
 
 const FALSE_POSITIVE_VALUES: &[&str] = &[
@@ -98,6 +164,16 @@ const ENV_VAR_MARKERS: &[&str] = &[
     "process.env",
     "std::env",
     "getenv(",
+    // Java/Kotlin
+    "System.getenv(",
+    "System.getProperty(",
+    // Go
+    "os.Getenv(",
+    // C#
+    "Environment.GetEnvironmentVariable(",
+    "ConfigurationManager",
+    // Swift
+    "ProcessInfo.processInfo.environment",
 ];
 
 fn is_example_file(path: &std::path::Path) -> bool {
@@ -635,5 +711,281 @@ mod tests {
         if !findings.is_empty() {
             assert!(findings[0].cwe_ids.contains(&798));
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Java language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_java_set_password() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Database.java"),
+            "conn.setPassword(\"s3cretP@ssw0rd!\")\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Java);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect Java setPassword");
+    }
+
+    #[tokio::test]
+    async fn detects_java_secret_key_spec() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Crypto.java"),
+            "SecretKey key = new SecretKeySpec(\"mysecretkey12345\".getBytes(), \"AES\");\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Java);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect Java SecretKeySpec");
+    }
+
+    #[tokio::test]
+    async fn detects_java_password_string() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Config.java"),
+            "String password = \"s3cretP@ssw0rd!\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Java);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect Java String password");
+    }
+
+    #[tokio::test]
+    async fn skips_java_env_var() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Config.java"),
+            "String password = System.getenv(\"DB_PASSWORD\")\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Java);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty(), "should skip Java env var lookup");
+    }
+
+    // -----------------------------------------------------------------------
+    // Go language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_go_password_assignment() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/config.go"),
+            "password := \"s3cretP@ssw0rd!\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Go);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect Go password :=");
+    }
+
+    #[tokio::test]
+    async fn detects_go_api_key_assignment() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/config.go"),
+            "apiKey := \"sk_abcdefghij1234567890\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Go);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect Go apiKey := assignment");
+    }
+
+    #[tokio::test]
+    async fn skips_go_env_var() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/config.go"),
+            "password := os.Getenv(\"DB_PASSWORD\")\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Go);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty(), "should skip Go os.Getenv");
+    }
+
+    // -----------------------------------------------------------------------
+    // C/C++ language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_c_define_api_key() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/config.h"),
+            "#define API_KEY \"sk_abcdefghij1234567890\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::C);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect C #define API_KEY");
+    }
+
+    #[tokio::test]
+    async fn detects_c_char_password() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/auth.c"),
+            "const char* password = \"s3cretP@ssw0rd!\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::C);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect C char* password");
+    }
+
+    #[tokio::test]
+    async fn detects_cpp_password_string() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/auth.cpp"),
+            "char *password = \"s3cretP@ssw0rd!\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Cpp);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect C++ char* password");
+    }
+
+    #[tokio::test]
+    async fn skips_c_getenv() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/config.c"),
+            "char* password = getenv(\"DB_PASSWORD\")\n".into(),
+        );
+        let ctx = make_ctx(files, Language::C);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty(), "should skip C getenv");
+    }
+
+    // -----------------------------------------------------------------------
+    // C# language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_csharp_password_property() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Config.cs"),
+            "Password = \"s3cretP@ssw0rd!\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::CSharp);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect C# Password property");
+    }
+
+    #[tokio::test]
+    async fn detects_csharp_connection_string() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Startup.cs"),
+            "ConnectionString = \"Server=db;User=admin;Password=s3cretP@ss\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::CSharp);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect C# ConnectionString");
+    }
+
+    #[tokio::test]
+    async fn detects_csharp_string_secret() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Auth.cs"),
+            "string password = \"s3cretP@ssw0rd!\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::CSharp);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect C# string password");
+    }
+
+    #[tokio::test]
+    async fn skips_csharp_env_var() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Config.cs"),
+            "var password = Environment.GetEnvironmentVariable(\"DB_PASSWORD\")\n".into(),
+        );
+        let ctx = make_ctx(files, Language::CSharp);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty(), "should skip C# environment variable");
+    }
+
+    // -----------------------------------------------------------------------
+    // Swift language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_swift_let_api_key() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("Sources/Config.swift"),
+            "let apiKey = \"sk_abcdefghij1234567890\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Swift);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect Swift let apiKey");
+    }
+
+    #[tokio::test]
+    async fn detects_swift_var_password() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("Sources/Auth.swift"),
+            "var password = \"s3cretP@ssw0rd!\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Swift);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect Swift var password");
+    }
+
+    #[tokio::test]
+    async fn skips_swift_process_info_env() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("Sources/Config.swift"),
+            "let key = ProcessInfo.processInfo.environment[\"API_KEY\"]\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Swift);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty(), "should skip Swift ProcessInfo.environment");
+    }
+
+    // -----------------------------------------------------------------------
+    // Kotlin language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_kotlin_val_password() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Config.kt"),
+            "val password = \"s3cretP@ssw0rd!\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Kotlin);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect Kotlin val password");
+    }
+
+    #[tokio::test]
+    async fn detects_kotlin_const_val_api_key() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Constants.kt"),
+            "const val apiKey = \"sk_abcdefghij1234567890\"\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Kotlin);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect Kotlin const val apiKey");
+    }
+
+    #[tokio::test]
+    async fn skips_kotlin_system_getenv() {
+        let mut files = HashMap::new();
+        files.insert(
+            PathBuf::from("src/Config.kt"),
+            "val password = System.getenv(\"DB_PASSWORD\")\n".into(),
+        );
+        let ctx = make_ctx(files, Language::Kotlin);
+        let findings = HardcodedSecretDetector.analyze(&ctx).await.unwrap();
+        assert!(findings.is_empty(), "should skip Kotlin System.getenv");
     }
 }

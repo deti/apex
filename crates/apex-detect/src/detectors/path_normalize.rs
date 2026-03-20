@@ -14,6 +14,17 @@ pub struct PathNormalizationDetector;
 const PYTHON_FN_KEYWORDS: &[&str] = &["def "];
 const JS_FN_KEYWORDS: &[&str] = &["function ", "=> {", "=> (", "const ", "let ", "var "];
 const RUST_FN_KEYWORDS: &[&str] = &["fn "];
+const JAVA_FN_KEYWORDS: &[&str] = &[
+    "public ", "private ", "protected ", "static ", "void ", "String ", "File ",
+];
+const GO_FN_KEYWORDS: &[&str] = &["func "];
+const C_FN_KEYWORDS: &[&str] = &["void ", "int ", "char ", "FILE ", "size_t ", "ssize_t "];
+const CSHARP_FN_KEYWORDS: &[&str] = &[
+    "public ", "private ", "protected ", "internal ", "static ", "void ", "string ", "async ",
+];
+const SWIFT_FN_KEYWORDS: &[&str] = &["func "];
+const KOTLIN_FN_KEYWORDS: &[&str] = &["fun "];
+const RUBY_FN_KEYWORDS: &[&str] = &["def "];
 
 // Normalization / safe-path calls that indicate the developer handled the input.
 const PYTHON_NORM_CALLS: &[&str] = &[
@@ -39,6 +50,48 @@ const RUST_NORM_CALLS: &[&str] = &[
     ".clean()",
     "fs::canonicalize",
     "path_clean",
+];
+
+const JAVA_NORM_CALLS: &[&str] = &[
+    ".normalize()",
+    "getcanonicalpath()",
+    "getcanonicalfile()",
+    "torealpath(",
+    "paths.get(",
+];
+
+const GO_NORM_CALLS: &[&str] = &[
+    "filepath.clean(",
+    "filepath.abs(",
+    "filepath.evalsymlinks(",
+];
+
+const C_NORM_CALLS: &[&str] = &["realpath(", "canonicalize_file_name("];
+
+const CSHARP_NORM_CALLS: &[&str] = &[
+    "path.getfullpath(",
+    "path.combine(",
+    "getfullpath(",
+];
+
+const SWIFT_NORM_CALLS: &[&str] = &[
+    "standardizedfileurl",
+    "resolvingsymlinksinpath",
+    "standardized",
+];
+
+const KOTLIN_NORM_CALLS: &[&str] = &[
+    ".normalize()",
+    "canonicalpath",
+    "getcanonicalpath()",
+    "torealpath(",
+];
+
+const RUBY_NORM_CALLS: &[&str] = &[
+    "file.expand_path(",
+    "pathname.new(",
+    ".cleanpath",
+    ".realpath",
 ];
 
 // Validation checks that also count as safe — these protect without full normalisation.
@@ -73,6 +126,13 @@ fn collect_suspect_function_ranges(source: &str, lang: Language) -> Vec<(usize, 
         Language::Python => PYTHON_FN_KEYWORDS,
         Language::JavaScript => JS_FN_KEYWORDS,
         Language::Rust => RUST_FN_KEYWORDS,
+        Language::Java => JAVA_FN_KEYWORDS,
+        Language::Go => GO_FN_KEYWORDS,
+        Language::C | Language::Cpp => C_FN_KEYWORDS,
+        Language::CSharp => CSHARP_FN_KEYWORDS,
+        Language::Swift => SWIFT_FN_KEYWORDS,
+        Language::Kotlin => KOTLIN_FN_KEYWORDS,
+        Language::Ruby => RUBY_FN_KEYWORDS,
         _ => return vec![],
     };
 
@@ -88,7 +148,7 @@ fn collect_suspect_function_ranges(source: &str, lang: Language) -> Vec<(usize, 
             // line or another `def`; for Rust/JS, track brace depth.
             let fn_start = i;
             let fn_end = match lang {
-                Language::Python => find_python_fn_end(&lines, i),
+                Language::Python | Language::Ruby => find_python_fn_end(&lines, i),
                 _ => find_brace_fn_end(&lines, i),
             };
             ranges.push((fn_start, fn_end));
@@ -167,12 +227,78 @@ const JS_SINKS: &[&str] = &[
 
 const RUST_SINKS: &[&str] = &["fs::read(", "fs::write(", "fs::remove_file(", "File::open("];
 
+const JAVA_SINKS: &[&str] = &[
+    "new File(",
+    "Paths.get(",
+    "FileInputStream(",
+    "Files.readAllBytes(",
+    "FileReader(",
+    "FileOutputStream(",
+];
+
+const GO_SINKS: &[&str] = &[
+    "os.Open(",
+    "os.ReadFile(",
+    "filepath.Join(",
+    "os.Create(",
+    "os.OpenFile(",
+    "ioutil.ReadFile(",
+];
+
+const C_SINKS: &[&str] = &["fopen(", "open(", "stat(", "readdir(", "fread("];
+
+const CSHARP_SINKS: &[&str] = &[
+    "File.Open(",
+    "File.ReadAllText(",
+    "Path.Combine(",
+    "StreamReader(",
+    "File.ReadAllBytes(",
+    "FileStream(",
+];
+
+const SWIFT_SINKS: &[&str] = &[
+    "FileManager.default",
+    "URL(fileURLWithPath:",
+    "Data(contentsOf:",
+    "String(contentsOfFile:",
+];
+
+const KOTLIN_SINKS: &[&str] = &[
+    "File(",
+    "Paths.get(",
+    "FileInputStream(",
+    "Files.readAllBytes(",
+    "FileReader(",
+];
+
+const RUBY_SINKS: &[&str] = &[
+    "File.open(",
+    "File.read(",
+    "FileUtils.",
+    "IO.read(",
+    "File.readlines(",
+];
+
 // User-input indicators per language.
 const PYTHON_USER_INPUT: &[&str] = &[
     "request", "args", "form", "params", "query", "input", "argv", "sys.argv",
 ];
 const JS_USER_INPUT: &[&str] = &["req.", "request", "params", "query", "body", "input"];
 const RUST_USER_INPUT: &[&str] = &["user", "input", "request", "query", "args"];
+const JAVA_USER_INPUT: &[&str] = &[
+    "request", "getparameter", "getpathinfo", "getservletpath",
+    "user_input", "args[", "params.",
+];
+const GO_USER_INPUT: &[&str] = &["r.url", "r.formvalue", "request", "user_input", "args[", "query.get"];
+const C_USER_INPUT: &[&str] = &["argv", "user_input", "user", "buf", "request"];
+const CSHARP_USER_INPUT: &[&str] = &[
+    "request", "httpcontext", "user_input", "query[", "formcollection",
+];
+const SWIFT_USER_INPUT: &[&str] = &["request", "user_input", "params", "query", "urlcomponents"];
+const KOTLIN_USER_INPUT: &[&str] = &[
+    "request", "getparameter", "user_input", "args[", "params.",
+];
+const RUBY_USER_INPUT: &[&str] = &["params", "request", "input", "args", "ARGV"];
 
 // Normalization calls for expression-level scanning (superset of the function-level ones).
 const PYTHON_EXPR_NORM: &[&str] = &[
@@ -189,12 +315,34 @@ const PYTHON_EXPR_NORM: &[&str] = &[
 const JS_EXPR_NORM: &[&str] = &["path.normalize", "path.resolve", "sanitize", "basename"];
 
 const RUST_EXPR_NORM: &[&str] = &["canonicalize", "normalize", "sanitize"];
+const JAVA_EXPR_NORM: &[&str] = &[
+    "normalize", "getcanonicalpath", "getcanonicalfile", "torealpath", "sanitize",
+];
+const GO_EXPR_NORM: &[&str] = &["filepath.clean", "filepath.abs", "filepath.evalsymlinks"];
+const C_EXPR_NORM: &[&str] = &["realpath", "canonicalize_file_name", "sanitize"];
+const CSHARP_EXPR_NORM: &[&str] = &["getfullpath", "path.getfullpath", "sanitize"];
+const SWIFT_EXPR_NORM: &[&str] = &[
+    "standardizedfileurl", "resolvingsymlinksinpath", "standardized", "sanitize",
+];
+const KOTLIN_EXPR_NORM: &[&str] = &[
+    "normalize", "canonicalpath", "getcanonicalpath", "torealpath", "sanitize",
+];
+const RUBY_EXPR_NORM: &[&str] = &[
+    "file.expand_path", "cleanpath", "realpath", "sanitize",
+];
 
 fn sinks_for(lang: Language) -> &'static [&'static str] {
     match lang {
         Language::Python => PYTHON_SINKS,
         Language::JavaScript => JS_SINKS,
         Language::Rust => RUST_SINKS,
+        Language::Java => JAVA_SINKS,
+        Language::Go => GO_SINKS,
+        Language::C | Language::Cpp => C_SINKS,
+        Language::CSharp => CSHARP_SINKS,
+        Language::Swift => SWIFT_SINKS,
+        Language::Kotlin => KOTLIN_SINKS,
+        Language::Ruby => RUBY_SINKS,
         _ => &[],
     }
 }
@@ -204,6 +352,13 @@ fn user_input_indicators(lang: Language) -> &'static [&'static str] {
         Language::Python => PYTHON_USER_INPUT,
         Language::JavaScript => JS_USER_INPUT,
         Language::Rust => RUST_USER_INPUT,
+        Language::Java => JAVA_USER_INPUT,
+        Language::Go => GO_USER_INPUT,
+        Language::C | Language::Cpp => C_USER_INPUT,
+        Language::CSharp => CSHARP_USER_INPUT,
+        Language::Swift => SWIFT_USER_INPUT,
+        Language::Kotlin => KOTLIN_USER_INPUT,
+        Language::Ruby => RUBY_USER_INPUT,
         _ => &[],
     }
 }
@@ -213,6 +368,13 @@ fn expr_norm_calls(lang: Language) -> &'static [&'static str] {
         Language::Python => PYTHON_EXPR_NORM,
         Language::JavaScript => JS_EXPR_NORM,
         Language::Rust => RUST_EXPR_NORM,
+        Language::Java => JAVA_EXPR_NORM,
+        Language::Go => GO_EXPR_NORM,
+        Language::C | Language::Cpp => C_EXPR_NORM,
+        Language::CSharp => CSHARP_EXPR_NORM,
+        Language::Swift => SWIFT_EXPR_NORM,
+        Language::Kotlin => KOTLIN_EXPR_NORM,
+        Language::Ruby => RUBY_EXPR_NORM,
         _ => &[],
     }
 }
@@ -306,6 +468,13 @@ fn has_normalization(body_lines: &[&str], lang: Language) -> bool {
         Language::Python => PYTHON_NORM_CALLS,
         Language::JavaScript => JS_NORM_CALLS,
         Language::Rust => RUST_NORM_CALLS,
+        Language::Java => JAVA_NORM_CALLS,
+        Language::Go => GO_NORM_CALLS,
+        Language::C | Language::Cpp => C_NORM_CALLS,
+        Language::CSharp => CSHARP_NORM_CALLS,
+        Language::Swift => SWIFT_NORM_CALLS,
+        Language::Kotlin => KOTLIN_NORM_CALLS,
+        Language::Ruby => RUBY_NORM_CALLS,
         _ => &[],
     };
 
@@ -367,7 +536,17 @@ impl Detector for PathNormalizationDetector {
             let lang = ctx.language;
             if !matches!(
                 lang,
-                Language::Python | Language::JavaScript | Language::Rust
+                Language::Python
+                    | Language::JavaScript
+                    | Language::Rust
+                    | Language::Java
+                    | Language::Go
+                    | Language::C
+                    | Language::Cpp
+                    | Language::CSharp
+                    | Language::Swift
+                    | Language::Kotlin
+                    | Language::Ruby
             ) {
                 continue;
             }
@@ -675,6 +854,343 @@ def load(path):
         assert!(
             !findings.is_empty(),
             "non-vendor production file should still be detected"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Java language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_java_file_read_without_normalization() {
+        let src = "\
+public void readFile(String path) {
+    File f = new File(path);
+    FileInputStream fis = new FileInputStream(f);
+}
+";
+        let ctx = make_ctx_with_source("src/FileService.java", src, Language::Java);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect Java File operation without normalization"
+        );
+    }
+
+    #[tokio::test]
+    async fn java_canonical_path_suppresses() {
+        let src = "\
+public void readFile(String path) {
+    String safe = new File(path).getCanonicalPath();
+    FileInputStream fis = new FileInputStream(safe);
+}
+";
+        let ctx = make_ctx_with_source("src/FileService.java", src, Language::Java);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "getCanonicalPath should suppress Java finding"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Go language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_go_file_open_without_normalization() {
+        let src = "\
+func readFile(path string) {
+    f, err := os.Open(path)
+    defer f.Close()
+}
+";
+        let ctx = make_ctx_with_source("src/handler.go", src, Language::Go);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect Go os.Open without normalization"
+        );
+    }
+
+    #[tokio::test]
+    async fn go_filepath_clean_suppresses() {
+        let src = "\
+func readFile(path string) {
+    safe := filepath.Clean(path)
+    f, err := os.Open(safe)
+    defer f.Close()
+}
+";
+        let ctx = make_ctx_with_source("src/handler.go", src, Language::Go);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "filepath.Clean should suppress Go finding"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // C/C++ language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_c_fopen_without_normalization() {
+        let src = "\
+void read_file(const char* path) {
+    FILE* f = fopen(path, \"r\");
+    fclose(f);
+}
+";
+        let ctx = make_ctx_with_source("src/file.c", src, Language::C);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect C fopen without normalization"
+        );
+    }
+
+    #[tokio::test]
+    async fn c_realpath_suppresses() {
+        let src = "\
+void read_file(const char* path) {
+    char resolved[PATH_MAX];
+    realpath(path, resolved);
+    FILE* f = fopen(resolved, \"r\");
+    fclose(f);
+}
+";
+        let ctx = make_ctx_with_source("src/file.c", src, Language::C);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "realpath should suppress C finding"
+        );
+    }
+
+    #[tokio::test]
+    async fn detects_cpp_fopen_without_normalization() {
+        let src = "\
+void read_file(const char* path) {
+    FILE* f = fopen(path, \"r\");
+}
+";
+        let ctx = make_ctx_with_source("src/file.cpp", src, Language::Cpp);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect C++ fopen without normalization"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // C# language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_csharp_file_read_without_normalization() {
+        let src = "\
+public void ReadFile(string path) {
+    var content = File.ReadAllText(path);
+}
+";
+        let ctx = make_ctx_with_source("src/FileService.cs", src, Language::CSharp);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect C# File.ReadAllText without normalization"
+        );
+    }
+
+    #[tokio::test]
+    async fn csharp_get_full_path_suppresses() {
+        let src = "\
+public void ReadFile(string filePath) {
+    var safe = Path.GetFullPath(filePath);
+    var content = File.ReadAllText(safe);
+}
+";
+        let ctx = make_ctx_with_source("src/FileService.cs", src, Language::CSharp);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "Path.GetFullPath should suppress C# finding"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Swift language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_swift_file_read_without_normalization() {
+        let src = "\
+func readFile(path: String) {
+    let url = URL(fileURLWithPath: path)
+    let data = try Data(contentsOf: url)
+}
+";
+        let ctx = make_ctx_with_source("Sources/FileService.swift", src, Language::Swift);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect Swift file read without normalization"
+        );
+    }
+
+    #[tokio::test]
+    async fn swift_standardized_suppresses() {
+        let src = "\
+func readFile(path: String) {
+    let url = URL(fileURLWithPath: path).standardizedFileURL
+    let data = try Data(contentsOf: url)
+}
+";
+        let ctx = make_ctx_with_source("Sources/FileService.swift", src, Language::Swift);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "standardizedFileURL should suppress Swift finding"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Kotlin language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_kotlin_file_read_without_normalization() {
+        let src = "\
+fun readFile(path: String) {
+    val f = File(path)
+    val content = FileInputStream(f)
+}
+";
+        let ctx = make_ctx_with_source("src/FileService.kt", src, Language::Kotlin);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect Kotlin file read without normalization"
+        );
+    }
+
+    #[tokio::test]
+    async fn kotlin_canonical_path_suppresses() {
+        let src = "\
+fun readFile(path: String) {
+    val f = File(path)
+    val safe = f.canonicalPath
+    val content = FileInputStream(safe)
+}
+";
+        let ctx = make_ctx_with_source("src/FileService.kt", src, Language::Kotlin);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "canonicalPath should suppress Kotlin finding"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Ruby language tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_ruby_file_read_without_normalization() {
+        let src = "\
+def read_file(path)
+  content = File.read(path)
+  content
+";
+        let ctx = make_ctx_with_source("src/file_service.rb", src, Language::Ruby);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect Ruby File.read without normalization"
+        );
+    }
+
+    #[tokio::test]
+    async fn ruby_expand_path_suppresses() {
+        let src = "\
+def read_file(path)
+  safe = File.expand_path(path)
+  content = File.read(safe)
+  content
+";
+        let ctx = make_ctx_with_source("src/file_service.rb", src, Language::Ruby);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            findings.is_empty(),
+            "File.expand_path should suppress Ruby finding"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Expression-level tests for new languages
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_java_expr_sink_with_user_input() {
+        let src = "\
+public void download(HttpServletRequest request) {
+    String path = request.getParameter(\"file\");
+    FileInputStream fis = new FileInputStream(path);
+}
+";
+        let ctx = make_ctx_with_source("src/Servlet.java", src, Language::Java);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect Java FileInputStream with request input"
+        );
+    }
+
+    #[tokio::test]
+    async fn detects_go_expr_sink_with_user_input() {
+        let src = "\
+func handler(w http.ResponseWriter, r *http.Request) {
+    path := r.URL.Query().Get(\"file\")
+    f, _ := os.Open(path)
+}
+";
+        let ctx = make_ctx_with_source("src/handler.go", src, Language::Go);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect Go os.Open with request input"
+        );
+    }
+
+    #[tokio::test]
+    async fn detects_csharp_expr_sink_with_user_input() {
+        let src = "\
+public void Download(HttpContext context) {
+    var path = Request.Query[\"file\"];
+    var content = File.ReadAllText(path);
+}
+";
+        let ctx = make_ctx_with_source("src/Controller.cs", src, Language::CSharp);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect C# File.ReadAllText with Request input"
+        );
+    }
+
+    #[tokio::test]
+    async fn detects_ruby_expr_sink_with_user_input() {
+        let src = "\
+def download
+  path = params[:file]
+  content = File.read(path)
+  send_data content
+";
+        let ctx = make_ctx_with_source("src/controller.rb", src, Language::Ruby);
+        let findings = PathNormalizationDetector.analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect Ruby File.read with params input"
         );
     }
 }
