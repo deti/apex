@@ -1,3 +1,75 @@
+# APEX Configuration — self-analysis settings
+
+[coverage]
+target = 1.0
+min_ratchet = 0.8
+
+[fuzz]
+corpus_max = 10000
+stall_iterations = 50
+
+[agent]
+max_rounds = 3
+
+[sandbox]
+process_timeout_ms = 300000
+
 [threat_model]
-type = "cli-tool"
-untrusted_sources = ["recv", "socket"]
+# APEX is a developer console tool — not a web service, no network listeners.
+# The primary threat surface is processing untrusted codebases via CLI.
+type = "console-tool"
+description = "Single-binary CLI that scans codebases for security issues and coverage gaps"
+
+# Assets
+assets = [
+    "target codebase source files (read-only)",
+    "coverage data (.apex/ directory)",
+    "generated test files (apex_generated/)",
+    "subprocess output (compiler, test runner, coverage tool)",
+]
+
+# Trust boundaries
+trust_boundaries = [
+    "CLI arguments (user-controlled paths, lang flags)",
+    "Target codebase (untrusted source files parsed by detectors)",
+    "Subprocess execution (compiler, test runner invoked on target)",
+    "Coverage tool output (JSON/XML parsed from external tools)",
+    "MCP protocol input (when running as MCP server)",
+]
+
+# Threats (STRIDE-aligned)
+[[threat_model.threats]]
+category = "Tampering"
+description = "Malicious source file crafted to exploit detector regex (ReDoS)"
+mitigation = "regex-lite crate (no backtracking), timeout on all subprocess calls"
+severity = "medium"
+
+[[threat_model.threats]]
+category = "Tampering"
+description = "Path traversal in --target argument escaping working directory"
+mitigation = "canonicalize() on all target paths before use"
+severity = "high"
+
+[[threat_model.threats]]
+category = "Elevation"
+description = "Command injection via crafted file paths passed to subprocess"
+mitigation = "CommandSpec abstraction, no shell=true, argument validation"
+severity = "high"
+
+[[threat_model.threats]]
+category = "Information Disclosure"
+description = "Secrets in target codebase leaked to stdout/logs"
+mitigation = "Finding output shows file:line, not full content; no secrets in logs"
+severity = "low"
+
+[[threat_model.threats]]
+category = "Denial of Service"
+description = "Large codebase exhausts memory or time"
+mitigation = "File count caps, adaptive timeouts, 1MB file size limit"
+severity = "medium"
+
+[[threat_model.threats]]
+category = "Tampering"
+description = "MCP server receives malicious JSON-RPC input"
+mitigation = "rmcp crate handles protocol parsing; target paths canonicalized"
+severity = "medium"
