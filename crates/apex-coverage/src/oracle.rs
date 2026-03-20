@@ -1,5 +1,7 @@
 use crate::heuristic::BranchHeuristic;
-use apex_core::types::{BranchId, BranchState, CoverageLevel, ExecutionResult, SeedId};
+use apex_core::types::{
+    AgentCoverageResult, BranchId, BranchState, CoverageLevel, ExecutionResult, SeedId,
+};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -241,6 +243,32 @@ impl CoverageOracle {
                 self.covered_count.fetch_add(1, Ordering::Release);
             }
         }
+    }
+}
+
+impl CoverageOracle {
+    /// Construct a `CoverageOracle` pre-populated from an `AgentCoverageResult`.
+    ///
+    /// This sets the total and covered branch counts from the agent's report.
+    /// Synthetic `BranchId`s are registered so that `coverage_percent()`,
+    /// `total_count()`, and `covered_count()` reflect the agent's numbers.
+    /// Actual file-level coverage parsing happens later via format-specific parsers.
+    pub fn from_agent_result(result: &AgentCoverageResult) -> Self {
+        let oracle = Self::new();
+        // Create synthetic branch IDs for the reported counts.
+        // Use file_id=0 and sequential lines to represent the aggregate.
+        let total = result.total_branches as u32;
+        let covered = result.covered_branches.min(result.total_branches) as u32;
+
+        let branches: Vec<BranchId> = (0..total).map(|i| BranchId::new(0, i, 0, 0)).collect();
+        oracle.register_branches(branches.clone());
+
+        let seed = SeedId::new();
+        for b in branches.iter().take(covered as usize) {
+            oracle.mark_covered(b, seed);
+        }
+
+        oracle
     }
 }
 
@@ -776,6 +804,55 @@ mod tests {
         let oracle = CoverageOracle::new();
         let b = make_branch(999, 0);
         assert!(oracle.heuristic_for(&b).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // from_agent_result
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn from_agent_result_populates_counts() {
+        let result = AgentCoverageResult {
+            success: true,
+            coverage_dir: Some("/tmp/cov".into()),
+            coverage_format: Some("lcov".into()),
+            total_branches: 100,
+            covered_branches: 75,
+            coverage_pct: 75.0,
+            test_output_path: None,
+            test_count: 50,
+            test_pass: 48,
+            test_fail: 2,
+            test_skip: 0,
+            errors_encountered: vec![],
+            tools_used: vec!["pytest".into()],
+            duration_secs: 30,
+        };
+        let oracle = CoverageOracle::from_agent_result(&result);
+        assert_eq!(oracle.total_count(), 100);
+        assert_eq!(oracle.covered_count(), 75);
+        assert!((oracle.coverage_percent() - 75.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn from_agent_result_zero_branches() {
+        let result = AgentCoverageResult::default();
+        let oracle = CoverageOracle::from_agent_result(&result);
+        assert_eq!(oracle.total_count(), 0);
+        assert_eq!(oracle.covered_count(), 0);
+    }
+
+    #[test]
+    fn from_agent_result_covered_exceeds_total_clamped() {
+        let result = AgentCoverageResult {
+            success: true,
+            total_branches: 10,
+            covered_branches: 999, // exceeds total
+            ..AgentCoverageResult::default()
+        };
+        let oracle = CoverageOracle::from_agent_result(&result);
+        assert_eq!(oracle.total_count(), 10);
+        assert_eq!(oracle.covered_count(), 10); // clamped to total
     }
 
     use proptest::prelude::*;
