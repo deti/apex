@@ -318,30 +318,82 @@ fn contains_placeholder(line: &str) -> bool {
 }
 
 /// Extract string literal contents from a line for entropy analysis.
+///
+/// Handles standard `"..."` and `'...'` strings, C# verbatim strings `@"..."`,
+/// Swift raw strings `#"..."#`, and C/C++ `#define X "..."` macros.
 fn extract_string_literals(line: &str) -> Vec<String> {
     let mut results = Vec::new();
-    let mut chars = line.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '"' || ch == '\'' {
-            let quote = ch;
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // C# verbatim string: @"..."
+        if bytes[i] == b'@' && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+            i += 2; // skip @"
             let mut literal = String::new();
-            let mut escaped = false;
-            for c in chars.by_ref() {
-                if escaped {
-                    literal.push(c);
-                    escaped = false;
-                } else if c == '\\' {
-                    escaped = true;
-                } else if c == quote {
-                    break;
+            while i < bytes.len() {
+                if bytes[i] == b'"' {
+                    // In verbatim strings, "" is an escaped quote
+                    if i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+                        literal.push('"');
+                        i += 2;
+                    } else {
+                        i += 1;
+                        break;
+                    }
                 } else {
-                    literal.push(c);
+                    literal.push(bytes[i] as char);
+                    i += 1;
                 }
             }
             if literal.len() >= 8 {
                 results.push(literal);
             }
+            continue;
         }
+        // Swift raw string: #"..."#
+        if bytes[i] == b'#' && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+            i += 2; // skip #"
+            let mut literal = String::new();
+            while i < bytes.len() {
+                if bytes[i] == b'"' && i + 1 < bytes.len() && bytes[i + 1] == b'#' {
+                    i += 2; // skip "#
+                    break;
+                } else {
+                    literal.push(bytes[i] as char);
+                    i += 1;
+                }
+            }
+            if literal.len() >= 8 {
+                results.push(literal);
+            }
+            continue;
+        }
+        // Standard string literals
+        if bytes[i] == b'"' || bytes[i] == b'\'' {
+            let quote = bytes[i];
+            i += 1;
+            let mut literal = String::new();
+            let mut escaped = false;
+            while i < bytes.len() {
+                if escaped {
+                    literal.push(bytes[i] as char);
+                    escaped = false;
+                } else if bytes[i] == b'\\' {
+                    escaped = true;
+                } else if bytes[i] == quote {
+                    i += 1;
+                    break;
+                } else {
+                    literal.push(bytes[i] as char);
+                }
+                i += 1;
+            }
+            if literal.len() >= 8 {
+                results.push(literal);
+            }
+            continue;
+        }
+        i += 1;
     }
     results
 }
@@ -1224,5 +1276,132 @@ mod tests {
             findings.is_empty(),
             "code-generated files should be skipped"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-language support tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn detects_secret_in_java_file() {
+        let ctx = single_file_ctx(
+            "src/Config.java",
+            "password = \"s3cretP@ssw0rd!\"\n",
+            Language::Java,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect secret in Java file");
+    }
+
+    #[tokio::test]
+    async fn detects_aws_key_in_kotlin_file() {
+        let ctx = single_file_ctx(
+            "src/Config.kt",
+            "val key = \"AKIAIOSFODNN7ABCDEFG\"\n",
+            Language::Kotlin,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect AWS key in Kotlin file");
+    }
+
+    #[tokio::test]
+    async fn detects_secret_in_c_file() {
+        let ctx = single_file_ctx(
+            "src/config.c",
+            "#define API_KEY \"AKIAIOSFODNN7ABCDEFG\"\n",
+            Language::C,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect secret in C file");
+    }
+
+    #[tokio::test]
+    async fn detects_secret_in_cpp_file() {
+        let ctx = single_file_ctx(
+            "src/config.hpp",
+            "password = \"s3cretP@ssw0rd!\"\n",
+            Language::Cpp,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect secret in C++ file");
+    }
+
+    #[tokio::test]
+    async fn detects_secret_in_csharp_file() {
+        let ctx = single_file_ctx(
+            "src/Config.cs",
+            "password = \"s3cretP@ssw0rd!\"\n",
+            Language::CSharp,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect secret in C# file");
+    }
+
+    #[tokio::test]
+    async fn detects_secret_in_csharp_verbatim_string() {
+        let mut ctx = single_file_ctx(
+            "src/Db.cs",
+            "var connStr = @\"Server=db;Password=s3cretP@ssw0rd!ReallyLong\"\n",
+            Language::CSharp,
+        );
+        ctx.config.entropy_threshold = 3.5;
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect secret in C# verbatim string"
+        );
+    }
+
+    #[tokio::test]
+    async fn detects_secret_in_swift_file() {
+        let ctx = single_file_ctx(
+            "Sources/Config.swift",
+            "password = \"s3cretP@ssw0rd!\"\n",
+            Language::Swift,
+        );
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(!findings.is_empty(), "should detect secret in Swift file");
+    }
+
+    #[tokio::test]
+    async fn detects_secret_in_swift_raw_string() {
+        let mut ctx = single_file_ctx(
+            "Sources/Auth.swift",
+            "let token = #\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0\"#\n",
+            Language::Swift,
+        );
+        ctx.config.entropy_threshold = 3.5;
+        let findings = SecretScanDetector::new().analyze(&ctx).await.unwrap();
+        assert!(
+            !findings.is_empty(),
+            "should detect secret in Swift raw string"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // String extraction tests for new literal forms
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_csharp_verbatim_string() {
+        let lits = extract_string_literals(r#"var s = @"Server=db;Password=secret123""#);
+        assert!(!lits.is_empty(), "should extract C# verbatim string");
+        assert!(lits[0].contains("Server=db"));
+    }
+
+    #[test]
+    fn extract_swift_raw_string() {
+        let input = r##"let s = #"some_long_raw_string_here"#"##;
+        let lits = extract_string_literals(input);
+        assert!(!lits.is_empty(), "should extract Swift raw string literal");
+        assert!(lits[0].contains("some_long_raw_string_here"));
+    }
+
+    #[test]
+    fn extract_c_define_string() {
+        let input = r##"#define SECRET "mySecretValue12345""##;
+        let lits = extract_string_literals(input);
+        assert!(!lits.is_empty(), "should extract C define string literal");
+        assert_eq!(lits[0], "mySecretValue12345");
     }
 }
