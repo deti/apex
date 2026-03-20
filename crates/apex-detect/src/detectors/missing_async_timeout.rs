@@ -11,23 +11,63 @@ use crate::Detector;
 pub struct MissingAsyncTimeoutDetector;
 
 /// Rust async I/O patterns that require a timeout wrapper.
+///
+/// These are intentionally specific to HTTP client and tokio network primitives.
+/// Generic `.get(` / `.connect(` are excluded to avoid false positives on
+/// `HashMap::get`, `serde_json::Value::get`, `Vec::get`, etc.
 static RUST_ASYNC_IO: &[&str] = &[
+    // TCP / UDP primitives — fully-qualified paths only
     "TcpStream::connect(",
     "tokio::net::TcpStream::connect(",
     "tokio::net::UdpSocket::bind(",
     "tokio::net::TcpListener::bind(",
+    // reqwest HTTP client — fully-qualified
     "reqwest::Client::new(",
     "reqwest::get(",
-    ".get(",
-    ".post(",
-    ".put(",
-    ".delete(",
+    // HTTP method calls on a named client variable (e.g. `client.get(`, `Client::get(`)
+    "client.get(",
+    "client.post(",
+    "client.put(",
+    "client.delete(",
+    "client.send(",
+    "Client::get(",
+    "Client::post(",
+    "Client::put(",
+    "Client::delete(",
+    // `.send(` is kept but guarded by the allowlist filter below
     ".send(",
+];
+
+/// Tokens on a line that indicate it is NOT an HTTP/network call.
+/// Any match suppresses the finding for that line.
+static FALSE_POSITIVE_ALLOWLIST: &[&str] = &[
+    "HashMap",
+    "BTreeMap",
+    "IndexMap",
+    "serde_json",
+    "Value::",
+    "json[",
+    "map.get(",
+    "map.insert(",
+    "cache.",
+    "store.",
+    // `.send(` is also used by `mpsc::Sender::send` — suppress those
+    "Sender",
+    "sender",
+    "tx.send(",
+    "channel",
 ];
 
 /// Suppression: `tokio::time::timeout` anywhere in the async fn scope suppresses.
 fn has_timeout_in_source(source: &str) -> bool {
     source.contains("tokio::time::timeout") || source.contains("timeout(")
+}
+
+/// Returns true if the line looks like a false positive (non-HTTP `.get(` etc.)
+fn is_false_positive(line: &str) -> bool {
+    FALSE_POSITIVE_ALLOWLIST
+        .iter()
+        .any(|token| line.contains(token))
 }
 
 fn analyze_source(path: &std::path::Path, source: &str, lang: Language) -> Vec<Finding> {
@@ -54,15 +94,19 @@ fn analyze_source(path: &std::path::Path, source: &str, lang: Language) -> Vec<F
             continue;
         }
 
-        // Skip if this line or nearby context already has a timeout wrapper
+        // Skip if this line already has a timeout wrapper
         if line.contains("timeout(") {
+            continue;
+        }
+
+        // Skip lines that match the false-positive allowlist
+        if is_false_positive(line) {
             continue;
         }
 
         for pattern in RUST_ASYNC_IO {
             if line.contains(pattern) {
                 // Check if the surrounding async fn scope has a timeout call.
-                // Find which scope we're in and check the full scope source.
                 let scope_has_timeout = async_scopes.iter().any(|s| {
                     if line_idx >= s.start_line && line_idx <= s.end_line {
                         let scope_source = lines[s.start_line..=s.end_line].join("\n");
@@ -210,5 +254,78 @@ async fn make_connection() {
 ";
         let findings = detect(src);
         assert_eq!(findings.len(), 1);
+    }
+
+    // --- False positive regression tests ---
+
+    #[test]
+    fn no_fp_hashmap_get() {
+        let src = "\
+async fn lookup(map: &HashMap<String, String>, key: &str) -> Option<String> {
+    let value = map.get(key).cloned();
+    value
+}
+";
+        let findings = detect(src);
+        assert_eq!(findings.len(), 0, "HashMap::get should not trigger the detector");
+    }
+
+    #[test]
+    fn no_fp_serde_json_value_get() {
+        let src = "\
+async fn parse(data: &serde_json::Value) -> Option<&str> {
+    data.get(\"name\").and_then(|v| v.as_str())
+}
+";
+        let findings = detect(src);
+        assert_eq!(findings.len(), 0, "serde_json::Value::get should not trigger");
+    }
+
+    #[test]
+    fn no_fp_btreemap_get() {
+        let src = "\
+async fn lookup(map: &BTreeMap<u32, String>) -> Option<&String> {
+    map.get(&42)
+}
+";
+        let findings = detect(src);
+        assert_eq!(findings.len(), 0, "BTreeMap::get should not trigger");
+    }
+
+    #[test]
+    fn no_fp_mpsc_sender_send() {
+        let src = "\
+async fn forward(tx: tokio::sync::mpsc::Sender<u32>) {
+    tx.send(1).await.unwrap();
+}
+";
+        let findings = detect(src);
+        assert_eq!(findings.len(), 0, "mpsc::Sender::send should not trigger");
+    }
+
+    #[test]
+    fn detects_client_get_without_timeout() {
+        let src = "\
+async fn fetch(client: &reqwest::Client) {
+    let resp = client.get(\"https://api.example.com\").send().await.unwrap();
+    println!(\"{}\", resp.status());
+}
+";
+        let findings = detect(src);
+        // client.get( matches — should fire
+        assert!(!findings.is_empty(), "client.get( should be detected");
+    }
+
+    #[test]
+    fn detects_client_post_without_timeout() {
+        let src = "\
+async fn submit(client: &reqwest::Client) {
+    let resp = client.post(\"https://api.example.com/submit\")
+        .json(&payload)
+        .send().await.unwrap();
+}
+";
+        let findings = detect(src);
+        assert!(!findings.is_empty(), "client.post( should be detected");
     }
 }

@@ -24,7 +24,7 @@ static ATOMIC_OPS: &[&str] = &[
     ".compare_exchange_weak(",
 ];
 
-/// Heuristics that indicate a variable is shared across threads.
+/// Heuristics that indicate a variable is shared across threads (static or Arc-wrapped).
 static SHARED_INDICATORS: &[&str] = &[
     "static ",
     "Arc<",
@@ -41,8 +41,36 @@ static SHARED_INDICATORS: &[&str] = &[
     "Atomic",
 ];
 
+/// Returns true if `line_idx` falls inside a `#[cfg(test)]` block or a `mod tests` block.
+///
+/// Heuristic: scan backwards from `line_idx` looking for `#[cfg(test)]` or `mod tests`.
+fn in_test_block(lines: &[&str], line_idx: usize) -> bool {
+    for i in (0..line_idx).rev() {
+        let trimmed = lines[i].trim();
+        if trimmed.contains("#[cfg(test)]") || trimmed.contains("mod tests") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true if the variable named `var_name` is a local `let` binding in `source`.
+/// Local atomics on the stack are single-threaded by definition — Relaxed is safe there.
+fn is_local_atomic_binding(source: &str, var_name: &str) -> bool {
+    for line in source.lines() {
+        let trimmed = line.trim();
+        // Match `let <var_name> =` or `let mut <var_name> =` — local binding only
+        if (trimmed.starts_with(&format!("let {} =", var_name))
+            || trimmed.starts_with(&format!("let mut {} =", var_name)))
+            && !trimmed.contains("static ")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn is_likely_shared(source: &str, var_name: &str) -> bool {
-    // Check if the variable name appears in a static declaration or Arc context
     for line in source.lines() {
         let trimmed = line.trim();
         if trimmed.contains(var_name) {
@@ -80,12 +108,21 @@ fn analyze_source(path: &std::path::Path, source: &str, lang: Language) -> Vec<F
             continue;
         }
 
-        // Extract the variable name being operated on (heuristic: word before the `.op(` )
+        // Skip findings inside #[cfg(test)] / mod tests blocks
+        if in_test_block(&lines, line_idx) {
+            continue;
+        }
+
+        // Extract the variable name being operated on (heuristic: word before the `.op(`)
         let var_name = extract_receiver(line).unwrap_or_default();
 
+        // Skip local (stack) atomics — Relaxed is safe for thread-local use
+        if !var_name.is_empty() && is_local_atomic_binding(source, &var_name) {
+            continue;
+        }
+
         // Check if this atomic is on a shared variable (static, Arc, etc.)
-        // Also flag if the source file contains any Arc or static atomic patterns
-        let is_shared = !var_name.is_empty() && is_likely_shared(source, &var_name)
+        let is_shared = (!var_name.is_empty() && is_likely_shared(source, &var_name))
             || source.contains("Arc<")
             || source.contains("static ")
             || line.contains("COUNTER")
@@ -121,7 +158,7 @@ fn analyze_source(path: &std::path::Path, source: &str, lang: Language) -> Vec<F
             explanation: None,
             fix: None,
             cwe_ids: vec![362],
-                    noisy: false,
+            noisy: false,
         });
     }
 
@@ -242,5 +279,110 @@ fn check() -> bool {
         let findings = detect(src);
         assert!(!findings.is_empty());
         assert!(findings[0].title.contains("Relaxed memory ordering"));
+    }
+
+    // --- Suppression regression tests ---
+
+    #[test]
+    fn no_finding_in_cfg_test_block() {
+        let src = "\
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+fn increment() {
+    COUNTER.fetch_add(1, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_counter() {
+        // In tests, Relaxed is acceptable for single-threaded test environments
+        COUNTER.fetch_add(1, Ordering::Relaxed);
+        assert!(COUNTER.load(Ordering::Relaxed) > 0);
+    }
+}
+";
+        let findings = detect(src);
+        assert_eq!(
+            findings.len(),
+            0,
+            "Relaxed ordering inside #[cfg(test)] block should be suppressed"
+        );
+    }
+
+    #[test]
+    fn no_finding_for_local_atomic() {
+        let src = "\
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+fn compute() -> usize {
+    let local = AtomicUsize::new(0);
+    local.fetch_add(1, Ordering::Relaxed);
+    local.load(Ordering::Relaxed)
+}
+";
+        let findings = detect(src);
+        assert_eq!(
+            findings.len(),
+            0,
+            "Local stack atomic with Relaxed ordering should not be flagged"
+        );
+    }
+
+    #[test]
+    fn no_finding_for_local_mut_atomic() {
+        let src = "\
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+fn compute() -> usize {
+    let mut counter = AtomicUsize::new(0);
+    counter.fetch_add(1, Ordering::Relaxed);
+    counter.load(Ordering::Relaxed)
+}
+";
+        let findings = detect(src);
+        assert_eq!(
+            findings.len(),
+            0,
+            "Local mut stack atomic with Relaxed ordering should not be flagged"
+        );
+    }
+
+    #[test]
+    fn still_detects_relaxed_on_static_outside_tests() {
+        let src = "\
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static SHARED: AtomicUsize = AtomicUsize::new(0);
+
+pub fn add(n: usize) {
+    SHARED.fetch_add(n, Ordering::Relaxed);
+}
+";
+        let findings = detect(src);
+        assert!(
+            !findings.is_empty(),
+            "Static shared atomic with Relaxed outside test block should still be detected"
+        );
+    }
+
+    #[test]
+    fn still_detects_relaxed_on_arc_outside_tests() {
+        let src = "\
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+
+pub fn flip(flag: Arc<AtomicBool>) {
+    flag.store(false, Ordering::Relaxed);
+}
+";
+        let findings = detect(src);
+        assert!(
+            !findings.is_empty(),
+            "Arc-wrapped atomic with Relaxed outside test block should still be detected"
+        );
     }
 }

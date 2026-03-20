@@ -259,60 +259,86 @@ impl Sandbox for PythonTestSandbox {
 
         // Step 2: export coverage to JSON (best-effort; may fail on syntax errors).
         // Bounded to 60 s to prevent a stalled coverage export from hanging the run.
+        // Use spawn() + kill_on_drop(true) so the child is killed if the timeout
+        // fires — prevents zombie processes leaking after a timeout.
         let json_ok = if let Some(uv) = &self.uv_bin {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(60),
-                tokio::process::Command::new(uv)
-                    .args([
-                        "run",
-                        "python3",
-                        "-m",
-                        "coverage",
-                        "json",
-                        &format!("--data-file={}", cov_data.display()),
-                        "-o",
-                        &cov_json.to_string_lossy(),
-                    ])
-                    .current_dir(&self.target_dir)
-                    .output(),
-            )
-            .await
-            {
-                Ok(Ok(o)) => o.status.success(),
-                Ok(Err(e)) => {
-                    warn!(error = %e, "coverage json command failed");
+            let child = tokio::process::Command::new(uv)
+                .args([
+                    "run",
+                    "python3",
+                    "-m",
+                    "coverage",
+                    "json",
+                    &format!("--data-file={}", cov_data.display()),
+                    "-o",
+                    &cov_json.to_string_lossy(),
+                ])
+                .current_dir(&self.target_dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn();
+            match child {
+                Err(e) => {
+                    warn!(error = %e, "coverage json command failed to spawn");
                     false
                 }
-                Err(_) => {
-                    warn!("coverage json export timed out after 60 s — skipping");
-                    false
+                Ok(child) => {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(60),
+                        child.wait_with_output(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(o)) => o.status.success(),
+                        Ok(Err(e)) => {
+                            warn!(error = %e, "coverage json command failed");
+                            false
+                        }
+                        Err(_) => {
+                            warn!("coverage json export timed out after 60 s — skipping");
+                            false
+                        }
+                    }
                 }
             }
         } else {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(60),
-                tokio::process::Command::new("python3")
-                    .args([
-                        "-m",
-                        "coverage",
-                        "json",
-                        &format!("--data-file={}", cov_data.display()),
-                        "-o",
-                        &cov_json.to_string_lossy(),
-                    ])
-                    .current_dir(&self.target_dir)
-                    .output(),
-            )
-            .await
-            {
-                Ok(Ok(o)) => o.status.success(),
-                Ok(Err(e)) => {
-                    warn!(error = %e, "coverage json command failed");
+            let child = tokio::process::Command::new("python3")
+                .args([
+                    "-m",
+                    "coverage",
+                    "json",
+                    &format!("--data-file={}", cov_data.display()),
+                    "-o",
+                    &cov_json.to_string_lossy(),
+                ])
+                .current_dir(&self.target_dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .kill_on_drop(true)
+                .spawn();
+            match child {
+                Err(e) => {
+                    warn!(error = %e, "coverage json command failed to spawn");
                     false
                 }
-                Err(_) => {
-                    warn!("coverage json export timed out after 60 s — skipping");
-                    false
+                Ok(child) => {
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(60),
+                        child.wait_with_output(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(o)) => o.status.success(),
+                        Ok(Err(e)) => {
+                            warn!(error = %e, "coverage json command failed");
+                            false
+                        }
+                        Err(_) => {
+                            warn!("coverage json export timed out after 60 s — skipping");
+                            false
+                        }
+                    }
                 }
             }
         };

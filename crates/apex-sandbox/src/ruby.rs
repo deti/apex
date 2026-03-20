@@ -135,12 +135,19 @@ impl Sandbox for RubyTestSandbox {
             return Err(ApexError::Sandbox("ruby not found in PATH".into()));
         }
 
+        // Use spawn() + kill_on_drop(true) so the child is killed if the timeout
+        // fires — prevents zombie processes leaking after a timeout.
+        let ruby_child = tokio::process::Command::new("ruby")
+            .arg(test_file.to_string_lossy().as_ref())
+            .current_dir(&self.target_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| ApexError::Sandbox(format!("spawn ruby: {e}")))?;
         let run_output = tokio::time::timeout(
             std::time::Duration::from_millis(self.timeout_ms),
-            tokio::process::Command::new("ruby")
-                .arg(test_file.to_string_lossy().as_ref())
-                .current_dir(&self.target_dir)
-                .output(),
+            ruby_child.wait_with_output(),
         )
         .await;
 
@@ -159,7 +166,7 @@ impl Sandbox for RubyTestSandbox {
                     input: None,
                 });
             }
-            Ok(Err(e)) => return Err(ApexError::Sandbox(format!("spawn ruby: {e}"))),
+            Ok(Err(e)) => return Err(ApexError::Sandbox(format!("ruby wait: {e}"))),
             Ok(Ok(o)) => o,
         };
 

@@ -215,7 +215,12 @@ impl CommandRunner for RealCommandRunner {
             .current_dir(&spec.working_dir)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            // kill_on_drop(true) ensures the child process is sent SIGKILL when the
+            // Child handle is dropped (e.g. when a tokio::time::timeout fires and
+            // the future is cancelled).  Without this flag, the child becomes a
+            // zombie because tokio does NOT kill it on drop by default.
+            .kill_on_drop(true);
 
         for (k, v) in &spec.env {
             cmd.env(k, v);
@@ -241,9 +246,8 @@ impl CommandRunner for RealCommandRunner {
         let result = tokio::time::timeout(deadline, child.wait_with_output()).await;
 
         match result {
-            // On timeout, the `child` future is dropped. tokio's `Child` Drop impl
-            // sends SIGKILL on Unix (and terminates on Windows), so the child process
-            // is cleaned up automatically — no orphaned processes.
+            // On timeout, the `child` future is dropped. The kill_on_drop(true) flag
+            // above ensures the child is sent SIGKILL when the Child handle is dropped.
             Err(_) => Err(ApexError::Timeout(spec.timeout_ms)),
             Ok(Err(e)) => Err(ApexError::Subprocess {
                 exit_code: -1,

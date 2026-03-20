@@ -441,12 +441,18 @@ impl Sandbox for FirecrackerSandbox {
     }
 
     async fn run(&self, seed: &InputSeed) -> Result<ExecutionResult> {
-        let snap = self
-            .snapshot
-            .lock()
-            .map_err(|e| ApexError::Sandbox(format!("snapshot lock poisoned: {e}")))?
-            .clone()
-            .ok_or_else(|| ApexError::Sandbox("FirecrackerSandbox not prepared".into()))?;
+        // Use an explicit block so the MutexGuard (which is !Send) is dropped
+        // before the first .await point — the async state machine cannot hold
+        // a std::sync::MutexGuard across a suspend point.
+        let snap = {
+            let guard = self
+                .snapshot
+                .lock()
+                .map_err(|e| ApexError::Sandbox(format!("snapshot lock poisoned: {e}")))?;
+            guard
+                .clone()
+                .ok_or_else(|| ApexError::Sandbox("FirecrackerSandbox not prepared".into()))?
+        };
 
         let start = Instant::now();
 
@@ -529,12 +535,16 @@ impl Sandbox for FirecrackerSandbox {
     }
 
     async fn restore(&self, _id: SnapshotId) -> Result<()> {
-        let snap = self
-            .snapshot
-            .lock()
-            .map_err(|e| ApexError::Sandbox(format!("snapshot lock poisoned: {e}")))?
-            .clone()
-            .ok_or_else(|| ApexError::Sandbox("no snapshot available".into()))?;
+        // Explicit block ensures the MutexGuard is dropped before .await below.
+        let snap = {
+            let guard = self
+                .snapshot
+                .lock()
+                .map_err(|e| ApexError::Sandbox(format!("snapshot lock poisoned: {e}")))?;
+            guard
+                .clone()
+                .ok_or_else(|| ApexError::Sandbox("no snapshot available".into()))?
+        };
         let client = self.client();
         client
             .load_snapshot(&snap.snap_file, &snap.mem_file)
