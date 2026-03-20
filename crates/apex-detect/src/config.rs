@@ -29,6 +29,28 @@ fn default_enabled() -> Vec<String> {
         "js-timeout".into(),
         "js-insecure-deser".into(),
         "js-path-traversal".into(),
+        // Dig 2 high-confidence detectors
+        "blocking-io-in-async".into(),
+        "swallowed-errors".into(),
+        "broad-exception-catching".into(),
+        "error-context-loss".into(),
+        "string-concat-in-loop".into(),
+        "regex-in-loop".into(),
+        // P1 concurrency detectors
+        "mutex-across-await".into(),
+        "open-without-with".into(),
+        "unbounded-queue".into(),
+        "ffi-panic".into(),
+        // P2 detectors
+        "missing-async-timeout".into(),
+        "zombie-subprocess".into(),
+        "relaxed-atomics".into(),
+        "hardcoded-env-values".into(),
+        "wall-clock-misuse".into(),
+        // P3 detectors
+        "missing-shutdown-handler".into(),
+        "connection-in-loop".into(),
+        "poisoned-mutex-recovery".into(),
     ]
 }
 
@@ -40,6 +62,13 @@ const AUDIT_EXCLUDED_DETECTORS: &[&str] = &[
     "static",
     "duplicated-fn",
     "process-exit-in-lib",
+    // Code quality detectors — too noisy for audit mode
+    "string-concat-in-loop",
+    "regex-in-loop",
+    "hardcoded-env-values",
+    "wall-clock-misuse",
+    "error-context-loss",
+    "poisoned-mutex-recovery",
 ];
 
 /// Returns the default enabled detector set with noisy detectors removed for
@@ -283,7 +312,7 @@ clippy_extra_args = ["-W", "clippy::pedantic"]
     #[test]
     fn empty_toml_gives_defaults() {
         let cfg: DetectConfig = toml::from_str("").unwrap();
-        assert_eq!(cfg.enabled.len(), 27);
+        assert_eq!(cfg.enabled.len(), 45);
         assert_eq!(cfg.severity_threshold, "low");
     }
 
@@ -385,7 +414,7 @@ detect_mode = "Fast"
         let cfg = DetectConfig::default();
         let json = serde_json::to_string(&cfg).unwrap();
         let cfg2: DetectConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(cfg2.enabled.len(), 27);
+        assert_eq!(cfg2.enabled.len(), 45);
         assert_eq!(cfg2.severity_threshold, "low");
     }
 
