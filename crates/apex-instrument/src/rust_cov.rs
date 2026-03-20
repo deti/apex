@@ -67,8 +67,22 @@ impl Instrumentor for RustCovInstrumentor {
 
         // Propagate PATH explicitly so cargo-llvm-cov is found even when the
         // subprocess doesn't inherit the user's shell profile (e.g. cron, CI).
+        // Check if this is a workspace with apex-rpc (needs --exclude to avoid protoc dep)
+        let is_workspace = root.join("Cargo.toml").exists() && {
+            let content = std::fs::read_to_string(root.join("Cargo.toml")).unwrap_or_default();
+            content.contains("[workspace]")
+        };
+        let has_rpc = root.join("crates/apex-rpc").exists();
+
+        let mut args = vec!["llvm-cov", "--json", "--output-path", json_path_str.as_str()];
+        if is_workspace {
+            args.push("--workspace");
+            if has_rpc {
+                args.extend(["--exclude", "apex-rpc"]);
+            }
+        }
         let mut spec = CommandSpec::new("cargo", root)
-            .args(["llvm-cov", "--json", "--output-path", &json_path_str, "--exclude", "apex-rpc"])
+            .args(args)
             .timeout(300_000); // 5 min — large projects need more than 30s
 
         if let Ok(path) = std::env::var("PATH") {
