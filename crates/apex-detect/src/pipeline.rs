@@ -159,6 +159,34 @@ impl DetectorPipeline {
             detectors.push(Box::new(JsPathTraversalDetector));
         }
 
+        // Wave 4 — P2 detectors
+        if cfg.enabled.contains(&"missing-async-timeout".into()) && lang == Language::Rust {
+            detectors.push(Box::new(MissingAsyncTimeoutDetector));
+        }
+        if cfg.enabled.contains(&"zombie-subprocess".into()) && lang == Language::Rust {
+            detectors.push(Box::new(ZombieSubprocessDetector));
+        }
+        if cfg.enabled.contains(&"relaxed-atomics".into()) && lang == Language::Rust {
+            detectors.push(Box::new(RelaxedAtomicsDetector));
+        }
+        if cfg.enabled.contains(&"hardcoded-env-values".into()) {
+            detectors.push(Box::new(HardcodedEnvValuesDetector));
+        }
+        if cfg.enabled.contains(&"wall-clock-misuse".into()) {
+            detectors.push(Box::new(WallClockMisuseDetector));
+        }
+
+        // Wave 5 — P3 detectors
+        if cfg.enabled.contains(&"missing-shutdown-handler".into()) && lang == Language::Rust {
+            detectors.push(Box::new(MissingShutdownHandlerDetector));
+        }
+        if cfg.enabled.contains(&"connection-in-loop".into()) {
+            detectors.push(Box::new(ConnectionInLoopDetector));
+        }
+        if cfg.enabled.contains(&"poisoned-mutex-recovery".into()) && lang == Language::Rust {
+            detectors.push(Box::new(PoisonedMutexRecoveryDetector));
+        }
+
         // Spec mining detectors (opt-in)
         if cfg.enabled.contains(&"data-transform".into()) {
             detectors.push(Box::new(DataTransformSpecMiner));

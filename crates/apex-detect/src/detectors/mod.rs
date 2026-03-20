@@ -58,6 +58,18 @@ pub mod js_sql_injection;
 pub mod js_ssrf;
 pub mod js_timeout;
 
+// Wave 4 — P2 detectors
+pub mod hardcoded_env_values;
+pub mod missing_async_timeout;
+pub mod relaxed_atomics;
+pub mod wall_clock_misuse;
+pub mod zombie_subprocess;
+
+// Wave 5 — P3 detectors
+pub mod connection_in_loop;
+pub mod missing_shutdown_handler;
+pub mod poisoned_mutex_recovery;
+
 pub use bandit::BanditRuleDetector;
 pub use data_transform_spec::DataTransformSpecMiner;
 pub use dep_audit::DependencyAuditDetector;
@@ -105,3 +117,15 @@ pub use js_path_traversal::JsPathTraversalDetector;
 pub use js_sql_injection::JsSqlInjectionDetector;
 pub use js_ssrf::JsSsrfDetector;
 pub use js_timeout::JsTimeoutDetector;
+
+// Wave 4 — P2 detectors
+pub use hardcoded_env_values::HardcodedEnvValuesDetector;
+pub use missing_async_timeout::MissingAsyncTimeoutDetector;
+pub use relaxed_atomics::RelaxedAtomicsDetector;
+pub use wall_clock_misuse::WallClockMisuseDetector;
+pub use zombie_subprocess::ZombieSubprocessDetector;
+
+// Wave 5 — P3 detectors
+pub use connection_in_loop::ConnectionInLoopDetector;
+pub use missing_shutdown_handler::MissingShutdownHandlerDetector;
+pub use poisoned_mutex_recovery::PoisonedMutexRecoveryDetector;
