@@ -658,6 +658,53 @@ pub struct PathConstraint {
     pub direction_taken: bool,
 }
 
+// ---------------------------------------------------------------------------
+// Agent coverage result (agentic instrumentation pipeline)
+// ---------------------------------------------------------------------------
+
+/// Result from an agentic coverage run.
+///
+/// The coverage agent writes this as JSON to stdout, delimited by
+/// `APEX_COVERAGE_RESULT_BEGIN` / `APEX_COVERAGE_RESULT_END` markers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentCoverageResult {
+    pub success: bool,
+    pub coverage_dir: Option<String>,
+    pub coverage_format: Option<String>,
+    pub total_branches: u64,
+    pub covered_branches: u64,
+    pub coverage_pct: f64,
+    pub test_output_path: Option<String>,
+    pub test_count: u64,
+    pub test_pass: u64,
+    pub test_fail: u64,
+    pub test_skip: u64,
+    pub errors_encountered: Vec<String>,
+    pub tools_used: Vec<String>,
+    pub duration_secs: u64,
+}
+
+impl Default for AgentCoverageResult {
+    fn default() -> Self {
+        AgentCoverageResult {
+            success: false,
+            coverage_dir: None,
+            coverage_format: None,
+            total_branches: 0,
+            covered_branches: 0,
+            coverage_pct: 0.0,
+            test_output_path: None,
+            test_count: 0,
+            test_pass: 0,
+            test_fail: 0,
+            test_skip: 0,
+            errors_encountered: Vec::new(),
+            tools_used: Vec::new(),
+            duration_secs: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1020,6 +1067,64 @@ mod tests {
         assert_eq!(Language::Wasm.to_string(), "wasm");
         assert_eq!(Language::Ruby.to_string(), "ruby");
         assert_eq!(Language::Kotlin.to_string(), "kt");
+    }
+
+    // -----------------------------------------------------------------------
+    // AgentCoverageResult
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn agent_coverage_result_round_trip() {
+        let result = AgentCoverageResult {
+            success: true,
+            coverage_dir: Some("/tmp/project/.apex/coverage".into()),
+            coverage_format: Some("lcov".into()),
+            total_branches: 1247,
+            covered_branches: 891,
+            coverage_pct: 71.4,
+            test_output_path: Some("/tmp/project/.apex/test-output.log".into()),
+            test_count: 342,
+            test_pass: 340,
+            test_fail: 2,
+            test_skip: 0,
+            errors_encountered: vec![
+                "pip install failed: externally-managed-environment".into(),
+                "retried with venv".into(),
+            ],
+            tools_used: vec!["python3.12".into(), "coverage.py 7.4".into()],
+            duration_secs: 45,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let deserialized: AgentCoverageResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.success, true);
+        assert_eq!(deserialized.total_branches, 1247);
+        assert_eq!(deserialized.covered_branches, 891);
+        assert!((deserialized.coverage_pct - 71.4).abs() < 0.001);
+        assert_eq!(deserialized.test_count, 342);
+        assert_eq!(deserialized.test_pass, 340);
+        assert_eq!(deserialized.test_fail, 2);
+        assert_eq!(deserialized.test_skip, 0);
+        assert_eq!(deserialized.errors_encountered.len(), 2);
+        assert_eq!(deserialized.tools_used.len(), 2);
+        assert_eq!(deserialized.duration_secs, 45);
+        assert_eq!(
+            deserialized.coverage_dir.as_deref(),
+            Some("/tmp/project/.apex/coverage")
+        );
+        assert_eq!(deserialized.coverage_format.as_deref(), Some("lcov"));
+    }
+
+    #[test]
+    fn agent_coverage_result_default() {
+        let result = AgentCoverageResult::default();
+        assert!(!result.success);
+        assert!(result.coverage_dir.is_none());
+        assert!(result.coverage_format.is_none());
+        assert_eq!(result.total_branches, 0);
+        assert_eq!(result.covered_branches, 0);
+        assert_eq!(result.coverage_pct, 0.0);
+        assert!(result.errors_encountered.is_empty());
+        assert!(result.tools_used.is_empty());
     }
 
     #[test]
