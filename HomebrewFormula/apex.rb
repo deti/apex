@@ -2,7 +2,7 @@ class Apex < Formula
   desc "Autonomous path exploration — coverage-guided security analysis"
   homepage "https://github.com/sahajamoth/apex"
   license "MIT"
-  version "0.3.0"
+  version "0.3.1"
 
   on_macos do
     on_intel do

@@ -1,6 +1,6 @@
 {
   "name": "@apex-coverage/cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Autonomous path exploration — coverage-guided security analysis",
   "license": "MIT",
   "repository": {

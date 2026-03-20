@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apex-coverage"
-version = "0.3.0"
+version = "0.3.1"
 description = "Autonomous path exploration — coverage-guided security analysis"
 license = {text = "MIT"}
 readme = "README.md"
