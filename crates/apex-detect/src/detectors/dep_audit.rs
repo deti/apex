@@ -21,9 +21,7 @@ use crate::Detector;
 fn is_tool_not_found(err: &ApexError) -> bool {
     match err {
         ApexError::Subprocess { exit_code, stderr } => {
-            *exit_code == 127
-                || stderr.contains("not found")
-                || stderr.contains("No such file")
+            *exit_code == 127 || stderr.contains("not found") || stderr.contains("No such file")
         }
         _ => false,
     }
@@ -116,8 +114,12 @@ impl DependencyAuditDetector {
     }
 
     async fn audit_dotnet(&self, ctx: &AnalysisContext) -> Result<Vec<Finding>> {
-        let spec = CommandSpec::new("dotnet", &ctx.target_root)
-            .args(["list", "package", "--vulnerable", "--include-transitive"]);
+        let spec = CommandSpec::new("dotnet", &ctx.target_root).args([
+            "list",
+            "package",
+            "--vulnerable",
+            "--include-transitive",
+        ]);
 
         let output = match ctx.runner.run_command(&spec).await {
             Ok(o) => o,
@@ -157,30 +159,23 @@ impl DependencyAuditDetector {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 parse_swift_audit_output(&stdout)
             }
-            Err(e) if is_tool_not_found(&e) => {
-                Ok(vec![tool_not_installed_finding(
-                    "swift-audit",
-                    "Package.resolved",
-                )])
-            }
+            Err(e) if is_tool_not_found(&e) => Ok(vec![tool_not_installed_finding(
+                "swift-audit",
+                "Package.resolved",
+            )]),
             Err(e) => Err(ApexError::Detect(format!("swift-audit: {e}"))),
         }
     }
 
     async fn audit_cpp(&self, ctx: &AnalysisContext) -> Result<Vec<Finding>> {
-        let spec =
-            CommandSpec::new("osv-scanner", &ctx.target_root).args(["--lockfile", "."]);
+        let spec = CommandSpec::new("osv-scanner", &ctx.target_root).args(["--lockfile", "."]);
 
         match ctx.runner.run_command(&spec).await {
-            Ok(output) => {
-                parse_osv_scanner_output(&String::from_utf8_lossy(&output.stdout))
-            }
-            Err(e) if is_tool_not_found(&e) => {
-                Ok(vec![tool_not_installed_finding(
-                    "osv-scanner",
-                    "conanfile.txt",
-                )])
-            }
+            Ok(output) => parse_osv_scanner_output(&String::from_utf8_lossy(&output.stdout)),
+            Err(e) if is_tool_not_found(&e) => Ok(vec![tool_not_installed_finding(
+                "osv-scanner",
+                "conanfile.txt",
+            )]),
             Err(e) => Err(ApexError::Detect(format!("osv-scanner: {e}"))),
         }
     }
@@ -627,11 +622,7 @@ pub fn parse_osv_scanner_output(raw: &str) -> Result<Vec<Finding>> {
             for group in groups {
                 let ids: Vec<&str> = group["ids"]
                     .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str())
-                            .collect()
-                    })
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                     .unwrap_or_default();
 
                 if ids.is_empty() {
@@ -656,9 +647,7 @@ pub fn parse_osv_scanner_output(raw: &str) -> Result<Vec<Finding>> {
                     file: PathBuf::from("conanfile.txt"),
                     line: Some(advisory_line(advisory_id)),
                     title: format!("{pkg_name} {pkg_version} ({advisory_id})"),
-                    description: format!(
-                        "Vulnerable C/C++ dependency: {pkg_name} {pkg_version}"
-                    ),
+                    description: format!("Vulnerable C/C++ dependency: {pkg_name} {pkg_version}"),
                     evidence: vec![],
                     covered: true,
                     suggestion: format!("Upgrade {pkg_name} to a patched version"),
@@ -1376,8 +1365,10 @@ warning: 2 allowed advisories were not found in the advisory database:
     #[tokio::test]
     async fn analyze_ruby_uses_bundler_audit() {
         let output = "Name: rack\nVersion: 2.2.6\nAdvisory: CVE-2023-27539\nCriticality: High\nURL: https://nvd.nist.gov/...\nTitle: ReDoS\nSolution: upgrade\n\n";
-        let runner = FixtureRunner::new()
-            .on("bundler-audit", CommandOutput::success(output.as_bytes().to_vec()));
+        let runner = FixtureRunner::new().on(
+            "bundler-audit",
+            CommandOutput::success(output.as_bytes().to_vec()),
+        );
         let ctx = make_ctx_with_lang(runner, Language::Ruby);
         let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
         assert_eq!(findings.len(), 1);
@@ -1422,8 +1413,10 @@ warning: 2 allowed advisories were not found in the advisory database:
     #[tokio::test]
     async fn analyze_swift_uses_swift_audit() {
         let output = "Name: swift-crypto\nVersion: 2.1.0\nAdvisory: CVE-2023-9999\nCriticality: High\nURL: https://example.com\nTitle: Crypto vuln\nSolution: upgrade to >= 2.2.0\n\n";
-        let runner = FixtureRunner::new()
-            .on("swift-audit", CommandOutput::success(output.as_bytes().to_vec()));
+        let runner = FixtureRunner::new().on(
+            "swift-audit",
+            CommandOutput::success(output.as_bytes().to_vec()),
+        );
         let ctx = make_ctx_with_lang(runner, Language::Swift);
         let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
         assert_eq!(findings.len(), 1);
@@ -1493,8 +1486,10 @@ warning: 2 allowed advisories were not found in the advisory database:
                 }]
             }]
         }"#;
-        let runner =
-            FixtureRunner::new().on("osv-scanner", CommandOutput::success(raw.as_bytes().to_vec()));
+        let runner = FixtureRunner::new().on(
+            "osv-scanner",
+            CommandOutput::success(raw.as_bytes().to_vec()),
+        );
         let ctx = make_ctx_with_lang(runner, Language::Cpp);
         let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
         assert_eq!(findings.len(), 1);
@@ -1504,8 +1499,10 @@ warning: 2 allowed advisories were not found in the advisory database:
     #[tokio::test]
     async fn analyze_c_uses_osv_scanner() {
         let raw = r#"{"results": []}"#;
-        let runner =
-            FixtureRunner::new().on("osv-scanner", CommandOutput::success(raw.as_bytes().to_vec()));
+        let runner = FixtureRunner::new().on(
+            "osv-scanner",
+            CommandOutput::success(raw.as_bytes().to_vec()),
+        );
         let ctx = make_ctx_with_lang(runner, Language::C);
         let findings = DependencyAuditDetector.analyze(&ctx).await.unwrap();
         assert!(findings.is_empty());

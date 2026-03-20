@@ -78,9 +78,16 @@ pub enum DetectorTag {
 /// Map from detector name to its tag. Used for `--tag` filtering.
 pub fn detector_tag(name: &str) -> DetectorTag {
     match name {
-        "panic" | "mixed-bool-ops" | "duplicated-fn" | "process-exit-in-lib"
-        | "partial-cmp-unwrap" | "substring-security" | "vecdeque-partial"
-        | "unsafe-send-sync" | "discarded-async-result" | "static" => DetectorTag::Quality,
+        "panic"
+        | "mixed-bool-ops"
+        | "duplicated-fn"
+        | "process-exit-in-lib"
+        | "partial-cmp-unwrap"
+        | "substring-security"
+        | "vecdeque-partial"
+        | "unsafe-send-sync"
+        | "discarded-async-result"
+        | "static" => DetectorTag::Quality,
         "deps" | "license-scan" => DetectorTag::Dependency,
         _ => DetectorTag::Security,
     }
@@ -438,7 +445,10 @@ detect_mode = "Fast"
 
     #[test]
     fn detector_tag_security() {
-        assert_eq!(super::detector_tag("security"), super::DetectorTag::Security);
+        assert_eq!(
+            super::detector_tag("security"),
+            super::DetectorTag::Security
+        );
         assert_eq!(
             super::detector_tag("secret-scan"),
             super::DetectorTag::Security

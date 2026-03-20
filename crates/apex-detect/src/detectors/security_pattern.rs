@@ -669,7 +669,12 @@ const CODE_PATTERN_INDICATORS: &[&str] = &[
     "?",
 ];
 
-fn has_indicator(lines: &[&str], line_num: usize, indicators: &[&str], context_window: usize) -> bool {
+fn has_indicator(
+    lines: &[&str],
+    line_num: usize,
+    indicators: &[&str],
+    context_window: usize,
+) -> bool {
     !collect_matched_indicators(lines, line_num, indicators, context_window).is_empty()
 }
 
@@ -868,7 +873,14 @@ const CSHARP_SECURITY_PATTERNS: &[SecurityPattern] = &[
         description: "Process execution — verify arguments are not user-controlled",
         category: FindingCategory::Injection,
         base_severity: Severity::High,
-        user_input_indicators: &["Request", "input", "userInput", "param", "[FromBody]", "HttpContext"],
+        user_input_indicators: &[
+            "Request",
+            "input",
+            "userInput",
+            "param",
+            "[FromBody]",
+            "HttpContext",
+        ],
         sanitization_indicators: &["ProcessStartInfo", "ArgumentList"],
         cwe: &[78],
     },
@@ -877,7 +889,14 @@ const CSHARP_SECURITY_PATTERNS: &[SecurityPattern] = &[
         description: "Process creation — verify arguments are not user-controlled",
         category: FindingCategory::Injection,
         base_severity: Severity::High,
-        user_input_indicators: &["Request", "input", "userInput", "param", "[FromBody]", "HttpContext"],
+        user_input_indicators: &[
+            "Request",
+            "input",
+            "userInput",
+            "param",
+            "[FromBody]",
+            "HttpContext",
+        ],
         sanitization_indicators: &["ProcessStartInfo", "ArgumentList"],
         cwe: &[78],
     },
@@ -886,7 +905,14 @@ const CSHARP_SECURITY_PATTERNS: &[SecurityPattern] = &[
         description: "SQL command — use parameterized queries with SqlParameter",
         category: FindingCategory::Injection,
         base_severity: Severity::High,
-        user_input_indicators: &["Request", "input", "param", "query", "[FromBody]", "HttpContext"],
+        user_input_indicators: &[
+            "Request",
+            "input",
+            "param",
+            "query",
+            "[FromBody]",
+            "HttpContext",
+        ],
         sanitization_indicators: &["Parameters.Add", "SqlParameter", "@"],
         cwe: &[89],
     },
@@ -1061,8 +1087,7 @@ impl Detector for SecurityPatternDetector {
                         // the first argument directly.
                         if pattern.cwe.contains(&134) {
                             if let Some(pos) = trimmed.find(pattern.sink) {
-                                let after =
-                                    trimmed[pos + pattern.sink.len()..].trim_start();
+                                let after = trimmed[pos + pattern.sink.len()..].trim_start();
                                 if after.starts_with('"') {
                                     continue; // literal format string — safe
                                 }
@@ -1966,7 +1991,10 @@ mod tests {
         );
         let ctx = make_ctx(files, Language::CSharp);
         let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
-        assert!(!findings.is_empty(), "new Process with user input should trigger");
+        assert!(
+            !findings.is_empty(),
+            "new Process with user input should trigger"
+        );
         assert_eq!(findings[0].category, FindingCategory::Injection);
     }
 
@@ -1979,7 +2007,10 @@ mod tests {
         );
         let ctx = make_ctx(files, Language::CSharp);
         let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
-        assert!(!findings.is_empty(), "Deserialize< with [FromBody] should trigger");
+        assert!(
+            !findings.is_empty(),
+            "Deserialize< with [FromBody] should trigger"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1995,7 +2026,10 @@ mod tests {
         );
         let ctx = make_ctx(files, Language::Kotlin);
         let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
-        assert!(!findings.is_empty(), "Kotlin ProcessBuilder with user input should trigger");
+        assert!(
+            !findings.is_empty(),
+            "Kotlin ProcessBuilder with user input should trigger"
+        );
         assert_eq!(findings[0].category, FindingCategory::Injection);
     }
 
@@ -2008,6 +2042,9 @@ mod tests {
         );
         let ctx = make_ctx(files, Language::Kotlin);
         let findings = SecurityPatternDetector.analyze(&ctx).await.unwrap();
-        assert!(!findings.is_empty(), "Kotlin Gson().fromJson with user body should trigger");
+        assert!(
+            !findings.is_empty(),
+            "Kotlin Gson().fromJson with user body should trigger"
+        );
     }
 }

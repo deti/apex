@@ -77,6 +77,25 @@ impl DetectorPipeline {
         if cfg.enabled.contains(&"session-security".into()) {
             detectors.push(Box::new(SessionSecurityDetector));
         }
+        // Dig 2 high-confidence detectors
+        if cfg.enabled.contains(&"blocking-io-in-async".into()) {
+            detectors.push(Box::new(BlockingIoInAsyncDetector));
+        }
+        if cfg.enabled.contains(&"swallowed-errors".into()) {
+            detectors.push(Box::new(SwallowedErrorsDetector));
+        }
+        if cfg.enabled.contains(&"broad-exception-catching".into()) {
+            detectors.push(Box::new(BroadExceptionDetector));
+        }
+        if cfg.enabled.contains(&"error-context-loss".into()) {
+            detectors.push(Box::new(ErrorContextLossDetector));
+        }
+        if cfg.enabled.contains(&"string-concat-in-loop".into()) {
+            detectors.push(Box::new(StringConcatInLoopDetector));
+        }
+        if cfg.enabled.contains(&"regex-in-loop".into()) {
+            detectors.push(Box::new(RegexInLoopDetector));
+        }
         // P1 concurrency detectors
         if cfg.enabled.contains(&"mutex-across-await".into()) && lang == Language::Rust {
             detectors.push(Box::new(MutexAcrossAwaitDetector));

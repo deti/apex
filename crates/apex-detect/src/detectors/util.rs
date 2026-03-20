@@ -223,7 +223,11 @@ pub fn find_scopes(source: &str, lang: Language, scope_opener: &Regex) -> Vec<Sc
 /// closing brace was not found within the slice).
 ///
 /// `depth_in` is the brace depth before starting the scan.
-fn scan_braces(lines: &[&str], start_line: usize, depth_in: i32) -> (i32, Option<usize>, Option<usize>) {
+fn scan_braces(
+    lines: &[&str],
+    start_line: usize,
+    depth_in: i32,
+) -> (i32, Option<usize>, Option<usize>) {
     let mut depth = depth_in;
     let mut open_line: Option<usize> = None;
     let mut close_line: Option<usize> = None;
@@ -249,7 +253,7 @@ fn scan_braces(lines: &[&str], start_line: usize, depth_in: i32) -> (i32, Option
                     in_string = Some(ch);
                 }
                 '/' if chars.peek() == Some(&'/') => break, // line comment
-                '#' => break, // Python/Ruby line comment
+                '#' => break,                               // Python/Ruby line comment
                 '{' => {
                     if depth == 0 && open_line.is_none() {
                         open_line = Some(lnum);
@@ -406,25 +410,25 @@ static ASYNC_FN_BRACE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Async function openers for indent-tracked languages.
-static ASYNC_FN_INDENT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"async\s+def\s+").expect("async def regex must compile")
-});
+static ASYNC_FN_INDENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"async\s+def\s+").expect("async def regex must compile"));
 
 /// Loop openers for brace-tracked languages.
 static LOOP_BRACE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?x)
+    Regex::new(
+        r"(?x)
         \b for \s*   [(\[]?   # for (...) or for [ in Go/Rust
         | \b while \s* \(
         | \b loop \s* \{      # Rust: loop {
         | \b do \s* \{        # C/Java: do { ... } while
-    ")
+    ",
+    )
     .expect("loop brace regex must compile")
 });
 
 /// Loop openers for indent-tracked languages.
-static LOOP_INDENT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*(?:for|while)\s+").expect("loop indent regex must compile")
-});
+static LOOP_INDENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(?:for|while)\s+").expect("loop indent regex must compile"));
 
 /// Error-handling openers for brace-tracked languages.
 static EXCEPT_BRACE: LazyLock<Regex> = LazyLock::new(|| {
@@ -441,9 +445,8 @@ static EXCEPT_BRACE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Error-handling openers for indent-tracked languages.
-static EXCEPT_INDENT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*except(?:\s|:)").expect("except indent regex must compile")
-});
+static EXCEPT_INDENT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*except(?:\s|:)").expect("except indent regex must compile"));
 
 // ---------------------------------------------------------------------------
 // Convenience helpers

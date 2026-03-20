@@ -25,6 +25,14 @@ pub mod timeout;
 pub mod unsafe_reach;
 pub mod util;
 
+// Dig 2 high-confidence detectors
+pub mod blocking_io_in_async;
+pub mod broad_exception;
+pub mod error_context_loss;
+pub mod regex_in_loop;
+pub mod string_concat_in_loop;
+pub mod swallowed_errors;
+
 // P1 concurrency detectors
 pub mod ffi_panic;
 pub mod mutex_across_await;
@@ -64,6 +72,14 @@ pub use session_security::SessionSecurityDetector;
 pub use static_analysis::StaticAnalysisDetector;
 pub use timeout::MissingTimeoutDetector;
 pub use unsafe_reach::UnsafeReachabilityDetector;
+
+// Dig 2 high-confidence detectors
+pub use blocking_io_in_async::BlockingIoInAsyncDetector;
+pub use broad_exception::BroadExceptionDetector;
+pub use error_context_loss::ErrorContextLossDetector;
+pub use regex_in_loop::RegexInLoopDetector;
+pub use string_concat_in_loop::StringConcatInLoopDetector;
+pub use swallowed_errors::SwallowedErrorsDetector;
 
 // P1 concurrency detectors
 pub use ffi_panic::FfiPanicDetector;

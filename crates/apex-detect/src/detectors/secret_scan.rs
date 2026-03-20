@@ -1121,9 +1121,7 @@ mod tests {
         assert!(is_skip_file(std::path::Path::new(
             "crates/apex-detect/src/detectors/sql_injection.rs"
         )));
-        assert!(is_skip_file(std::path::Path::new(
-            "src/source_map/map.js"
-        )));
+        assert!(is_skip_file(std::path::Path::new("src/source_map/map.js")));
         // Regular production files should not be skipped
         assert!(!is_skip_file(std::path::Path::new("src/config.py")));
         assert!(!is_skip_file(std::path::Path::new("src/billing.rs")));
@@ -1132,9 +1130,7 @@ mod tests {
     #[test]
     fn is_const_string_decl_matches_rust_const() {
         assert!(is_const_string_decl("const FOO: &str = \"hello\";"));
-        assert!(is_const_string_decl(
-            "const BAR: &'static str = \"world\";"
-        ));
+        assert!(is_const_string_decl("const BAR: &'static str = \"world\";"));
         // Non-const lines should not match
         assert!(!is_const_string_decl("let x = \"hello\";"));
         assert!(!is_const_string_decl("fn foo() {}"));
