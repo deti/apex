@@ -58,6 +58,12 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Run full analysis: coverage + security audit + compound analyzers.
+    ///
+    /// This is the unified pipeline that runs all phases: preflight, install,
+    /// instrument, explore, detect, and compound analysis. If coverage
+    /// instrumentation is unavailable, gracefully falls back to audit-only.
+    Analyze(AnalyzeArgs),
     /// Run APEX against a target repository.
     Run(RunArgs),
     /// Ratchet: fail if coverage drops below a threshold (CI gate).
@@ -172,6 +178,57 @@ pub struct RunArgs {
     /// Example: `--fuzz-cmd ./target_instrumented`
     #[arg(long, value_delimiter = ' ')]
     pub fuzz_cmd: Vec<String>,
+}
+
+#[derive(Parser)]
+pub struct AnalyzeArgs {
+    /// Path to the target repository.
+    #[arg(long, short)]
+    pub target: PathBuf,
+
+    /// Programming language of the target.
+    #[arg(long, short, value_enum)]
+    pub lang: LangArg,
+
+    /// Coverage target (0.0-1.0). Overrides config `coverage.target`.
+    #[arg(long)]
+    pub coverage_target: Option<f64>,
+
+    /// Exploration strategy: baseline | fuzz | concolic | all
+    #[arg(long, default_value = "baseline")]
+    pub strategy: String,
+
+    /// Output directory for generated tests.
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+
+    /// Output format: text (human-readable) or json (machine-readable).
+    #[arg(long, default_value = "text")]
+    pub output_format: OutputFormat,
+
+    /// Skip dependency installation.
+    #[arg(long)]
+    pub no_install: bool,
+
+    /// Maximum concolic rounds. Overrides config `concolic.max_rounds`.
+    #[arg(long)]
+    pub rounds: Option<usize>,
+
+    /// Maximum fuzzer iterations.
+    #[arg(long)]
+    pub fuzz_iters: Option<usize>,
+
+    /// Command to run the compiled binary for fuzzing.
+    #[arg(long, value_delimiter = ' ')]
+    pub fuzz_cmd: Vec<String>,
+
+    /// Comma-separated list of detectors to run.
+    #[arg(long, value_delimiter = ',')]
+    pub detectors: Option<Vec<String>>,
+
+    /// Minimum severity to report.
+    #[arg(long, default_value = "low")]
+    pub severity_threshold: String,
 }
 
 #[derive(Parser)]
@@ -683,6 +740,7 @@ impl From<LangArg> for Language {
 
 pub async fn run_cli(cli: Cli, cfg: &ApexConfig) -> Result<()> {
     match cli.command {
+        Commands::Analyze(args) => run_analyze(args, cfg).await,
         Commands::Run(args) => run(args, cfg).await,
         Commands::Ratchet(args) => ratchet(args, cfg).await,
         Commands::Doctor => doctor::run_doctor().await,
@@ -719,6 +777,441 @@ pub async fn run_cli(cli: Cli, cfg: &ApexConfig) -> Result<()> {
         Commands::Mcp => mcp::run_mcp().await,
         Commands::Integrate(args) => integrate::run_integrate(args).await,
     }
+}
+
+// ---------------------------------------------------------------------------
+// `apex analyze` — unified pipeline
+// ---------------------------------------------------------------------------
+
+async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
+    use apex_detect::{AnalysisContext, DetectConfig, DetectorPipeline, Severity};
+
+    let lang: Language = args.lang.into();
+    let target_path = args.target.canonicalize()?;
+    let coverage_target = args.coverage_target.unwrap_or(cfg.coverage.target);
+    let rounds = args.rounds.unwrap_or(cfg.concolic.max_rounds);
+    let fuzz_iters = args.fuzz_iters.unwrap_or(10_000);
+
+    let project_name = target_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".into());
+
+    info!(target = %target_path.display(), lang = %lang, "starting unified analysis");
+
+    // ── 1. Preflight ────────────────────────────────────────────────────
+    let preflight = preflight_check(lang, &target_path);
+    let build_system = preflight
+        .as_ref()
+        .ok()
+        .and_then(|p| p.build_system.clone())
+        .unwrap_or_else(|| "unknown".into());
+    let test_framework = preflight
+        .as_ref()
+        .ok()
+        .and_then(|p| p.test_framework.clone())
+        .unwrap_or_else(|| "unknown".into());
+
+    if let Ok(ref info) = preflight {
+        for tool in &info.missing_tools {
+            eprintln!("  \x1b[33m\u{26a0}\x1b[0m Missing tool: {tool}");
+        }
+        for warning in &info.warnings {
+            eprintln!("  \x1b[33m\u{26a0}\x1b[0m {warning}");
+        }
+    }
+
+    // ── 2. Install deps ─────────────────────────────────────────────────
+    if !args.no_install {
+        install_deps(lang, &target_path).await?;
+    }
+
+    // ── 3. Instrument + coverage (graceful fallback) ────────────────────
+    let oracle = Arc::new(CoverageOracle::new());
+    let coverage_result = instrument(lang, &target_path, &oracle).await;
+
+    let (has_coverage, instrumented) = match coverage_result {
+        Ok(inst) => (true, Some(inst)),
+        Err(e) => {
+            eprintln!("  \x1b[33m\u{26a0}\x1b[0m Coverage unavailable: {e}");
+            eprintln!("  Running audit-only mode");
+            (false, None)
+        }
+    };
+
+    // ── 4. Exploration (skip if no coverage or already at target) ───────
+    if has_coverage {
+        let inst = instrumented.as_ref().unwrap();
+        let current_pct = oracle.coverage_percent() / 100.0;
+        if current_pct < coverage_target {
+            info!(
+                current = current_pct,
+                target = coverage_target,
+                "coverage below target, running exploration"
+            );
+
+            // Build RunArgs for the agent cluster
+            let run_args = RunArgs {
+                target: args.target.clone(),
+                lang: args.lang,
+                coverage_target: args.coverage_target,
+                strategy: args.strategy.clone(),
+                output: args.output.clone(),
+                output_format: Some(args.output_format),
+                no_install: true, // already installed
+                rounds: args.rounds,
+                fuzz_iters: args.fuzz_iters,
+                fuzz_cmd: args.fuzz_cmd.clone(),
+            };
+
+            // Compile sancov binary if needed
+            let needs_sancov =
+                matches!(args.strategy.as_str(), "fuzz" | "driller" | "all" | "agent");
+            if needs_sancov && lang == Language::Rust && args.fuzz_cmd.is_empty() {
+                info!("compiling Rust binary with SanitizerCoverage for fuzz feedback");
+                let shim = apex_sandbox::shim::ensure_compiled().ok();
+                apex_lang::rust_lang::build_with_sancov(
+                    &target_path,
+                    Some("apex_target"),
+                    shim.as_deref(),
+                )
+                .await?;
+            }
+
+            match args.strategy.as_str() {
+                "fuzz" => {
+                    let cmd = fuzz_command(&run_args, &target_path);
+                    fuzz::run_fuzz_strategy(
+                        Arc::clone(&oracle),
+                        inst,
+                        coverage_target,
+                        fuzz_iters,
+                        cmd,
+                        cfg,
+                    )
+                    .await?;
+                }
+                "concolic" => {
+                    if inst.target.language != Language::Python {
+                        warn!("concolic strategy is currently Python-only; switch to --lang python");
+                    } else {
+                        run_concolic_strategy(
+                            Arc::clone(&oracle),
+                            inst,
+                            coverage_target,
+                            rounds,
+                            args.output.clone(),
+                        )
+                        .await?;
+                    }
+                }
+                "driller" => {
+                    let cmd = fuzz_command(&run_args, &target_path);
+                    fuzz::run_all_strategies(
+                        Arc::clone(&oracle),
+                        inst,
+                        coverage_target,
+                        fuzz_iters,
+                        rounds,
+                        args.output.clone(),
+                        cmd,
+                        cfg,
+                    )
+                    .await?;
+                }
+                _ => {
+                    run_agent_cluster(
+                        Arc::clone(&oracle),
+                        inst,
+                        coverage_target,
+                        fuzz_iters,
+                        &run_args,
+                        cfg,
+                    )
+                    .await?;
+                }
+            }
+        } else {
+            info!(current = current_pct, "coverage already at target, skipping exploration");
+        }
+    }
+
+    // ── 5. Detect pipeline (always runs) ────────────────────────────────
+    let mut detect_cfg = DetectConfig::default();
+    if !cfg.detect.enabled.is_empty() {
+        detect_cfg.enabled = cfg.detect.enabled.clone();
+    }
+    detect_cfg.severity_threshold = cfg.detect.severity_threshold.clone();
+    detect_cfg.per_detector_timeout_secs = cfg.detect.per_detector_timeout_secs;
+    detect_cfg.entropy_threshold = cfg.detect.entropy_threshold;
+    detect_cfg.max_subprocess_concurrency = cfg.detect.max_subprocess_concurrency;
+    detect_cfg.context_window = cfg.detect.context_window;
+    if let Some(detectors) = args.detectors {
+        detect_cfg.enabled = detectors;
+    }
+
+    let source_cache = build_source_cache(
+        &target_path,
+        lang,
+        cfg.index.max_source_files,
+        cfg.index.max_source_file_bytes as u64,
+    );
+    let source_file_count = source_cache.len();
+
+    // Build CPG for Python projects
+    let cpg = if lang == Language::Python {
+        let mut combined_cpg = apex_cpg::Cpg::new();
+        for (path, source) in &source_cache {
+            let file_cpg =
+                apex_cpg::builder::build_python_cpg(source, &path.display().to_string());
+            combined_cpg.merge(file_cpg);
+        }
+        if combined_cpg.node_count() > 0 {
+            Some(Arc::new(combined_cpg))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Build call graph for reverse path analysis
+    let reach_graph = apex_reach::extractors::build_call_graph(&source_cache, lang);
+    let reverse_path_engine = if reach_graph.node_count() > 0 {
+        Some(Arc::new(apex_reach::ReversePathEngine::new(reach_graph)))
+    } else {
+        None
+    };
+
+    let file_paths = instrumented
+        .as_ref()
+        .map(|i| i.file_paths.clone())
+        .unwrap_or_default();
+
+    let detect_ctx = AnalysisContext {
+        target_root: target_path.clone(),
+        language: lang,
+        oracle: Arc::clone(&oracle),
+        file_paths: file_paths.clone(),
+        known_bugs: vec![],
+        source_cache,
+        fuzz_corpus: None,
+        config: detect_cfg.clone(),
+        runner: Arc::new(apex_core::command::RealCommandRunner),
+        cpg,
+        threat_model: cfg.threat_model.clone(),
+        reverse_path_engine,
+    };
+
+    let pipeline = DetectorPipeline::from_config(&detect_cfg, lang);
+    let detection_report = pipeline.run_all(&detect_ctx).await;
+
+    // ── 6. Compound analyzers ───────────────────────────────────────────
+    let compound = if cfg.analyze.enabled {
+        use apex_detect::analyzer_registry;
+
+        let artifacts = analyzer_registry::discover_artifacts(&target_path);
+        let mut analyzers = analyzer_registry::applicable_analyzers(&artifacts, lang);
+
+        if !cfg.analyze.skip.is_empty() {
+            analyzers.retain(|a| !cfg.analyze.skip.contains(&a.name.to_string()));
+        }
+
+        info!(count = analyzers.len(), "running compound analyzers");
+
+        let analyzer_results = analyzer_registry::run_applicable_analyzers(
+            &target_path,
+            lang,
+            &detect_ctx.source_cache,
+            &artifacts,
+            &analyzers,
+        )
+        .await;
+
+        apex_detect::compound_report::CompoundReport::new(
+            detection_report,
+            analyzer_results,
+            artifacts,
+        )
+    } else {
+        apex_detect::compound_report::CompoundReport::new(
+            detection_report,
+            vec![],
+            apex_detect::analyzer_registry::Artifacts::default(),
+        )
+    };
+
+    // ── 7. Unified report ───────────────────────────────────────────────
+    let summary = compound.detection.security_summary();
+    let finding_count = compound.detection.findings.len();
+    let analyzers_ok = compound
+        .analyzers
+        .iter()
+        .filter(|a| matches!(a.status, apex_detect::analyzer_registry::AnalyzerStatus::Ok))
+        .count();
+    let analyzers_total = compound.analyzers.len();
+
+    let min_severity = match args.severity_threshold.as_str() {
+        "critical" => Severity::Critical,
+        "high" => Severity::High,
+        "medium" => Severity::Medium,
+        "low" => Severity::Low,
+        _ => Severity::Info,
+    };
+
+    match args.output_format {
+        OutputFormat::Json => {
+            let mut report = serde_json::Map::new();
+            report.insert("project".into(), serde_json::Value::String(project_name));
+            report.insert(
+                "language".into(),
+                serde_json::Value::String(format!("{lang}")),
+            );
+
+            if has_coverage {
+                report.insert(
+                    "coverage_percent".into(),
+                    serde_json::json!(oracle.coverage_percent()),
+                );
+                report.insert(
+                    "covered_branches".into(),
+                    serde_json::json!(oracle.covered_count()),
+                );
+                report.insert(
+                    "total_branches".into(),
+                    serde_json::json!(oracle.total_count()),
+                );
+            }
+
+            report.insert(
+                "findings".into(),
+                serde_json::to_value(&compound.detection.findings).unwrap_or_default(),
+            );
+            report.insert(
+                "security_summary".into(),
+                serde_json::to_value(&summary).unwrap_or_default(),
+            );
+            report.insert(
+                "compound_analysis".into(),
+                serde_json::to_value(&compound).unwrap_or_default(),
+            );
+
+            match serde_json::to_string_pretty(&report) {
+                Ok(json) => println!("{json}"),
+                Err(e) => eprintln!("{{\"error\": \"failed to serialize report: {e}\"}}"),
+            }
+        }
+        OutputFormat::Text => {
+            println!(
+                "\n\x1b[1mAPEX Analysis\x1b[0m \u{2014} {project_name} ({lang})\n"
+            );
+            println!(
+                "  Preflight:    build={build_system}, test={test_framework}, {source_file_count} source files"
+            );
+
+            if has_coverage {
+                println!(
+                    "  Coverage:     {:.1}% ({}/{} branches)",
+                    oracle.coverage_percent(),
+                    oracle.covered_count(),
+                    oracle.total_count()
+                );
+            } else {
+                println!("  Coverage:     N/A \u{2014} toolchain not available");
+            }
+
+            println!(
+                "  Findings:     {finding_count} ({} critical, {} high, {} medium, {} low)",
+                summary.critical, summary.high, summary.medium, summary.low
+            );
+            println!("  Analyzers:    {analyzers_ok}/{analyzers_total} OK");
+
+            // Uncovered branches
+            if has_coverage {
+                let uncovered = oracle.uncovered_branches();
+                if !uncovered.is_empty() {
+                    println!("\n  Uncovered ({}):", uncovered.len());
+                    let mut file_cache: HashMap<u64, Vec<String>> = HashMap::new();
+                    for branch in uncovered.iter().take(20) {
+                        let rel_path = file_paths
+                            .get(&branch.file_id)
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| format!("<{:016x}>", branch.file_id));
+
+                        let src_line = file_paths.get(&branch.file_id).and_then(|rel| {
+                            let lines = file_cache.entry(branch.file_id).or_insert_with(|| {
+                                std::fs::read_to_string(target_path.join(rel))
+                                    .map(|s| s.lines().map(String::from).collect())
+                                    .unwrap_or_default()
+                            });
+                            let idx = branch.line.saturating_sub(1) as usize;
+                            lines.get(idx).cloned()
+                        });
+
+                        if let Some(line) = src_line {
+                            println!("    {}:{}  {}", rel_path, branch.line, line.trim());
+                        } else {
+                            println!("    {}:{}", rel_path, branch.line);
+                        }
+                    }
+                    if uncovered.len() > 20 {
+                        println!("    ... and {} more", uncovered.len() - 20);
+                    }
+                }
+            }
+
+            // Top findings by severity
+            let mut top_findings: Vec<_> = compound
+                .detection
+                .findings
+                .iter()
+                .filter(|f| f.severity.rank() <= min_severity.rank())
+                .collect();
+            top_findings.sort_by(|a, b| a.severity.rank().cmp(&b.severity.rank()));
+
+            if !top_findings.is_empty() {
+                println!("\n  Top Findings:");
+                for f in top_findings.iter().take(10) {
+                    let sev = format!("{:?}", f.severity).to_uppercase();
+                    let line_str = f.line.map(|l| format!(":{l}")).unwrap_or_default();
+                    println!(
+                        "    {:<9} {}{} \u{2014} {}",
+                        sev,
+                        f.file.display(),
+                        line_str,
+                        f.title
+                    );
+                }
+                if top_findings.len() > 10 {
+                    println!("    ... and {} more", top_findings.len() - 10);
+                }
+            }
+
+            // Analyzer results
+            if !compound.analyzers.is_empty() {
+                println!("\n  Analyzers:");
+                for result in &compound.analyzers {
+                    let status_label = match &result.status {
+                        apex_detect::analyzer_registry::AnalyzerStatus::Ok => "OK".to_string(),
+                        apex_detect::analyzer_registry::AnalyzerStatus::Skipped(reason) => {
+                            format!("SKIP ({reason})")
+                        }
+                        apex_detect::analyzer_registry::AnalyzerStatus::Failed(err) => {
+                            format!("FAIL ({err})")
+                        }
+                    };
+                    println!(
+                        "    {:>4}  {} ({}ms)",
+                        status_label, result.name, result.duration_ms
+                    );
+                }
+            }
+
+            println!();
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
