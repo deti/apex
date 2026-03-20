@@ -68,7 +68,7 @@ impl Instrumentor for RustCovInstrumentor {
         // Propagate PATH explicitly so cargo-llvm-cov is found even when the
         // subprocess doesn't inherit the user's shell profile (e.g. cron, CI).
         let mut spec = CommandSpec::new("cargo", root)
-            .args(["llvm-cov", "--json", "--output-path", &json_path_str])
+            .args(["llvm-cov", "--json", "--output-path", &json_path_str, "--exclude", "apex-rpc"])
             .timeout(300_000); // 5 min — large projects need more than 30s
 
         if let Ok(path) = std::env::var("PATH") {
