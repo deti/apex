@@ -49,6 +49,10 @@ pub mod substring_security;
 pub mod unsafe_send_sync;
 pub mod vecdeque_partial;
 
+// Multi-language security detectors
+pub mod multi_crypto_failure;
+pub mod multi_insecure_deser;
+
 // JS/TS detectors
 pub mod js_command_injection;
 pub mod js_crypto_failure;
@@ -108,6 +112,10 @@ pub use process_exit_in_lib::ProcessExitInLibDetector;
 pub use substring_security::SubstringSecurityDetector;
 pub use unsafe_send_sync::UnsafeSendSyncDetector;
 pub use vecdeque_partial::VecDequePartialDetector;
+
+// Multi-language security detectors
+pub use multi_crypto_failure::MultiCryptoFailureDetector;
+pub use multi_insecure_deser::MultiInsecureDeserDetector;
 
 // JS/TS detectors
 pub use js_command_injection::JsCommandInjectionDetector;
