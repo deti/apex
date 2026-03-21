@@ -49,6 +49,8 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard_init(start: *mut u32, st
 ///
 /// Uses `Release` success ordering so that a subsequent `Acquire` load in
 /// `read_bitmap()` observes the updated counter value across threads.
+/// Uses `Acquire` failure ordering so that a failed CAS re-reads the current
+/// counter value with proper ARM load-acquire semantics before retrying.
 ///
 /// # Safety
 /// Called by compiler-inserted code. `guard` points to a valid u32.
@@ -59,7 +61,7 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_pc_guard(guard: *mut u32) {
     }
     let idx = *guard as usize;
     if idx < MAX_EDGES {
-        let _ = COUNTERS[idx].fetch_update(Ordering::Release, Ordering::Relaxed, |v| {
+        let _ = COUNTERS[idx].fetch_update(Ordering::Release, Ordering::Acquire, |v| {
             if v < 255 {
                 Some(v + 1)
             } else {
@@ -166,13 +168,15 @@ pub unsafe extern "C" fn __sanitizer_cov_trace_cmp8(arg1: u64, arg2: u64) {
 
 /// Read the current CMP log. Returns entries recorded since last reset.
 ///
-/// Loads `CMP_COUNT` with `Relaxed` (the caller is responsible for
-/// synchronizing with the execution thread before calling, e.g. by joining
-/// the thread or using a channel). The size field of each entry is loaded
-/// with `Acquire` to pair with the `Release` store in `record_cmp`, ensuring
-/// the arg bytes written before that store are visible here.
+/// Loads `CMP_COUNT` with `Acquire` to ensure the reader sees a count that
+/// is at least as large as what any preceding `Release` store to `CMP_COUNT`
+/// observed. This is necessary for ARM correctness: without Acquire, the load
+/// can see a stale count even after the execution thread has been joined.
+/// The size field of each entry is loaded with `Acquire` to pair with the
+/// `Release` store in `record_cmp`, ensuring the arg bytes written before
+/// that store are visible here.
 pub fn read_cmp_log() -> Vec<CmpLogEntry> {
-    let count = CMP_COUNT.load(Ordering::Relaxed).min(MAX_CMP_ENTRIES);
+    let count = CMP_COUNT.load(Ordering::Acquire).min(MAX_CMP_ENTRIES);
     let mut entries = Vec::with_capacity(count);
     for i in 0..count {
         let base = i * CMP_ENTRY_SIZE;
