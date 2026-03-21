@@ -213,6 +213,14 @@ impl SummaryCache {
             .filter(|s| s.content_hash == content_hash)
     }
 
+    /// Get a cached summary by function name, ignoring content hash.
+    ///
+    /// Used by the taint engine during inter-procedural analysis where
+    /// the caller doesn't know the callee's content hash.
+    pub fn get_by_name(&self, function: &str) -> Option<&TaintSummary> {
+        self.cache.get(function)
+    }
+
     /// Insert or update a summary.
     pub fn insert(&mut self, summary: TaintSummary) {
         self.cache.insert(summary.function.clone(), summary);
