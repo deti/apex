@@ -133,6 +133,8 @@ fn violation_to_finding(
         fix: None,
         cwe_ids: vec![kind.cwe_id()],
         noisy: false,
+        base_severity: None,
+        coverage_confidence: None,
     }
 }
 

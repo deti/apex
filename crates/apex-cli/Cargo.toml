@@ -43,6 +43,9 @@ clap = { version = "4", features = ["derive"] }
 async-trait = { workspace = true }
 scopeguard = "1"
 
+[features]
+frida = []  # Enables Frida binary instrumentation for coverage collection
+
 [dev-dependencies]
 mockall = { workspace = true }
 tempfile = "3"
