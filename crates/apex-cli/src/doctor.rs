@@ -24,7 +24,7 @@ struct Check {
 }
 
 async fn version_of(runner: &dyn CommandRunner, bin: &str, args: &[&str]) -> Option<String> {
-    let spec = CommandSpec::new(bin, ".")
+    let spec = CommandSpec::new(bin, std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")))
         .args(args.iter().copied())
         .timeout(10_000);
 
@@ -172,7 +172,7 @@ async fn checks_version_managers(runner: &dyn CommandRunner) -> (Vec<Check>, Vec
 
     let managed_tools: Vec<String> = if mise_found {
         // Run `mise ls --current --json` to find what languages are active
-        let spec = CommandSpec::new("mise", ".")
+        let spec = CommandSpec::new("mise", std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")))
             .args(["ls", "--current", "--json"])
             .timeout(10_000);
         if let Ok(output) = runner.run_command(&spec).await {

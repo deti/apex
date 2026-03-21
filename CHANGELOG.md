@@ -2,6 +2,13 @@
 
 All notable changes to APEX will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **CWD bug in analyze pipeline** — `parse_llvm_cov_export` now canonicalizes both the target root and coverage filenames before `strip_prefix`, fixing symlink mismatches (e.g. `/tmp` vs `/private/tmp` on macOS) that caused "0 source files" and "could not find Cargo.toml" when analyzing out-of-tree targets
+- **`apex doctor`** — `CommandSpec` working directory changed from `"."` to `std::env::current_dir()` so version checks don't depend on inherited CWD
+- **Wasm instrumentor** — fallback working directory for `wasm-opt` changed from `"."` to the target root
+
 ## [0.4.0] — 2026-03-21
 
 ### Added

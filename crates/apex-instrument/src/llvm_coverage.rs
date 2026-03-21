@@ -71,22 +71,34 @@ pub fn parse_llvm_cov_export(
     let mut executed_ids: Vec<BranchId> = Vec::new();
     let mut file_paths: HashMap<u64, PathBuf> = HashMap::new();
 
+    // Canonicalize target_root so strip_prefix works even when the coverage
+    // JSON contains symlink-resolved paths (e.g. /private/tmp vs /tmp on macOS).
+    let canon_root = target_root.canonicalize().unwrap_or_else(|_| target_root.to_path_buf());
+
     let data = v["data"].as_array().ok_or("missing data array")?;
     for entry in data {
         let files = entry["files"].as_array().ok_or("missing files array")?;
         for file in files {
             let filename = file["filename"].as_str().ok_or("missing filename")?;
 
-            // Derive relative path from absolute filename
+            // Derive relative path from absolute filename.
+            // Try both the raw path and its canonical form so symlinks
+            // (e.g. /tmp -> /private/tmp on macOS) don't cause mismatches.
             let abs = Path::new(filename);
-            let rel = match abs.strip_prefix(target_root) {
-                Ok(r) => r.to_path_buf(),
-                Err(_) => {
-                    if filter.require_under_root {
-                        continue;
-                    }
-                    PathBuf::from(filename)
+            let canon_abs = abs.canonicalize().unwrap_or_else(|_| abs.to_path_buf());
+            let rel = if let Ok(r) = abs.strip_prefix(&canon_root) {
+                r.to_path_buf()
+            } else if let Ok(r) = canon_abs.strip_prefix(&canon_root) {
+                r.to_path_buf()
+            } else if let Ok(r) = abs.strip_prefix(target_root) {
+                r.to_path_buf()
+            } else if let Ok(r) = canon_abs.strip_prefix(target_root) {
+                r.to_path_buf()
+            } else {
+                if filter.require_under_root {
+                    continue;
                 }
+                PathBuf::from(filename)
             };
 
             // Skip test files
