@@ -2,14 +2,36 @@
 
 All notable changes to APEX will be documented in this file.
 
-## [Unreleased]
+## [0.4.0] — 2026-03-21
 
 ### Added
+- **`--output-format sarif`** — GitHub Security tab integration; SARIF 2.1.0 output for `apex audit` and `apex analyze` commands
+- **`--output-format markdown`** — PR comment generation with severity summary tables and findings details
+- **`--output-format lcov`** — Coverage Gutters / Codecov integration; LCOV export from branch coverage data
+- **`--changed-files`** — incremental CI analysis for `test-prioritize`, `risk`, and security commands
+- **`apex badge`** — SVG coverage badge generation with color tiers (red/orange/yellow/green/brightgreen)
+- **`apex ci-report`** — base vs head finding comparison with new/resolved/unchanged classification
+- **`apex wrap`** — inject coverage into user's test command (10 languages)
+- **GitHub Action scaffold** (`.github/actions/apex/action.yml`)
+- **Tree-sitter Python CPG builder** (feature-gated)
+- **Inter-procedural taint analysis** via TaintSummary
+- **O(1) CPG graph lookup** (HashMap storage)
+- **Compound Coverage Oracle** (Bayesian signal combination)
+- **LLM concolic solver** (ConcoLLMic, third solver in portfolio)
+- **Mutation-guided test generation** (Meta ACH approach)
+- **Type-state analysis** (CWE-416/675/404)
+- **Coverage-informed severity re-scoring**
+- **CSRF detector** (CWE-352)
+- **XSS detector upgrade** (CWE-79 — template injection, DOM XSS)
+- **File upload detector** (CWE-434)
+- **Information exposure detector** (CWE-200)
+- **Frida binary coverage stub** (feature-gated)
 - **Multi-language CPG dispatch** — `apex-cli` now dispatches `JsCpgBuilder` and `GoCpgBuilder` for JavaScript and Go targets alongside the existing Python builder; all 5 CPG build sites refactored through a new `build_cpg_for_lang` helper using the `CpgBuilder` trait
 - **`JsCpgBuilder` and `GoCpgBuilder`** — new line-based CPG builders in `apex-cpg` for JavaScript and Go; exported from the crate alongside `PythonCpgBuilder`
 - **`Cpg` now derives `Clone`** — enables Arc unwrap-or-clone in the data-flow command
 - **E2E taint detection test** — `test_audit_detects_taint_flow` in `integration_harness.rs` verifies CWE-78 taint flow from `sys.argv` through `subprocess.call(shell=True)` is detected and not suppressed as noisy
 - **`tainted.py` fixture** — `tests/fixtures/tiny-python/tainted.py` provides a concrete CWE-78 taint source for E2E verification
+- **v0.4.0 integration test suite** — 11 tests covering SARIF output, markdown output, badge SVG, changed-files filtering, CI report comparison, and LCOV export
 
 ## [0.3.1] — 2026-03-20
 

@@ -145,6 +145,8 @@ pub enum Commands {
     Integrate(integrate::IntegrateArgs),
     /// Compare findings between base and head audit reports (CI diff).
     CiReport(CiReportArgs),
+    /// Generate an SVG coverage badge for README or CI artifacts.
+    Badge(BadgeArgs),
 }
 
 #[derive(Parser, Clone)]
@@ -737,12 +739,24 @@ pub struct CiReportArgs {
     pub output_format: OutputFormat,
 }
 
+#[derive(Parser)]
+pub struct BadgeArgs {
+    /// Path to the target repository (to find .apex/index.json).
+    #[arg(long, short)]
+    pub target: PathBuf,
+
+    /// Write output to a file instead of stdout.
+    #[arg(long, short)]
+    pub output: Option<PathBuf>,
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 pub enum OutputFormat {
     Text,
     Json,
     Lcov,
     Markdown,
+    Sarif,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -832,6 +846,7 @@ pub async fn run_cli(cli: Cli, cfg: &ApexConfig) -> Result<()> {
             }
             Ok(())
         }
+        Commands::Badge(args) => run_badge(args).await,
     }
 }
 
@@ -1363,6 +1378,16 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
                 eprintln!("No coverage data available for LCOV export");
             }
         }
+        OutputFormat::Sarif => {
+            let sarif_report = apex_detect::sarif::findings_to_sarif(
+                &compound.detection.findings,
+                env!("CARGO_PKG_VERSION"),
+            );
+            match serde_json::to_string_pretty(&sarif_report) {
+                Ok(json) => println!("{json}"),
+                Err(e) => eprintln!("{{\"error\": \"failed to serialize SARIF: {e}\"}}"),
+            }
+        }
     }
 
     Ok(())
@@ -1626,7 +1651,7 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         OutputFormat::Json => {
             print_json_gap_report(&oracle, &instrumented.file_paths, &target_path);
         }
-        OutputFormat::Text | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Markdown | OutputFormat::Sarif => {
             print_gap_report(&oracle, &instrumented.file_paths, &target_path);
             if let Some(ref compound) = analysis {
                 if !compound.detection.findings.is_empty() {
@@ -2492,6 +2517,11 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
                 None,
             )
         }
+        OutputFormat::Sarif => {
+            let sarif_report =
+                apex_detect::sarif::findings_to_sarif(&report.findings, env!("CARGO_PKG_VERSION"));
+            serde_json::to_string_pretty(&sarif_report)?
+        }
         OutputFormat::Text | OutputFormat::Lcov => {
             let summary = report.security_summary();
             let mut buf = String::new();
@@ -2863,7 +2893,7 @@ async fn run_test_optimize(args: TestOptimizeArgs) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("Test Suite Optimization:");
             println!("  Minimal covering set: {selected_count} / {total_tests} tests");
             println!("  Redundant tests:     {}", total_tests - selected_count);
@@ -3001,7 +3031,7 @@ async fn run_dead_code(args: DeadCodeArgs) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("Dead Code Analysis:");
             println!(
                 "  {} / {} branches never hit by any test ({} dead)",
@@ -3174,7 +3204,7 @@ async fn run_lint(args: LintArgs, cfg: &ApexConfig) -> Result<()> {
                 .collect();
             println!("{}", serde_json::to_string_pretty(&findings)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             let has_index = index.is_some();
             if has_index {
                 println!("Runtime-prioritized lint findings:\n");
@@ -3433,7 +3463,7 @@ async fn run_flaky_detect(args: FlakyDetectArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&flaky)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             if flaky.is_empty() {
                 println!("No flaky tests detected across {} runs.", args.runs);
             } else {
@@ -3487,7 +3517,7 @@ async fn run_complexity(args: ComplexityArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&results)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("Exercised vs Static Complexity:\n");
             println!(
                 "{:<40} {:>8} {:>8} {:>7} Classification",
@@ -3531,7 +3561,7 @@ async fn run_docs(args: DocsArgs) -> Result<()> {
 
     let output = match args.output_format {
         OutputFormat::Json => serde_json::to_string_pretty(&docs)?,
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             let mut buf = String::new();
             use std::fmt::Write;
             writeln!(buf, "# Behavioral Documentation\n").ok();
@@ -3610,7 +3640,7 @@ async fn run_verify_boundaries(args: VerifyBoundariesArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("Boundary Verification\n");
             println!("  Entry pattern:     \"{}\"", report.entry_pattern);
             println!("  Auth check:        \"{}\"", report.auth_pattern);
@@ -3768,7 +3798,7 @@ async fn run_regression_check(args: RegressionCheckArgs) -> Result<()> {
                 }))?
             );
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             if regressions.is_empty() {
                 println!(
                     "Regression check PASSED — no behavioral changes detected vs {}",
@@ -3814,7 +3844,7 @@ async fn run_risk(args: RiskArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&assessment)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("Risk Assessment: {}\n", assessment.level);
             println!("  Score:                  {}/100", assessment.score);
             println!("  Changed branches:       {}", assessment.changed_branches);
@@ -3851,7 +3881,7 @@ async fn run_hotpaths(args: HotpathsArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&hot)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!(
                 "Top {} Hot Paths ({} total branches)\n",
                 hot.len(),
@@ -3889,7 +3919,7 @@ async fn run_contracts(args: ContractsArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&invariants)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             if invariants.is_empty() {
                 println!("No invariants discovered (need 3+ tests per function for detection).");
                 return Ok(());
@@ -3935,7 +3965,7 @@ async fn run_deploy_score(args: DeployScoreArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&score)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("Deploy Score: {}/100\n", score.total_score);
             println!("  {}\n", score.recommendation);
             println!("Breakdown:");
@@ -3962,7 +3992,7 @@ async fn run_attack_surface(args: AttackSurfaceArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("Attack Surface Analysis\n");
             println!("  Entry pattern:       \"{}\"", report.entry_pattern);
             println!("  Matching tests:      {}", report.entry_tests);
@@ -4022,7 +4052,7 @@ fn run_features(args: FeaturesArgs) -> Result<()> {
             }
             println!("{}", serde_json::to_string_pretty(&map)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             let feature_names: Vec<String> = Language::Python
                 .supported_features()
                 .iter()
@@ -4169,7 +4199,7 @@ fn print_detector_findings(
                 serde_json::to_string_pretty(findings).unwrap_or_default()
             );
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("\n{} finding(s) in {}\n", findings.len(), target.display());
             for f in findings {
                 let sev = format!("{:?}", f.severity).to_uppercase();
@@ -4330,7 +4360,7 @@ async fn run_api_diff(args: ApiDiffArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!(
                 "API Diff: {} \u{2192} {}\n",
                 args.old.display(),
@@ -4408,7 +4438,7 @@ async fn run_data_flow(args: DataFlowArgs) -> Result<()> {
                 .collect();
             println!("{}", serde_json::to_string_pretty(&flow_data)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             if flows.is_empty() {
                 println!("No taint flows detected.");
             } else {
@@ -4459,7 +4489,7 @@ async fn run_blast_radius(args: BlastRadiusArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&assessment)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("\nBlast Radius: {}\n", target_path.display());
             println!("Risk Level:       {}", assessment.level);
             println!("Risk Score:       {}/100", assessment.score);
@@ -4556,7 +4586,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
                 });
                 writeln!(output, "{}", serde_json::to_string_pretty(&val)?).ok();
             }
-            OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+            OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
                 writeln!(output, "\n=== ASVS Compliance ({:?}) ===\n", asvs.level).ok();
                 writeln!(output, "  Total requirements: {}", asvs.coverage.total).ok();
                 writeln!(output, "  Automated:          {}", asvs.coverage.automated).ok();
@@ -4596,7 +4626,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
                 });
                 writeln!(output, "{}", serde_json::to_string_pretty(&val)?).ok();
             }
-            OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+            OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
                 writeln!(
                     output,
                     "\n=== SSDF Compliance ({}/{}) ===\n",
@@ -4643,7 +4673,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
                 });
                 writeln!(output, "{}", serde_json::to_string_pretty(&val)?).ok();
             }
-            OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+            OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
                 writeln!(output, "\n=== STRIDE Threat Model ===\n").ok();
                 for entry in &stride.entries {
                     writeln!(
@@ -4708,7 +4738,7 @@ async fn run_api_coverage(args: ApiCoverageArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("API Spec Coverage\n");
             println!("Spec endpoints:        {}", report.spec_count);
             println!("Implemented:           {}", report.implemented_count);
@@ -4762,7 +4792,7 @@ async fn run_service_map(args: ServiceMapArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&map)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("Service Dependency Map\n");
             println!("HTTP calls:      {}", map.http_count);
             println!("gRPC calls:      {}", map.grpc_count);
@@ -4802,7 +4832,7 @@ async fn run_schema_check(args: SchemaCheckArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             println!("Schema Migration Safety: {}\n", args.migration.display());
             println!("Dangerous: {}", report.dangerous_count);
             println!("Caution:   {}", report.caution_count);
@@ -4851,7 +4881,7 @@ async fn run_test_data(args: TestDataArgs) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown | OutputFormat::Sarif => {
             if tables.is_empty() {
                 println!("No CREATE TABLE statements found.");
             } else {
@@ -4927,6 +4957,78 @@ fn validate_output_path(p: &std::path::Path) -> Result<PathBuf> {
         .file_name()
         .ok_or_else(|| color_eyre::eyre::eyre!("output path {:?}: no file name", p))?;
     Ok(canon_parent.join(file_name))
+}
+
+// ---------------------------------------------------------------------------
+// `apex badge` — SVG coverage badge
+// ---------------------------------------------------------------------------
+
+/// Generate a shields.io-style SVG coverage badge.
+pub fn generate_badge_svg(coverage_pct: f64) -> String {
+    let color = if coverage_pct >= 90.0 {
+        "#4c1"    // brightgreen
+    } else if coverage_pct >= 75.0 {
+        "#a3c51c" // green
+    } else if coverage_pct >= 60.0 {
+        "#dfb317" // yellow
+    } else if coverage_pct >= 40.0 {
+        "#fe7d37" // orange
+    } else {
+        "#e05d44" // red
+    };
+
+    let label = "coverage";
+    let value = format!("{coverage_pct:.1}%");
+    let label_width = 62;
+    let value_width = 50;
+    let total_width = label_width + value_width;
+    let label_x = label_width as f64 / 2.0;
+    let value_x = label_width as f64 + value_width as f64 / 2.0;
+
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{total_width}" height="20">
+  <linearGradient id="b" x2="0" y2="100%">
+    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+    <stop offset="1" stop-opacity=".1"/>
+  </linearGradient>
+  <mask id="a"><rect width="{total_width}" height="20" rx="3" fill="#fff"/></mask>
+  <g mask="url(#a)">
+    <rect width="{label_width}" height="20" fill="#555"/>
+    <rect x="{label_width}" width="{value_width}" height="20" fill="{color}"/>
+    <rect width="{total_width}" height="20" fill="url(#b)"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="11">
+    <text x="{label_x}" y="15" fill="#010101" fill-opacity=".3">{label}</text>
+    <text x="{label_x}" y="14">{label}</text>
+    <text x="{value_x}" y="15" fill="#010101" fill-opacity=".3">{value}</text>
+    <text x="{value_x}" y="14">{value}</text>
+  </g>
+</svg>"##
+    )
+}
+
+async fn run_badge(args: BadgeArgs) -> Result<()> {
+    let target_path = args.target.canonicalize()?;
+    let index = load_index(&target_path)?;
+
+    let coverage_pct = if index.total_branches > 0 {
+        (index.covered_branches as f64 / index.total_branches as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    let svg = generate_badge_svg(coverage_pct);
+
+    if let Some(path) = args.output {
+        let path = validate_output_path(&path)?;
+        tokio::fs::write(&path, &svg).await
+            .map_err(|e| color_eyre::eyre::eyre!("write {}: {e}", path.display()))?;
+        eprintln!("Wrote badge to {}", path.display());
+    } else {
+        print!("{svg}");
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
