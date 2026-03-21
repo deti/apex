@@ -20,7 +20,7 @@ pub use cache::CachingSolver;
 pub use diversity::DiversitySolver;
 pub use gradient::GradientSolver;
 pub use landscape::{LandscapeAnalyzer, StrategyHint};
-pub use llm_solver::{constraints_to_prompt, parse_llm_solution};
+pub use llm_solver::{constraints_to_prompt, parse_llm_solution, LlmSolver};
 pub use path_decomp::PathDecomposer;
 pub use portfolio::PortfolioSolver;
 pub use solver::{solve, SymbolicSession, Z3Solver};

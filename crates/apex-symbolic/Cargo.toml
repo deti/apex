@@ -15,9 +15,11 @@ kani-prover = []
 
 [dependencies]
 apex-core = { path = "../apex-core" }
+async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
 # Feature-gated: only enabled with --features z3-solver
@@ -25,3 +27,4 @@ z3 = { version = "0.12", features = ["static-link-z3"], optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
