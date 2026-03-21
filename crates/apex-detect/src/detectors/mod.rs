@@ -73,6 +73,12 @@ pub mod relaxed_atomics;
 pub mod wall_clock_misuse;
 pub mod zombie_subprocess;
 
+// Wave 4 — CWE Top 25 security detectors
+pub mod csrf;
+pub mod file_upload;
+pub mod info_exposure;
+pub mod xss;
+
 // Wave 5 — P3 detectors
 pub mod connection_in_loop;
 pub mod missing_shutdown_handler;
@@ -140,6 +146,12 @@ pub use missing_async_timeout::MissingAsyncTimeoutDetector;
 pub use relaxed_atomics::RelaxedAtomicsDetector;
 pub use wall_clock_misuse::WallClockMisuseDetector;
 pub use zombie_subprocess::ZombieSubprocessDetector;
+
+// Wave 4 — CWE Top 25 security detectors
+pub use csrf::CsrfDetector;
+pub use file_upload::FileUploadDetector;
+pub use info_exposure::InfoExposureDetector;
+pub use xss::XssDetector;
 
 // Wave 5 — P3 detectors
 pub use connection_in_loop::ConnectionInLoopDetector;

@@ -196,6 +196,20 @@ impl DetectorPipeline {
             detectors.push(Box::new(WallClockMisuseDetector));
         }
 
+        // Wave 4 — CWE Top 25 security detectors
+        if cfg.enabled.contains(&"csrf".into()) {
+            detectors.push(Box::new(CsrfDetector));
+        }
+        if cfg.enabled.contains(&"xss".into()) {
+            detectors.push(Box::new(XssDetector));
+        }
+        if cfg.enabled.contains(&"file-upload".into()) {
+            detectors.push(Box::new(FileUploadDetector));
+        }
+        if cfg.enabled.contains(&"info-exposure".into()) {
+            detectors.push(Box::new(InfoExposureDetector));
+        }
+
         // Wave 5 — P3 detectors
         if cfg.enabled.contains(&"missing-shutdown-handler".into()) && lang == Language::Rust {
             detectors.push(Box::new(MissingShutdownHandlerDetector));
@@ -496,7 +510,7 @@ mod tests {
     fn from_config_enables_all_by_default() {
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
-        assert_eq!(pipeline.detectors.len(), 43);
+        assert_eq!(pipeline.detectors.len(), 47);
     }
 
     #[test]
@@ -899,7 +913,7 @@ mod tests {
         // Python should get all except unsafe
         let cfg = DetectConfig::default();
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Python);
-        assert_eq!(pipeline.detectors.len(), 36);
+        assert_eq!(pipeline.detectors.len(), 40);
         assert!(pipeline
             .detectors
             .iter()
