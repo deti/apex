@@ -23,6 +23,7 @@ pub mod taint_store;
 pub mod taint_summary;
 pub mod taint_triage;
 pub mod type_taint;
+pub mod typestate;
 
 pub use taint_flows_store::find_taint_flows_with_store;
 pub use taint_rules::TaintRuleSet;

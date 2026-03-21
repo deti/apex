@@ -221,6 +221,11 @@ impl DetectorPipeline {
             detectors.push(Box::new(PoisonedMutexRecoveryDetector));
         }
 
+        // Type-state analysis
+        if cfg.enabled.contains(&"typestate".into()) {
+            detectors.push(Box::new(TypeStateDetector));
+        }
+
         // Spec mining detectors (opt-in)
         if cfg.enabled.contains(&"data-transform".into()) {
             detectors.push(Box::new(DataTransformSpecMiner));

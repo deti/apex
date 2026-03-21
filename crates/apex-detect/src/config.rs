@@ -63,6 +63,8 @@ fn default_enabled() -> Vec<String> {
         "xss".into(),
         "file-upload".into(),
         "info-exposure".into(),
+        // Type-state analysis
+        "typestate".into(),
     ]
 }
 

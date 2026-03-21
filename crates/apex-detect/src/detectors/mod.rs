@@ -84,6 +84,9 @@ pub mod connection_in_loop;
 pub mod missing_shutdown_handler;
 pub mod poisoned_mutex_recovery;
 
+// Type-state analysis
+pub mod typestate;
+
 pub use bandit::BanditRuleDetector;
 pub use data_transform_spec::DataTransformSpecMiner;
 pub use dep_audit::DependencyAuditDetector;
@@ -157,3 +160,6 @@ pub use xss::XssDetector;
 pub use connection_in_loop::ConnectionInLoopDetector;
 pub use missing_shutdown_handler::MissingShutdownHandlerDetector;
 pub use poisoned_mutex_recovery::PoisonedMutexRecoveryDetector;
+
+// Type-state analysis
+pub use typestate::TypeStateDetector;
