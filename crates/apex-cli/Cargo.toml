@@ -48,3 +48,4 @@ mockall = { workspace = true }
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
+uuid = { workspace = true }
