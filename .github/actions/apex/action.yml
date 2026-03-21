@@ -1,0 +1,87 @@
+name: 'APEX Security & Coverage Analysis'
+description: 'Run APEX security audit and coverage analysis on your codebase'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  target:
+    description: 'Target directory to analyze'
+    default: '.'
+  lang:
+    description: 'Programming language'
+    required: true
+  coverage-file:
+    description: 'Path to pre-existing coverage file (optional)'
+    default: ''
+  changed-files-base:
+    description: 'Git ref for incremental analysis (e.g., main)'
+    default: ''
+  fail-on:
+    description: 'Severity threshold to fail the check (critical, high, medium, low, none)'
+    default: 'high'
+  sarif-upload:
+    description: 'Upload SARIF to GitHub Security tab'
+    default: 'true'
+  comment-on-pr:
+    description: 'Post analysis summary as PR comment'
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install APEX
+      shell: bash
+      run: curl -sSL https://raw.githubusercontent.com/sahajamoth/apex/main/install.sh | sh
+
+    - name: Run APEX Analysis
+      shell: bash
+      run: |
+        ARGS="--target ${{ inputs.target }} --lang ${{ inputs.lang }}"
+        if [ -n "${{ inputs.coverage-file }}" ]; then
+          ARGS="$ARGS --coverage-file ${{ inputs.coverage-file }}"
+        fi
+        if [ -n "${{ inputs.changed-files-base }}" ]; then
+          ARGS="$ARGS --changed-files ${{ inputs.changed-files-base }}"
+        fi
+        apex analyze $ARGS --output-format sarif > apex-results.sarif
+        apex analyze $ARGS --output-format markdown > apex-summary.md
+        apex analyze $ARGS --output-format json > apex-results.json
+
+    - name: Check Severity Threshold
+      if: inputs.fail-on != 'none'
+      shell: bash
+      run: |
+        THRESHOLD="${{ inputs.fail-on }}"
+        RESULT=$(cat apex-results.json)
+        FAILED=$(echo "$RESULT" | jq --arg t "$THRESHOLD" '
+          .findings[] | select(
+            ($t == "critical" and .severity == "critical") or
+            ($t == "high" and (.severity == "critical" or .severity == "high")) or
+            ($t == "medium" and (.severity == "critical" or .severity == "high" or .severity == "medium")) or
+            ($t == "low" and (.severity == "critical" or .severity == "high" or .severity == "medium" or .severity == "low"))
+          )' | jq -s 'length')
+        if [ "$FAILED" -gt 0 ]; then
+          echo "::error::APEX found $FAILED finding(s) at or above '$THRESHOLD' severity"
+          exit 1
+        fi
+
+    - name: Upload SARIF
+      if: inputs.sarif-upload == 'true'
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: apex-results.sarif
+
+    - name: Comment on PR
+      if: inputs.comment-on-pr == 'true' && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const summary = fs.readFileSync('apex-summary.md', 'utf8');
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            body: summary
+          });

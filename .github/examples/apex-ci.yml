@@ -1,0 +1,16 @@
+# Example: Add APEX to your CI in 3 lines
+# Copy this file to .github/workflows/apex.yml in your repository
+name: APEX Analysis
+on: [push, pull_request]
+jobs:
+  apex:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests with coverage
+        run: cargo llvm-cov --json > coverage.json
+      - uses: sahajamoth/apex@main
+        with:
+          lang: rust
+          coverage-file: coverage.json
+          changed-files-base: main
