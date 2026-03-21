@@ -87,14 +87,21 @@ pub enum EdgeKind {
     Argument { index: u32 },
 }
 
+use std::collections::HashMap;
+
 /// The Code Property Graph.
 ///
-/// Stores nodes and edges with integer identifiers. Query helpers return
-/// references into the internal storage.
+/// Stores nodes in a `HashMap` for O(1) lookup and maintains adjacency lists
+/// for efficient edge traversal. Query helpers return references into the
+/// internal storage.
 #[derive(Clone)]
 pub struct Cpg {
-    nodes: Vec<(NodeId, NodeKind)>,
+    nodes: HashMap<NodeId, NodeKind>,
     edges: Vec<(NodeId, NodeId, EdgeKind)>,
+    /// Forward adjacency: node → indices into `edges` where that node is the source.
+    adj_from: HashMap<NodeId, Vec<usize>>,
+    /// Reverse adjacency: node → indices into `edges` where that node is the target.
+    adj_to: HashMap<NodeId, Vec<usize>>,
     next_id: NodeId,
 }
 
@@ -108,8 +115,10 @@ impl Cpg {
     /// Create an empty CPG.
     pub fn new() -> Self {
         Cpg {
-            nodes: Vec::new(),
+            nodes: HashMap::new(),
             edges: Vec::new(),
+            adj_from: HashMap::new(),
+            adj_to: HashMap::new(),
             next_id: 0,
         }
     }
@@ -118,34 +127,37 @@ impl Cpg {
     pub fn add_node(&mut self, kind: NodeKind) -> NodeId {
         let id = self.next_id;
         self.next_id += 1;
-        self.nodes.push((id, kind));
+        self.nodes.insert(id, kind);
         id
     }
 
     /// Add a directed edge between two nodes.
     pub fn add_edge(&mut self, from: NodeId, to: NodeId, kind: EdgeKind) {
+        let idx = self.edges.len();
         self.edges.push((from, to, kind));
+        self.adj_from.entry(from).or_default().push(idx);
+        self.adj_to.entry(to).or_default().push(idx);
     }
 
-    /// Look up a node by id.
+    /// Look up a node by id (O(1) via HashMap).
     pub fn node(&self, id: NodeId) -> Option<&NodeKind> {
-        self.nodes
-            .iter()
-            .find(|(nid, _)| *nid == id)
-            .map(|(_, k)| k)
+        self.nodes.get(&id)
     }
 
     /// All edges whose source is `id`.
     pub fn edges_from(&self, id: NodeId) -> Vec<&(NodeId, NodeId, EdgeKind)> {
-        self.edges
-            .iter()
-            .filter(|(from, _, _)| *from == id)
-            .collect()
+        match self.adj_from.get(&id) {
+            Some(indices) => indices.iter().map(|&i| &self.edges[i]).collect(),
+            None => Vec::new(),
+        }
     }
 
     /// All edges whose target is `id`.
     pub fn edges_to(&self, id: NodeId) -> Vec<&(NodeId, NodeId, EdgeKind)> {
-        self.edges.iter().filter(|(_, to, _)| *to == id).collect()
+        match self.adj_to.get(&id) {
+            Some(indices) => indices.iter().map(|&i| &self.edges[i]).collect(),
+            None => Vec::new(),
+        }
     }
 
     /// Number of nodes in the graph.
@@ -160,7 +172,7 @@ impl Cpg {
 
     /// Iterate over all nodes.
     pub fn nodes(&self) -> impl Iterator<Item = (NodeId, &NodeKind)> {
-        self.nodes.iter().map(|(id, k)| (*id, k))
+        self.nodes.iter().map(|(&id, k)| (id, k))
     }
 
     /// Iterate over all edges.
@@ -172,10 +184,10 @@ impl Cpg {
     pub fn merge(&mut self, other: Cpg) {
         let offset = self.next_id;
         for (id, kind) in other.nodes {
-            self.nodes.push((id + offset, kind));
+            self.nodes.insert(id + offset, kind);
         }
         for (from, to, kind) in other.edges {
-            self.edges.push((from + offset, to + offset, kind));
+            self.add_edge(from + offset, to + offset, kind);
         }
         self.next_id = offset + other.next_id;
     }
