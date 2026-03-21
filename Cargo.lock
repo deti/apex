@@ -415,10 +415,12 @@ name = "apex-symbolic"
 version = "0.3.1"
 dependencies = [
  "apex-core",
+ "async-trait",
  "proptest",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "z3",
 ]
