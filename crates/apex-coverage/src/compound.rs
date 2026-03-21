@@ -111,6 +111,46 @@ impl CompoundOracle {
         sigmoid(log_odds_sum)
     }
 
+    /// Add signals from WRAP mode (native language) coverage.
+    ///
+    /// Uses `Imported` signal type with confidence 0.95 (high but below
+    /// direct instrumentation, since the data comes from an external tool).
+    pub fn add_wrap_coverage(&mut self, branch: BranchId, covered: bool) {
+        self.add_signal(
+            branch,
+            if covered {
+                CoverageSignal::Imported(true)
+            } else {
+                CoverageSignal::Imported(false)
+            },
+            0.95,
+        );
+    }
+
+    /// Add signals from Frida binary instrumentation coverage.
+    ///
+    /// Uses `Imported` signal type with confidence 0.90 (slightly lower than
+    /// native coverage because Frida edge tracking can miss inlined branches).
+    pub fn add_frida_coverage(&mut self, branch: BranchId, covered: bool) {
+        self.add_signal(
+            branch,
+            if covered {
+                CoverageSignal::Imported(true)
+            } else {
+                CoverageSignal::Imported(false)
+            },
+            0.90,
+        );
+    }
+
+    /// Add signals from source-level instrumentation (highest fidelity).
+    ///
+    /// Uses `Instrumented` signal type with confidence 0.999 (the maximum
+    /// reliable confidence — clamped from 1.0 internally).
+    pub fn add_instrumented_coverage(&mut self, branch: BranchId, covered: bool) {
+        self.add_signal(branch, CoverageSignal::Instrumented(covered), 0.999);
+    }
+
     /// Adjust a base severity score using coverage confidence.
     ///
     /// Formula: `base * (2.0 - coverage_confidence)`, capped at 10.0.
@@ -259,6 +299,115 @@ mod tests {
         assert!(
             conf > 0.5 && conf < 0.7,
             "expected moderate confidence with low-confidence signal, got {conf}"
+        );
+    }
+
+    // ---- WRAP / Frida / Instrumented helper methods ----
+
+    #[test]
+    fn wrap_coverage_covered_high_confidence() {
+        let mut oracle = CompoundOracle::new();
+        let b = branch(20);
+        oracle.add_wrap_coverage(b.clone(), true);
+        let conf = oracle.coverage_confidence(&b);
+        // Imported(true) at 0.95 → high confidence
+        assert!(conf > 0.9, "expected high confidence for wrap covered, got {conf}");
+    }
+
+    #[test]
+    fn wrap_coverage_not_covered_low_confidence() {
+        let mut oracle = CompoundOracle::new();
+        let b = branch(21);
+        oracle.add_wrap_coverage(b.clone(), false);
+        let conf = oracle.coverage_confidence(&b);
+        assert!(conf < 0.1, "expected low confidence for wrap not-covered, got {conf}");
+    }
+
+    #[test]
+    fn frida_coverage_covered_high_confidence() {
+        let mut oracle = CompoundOracle::new();
+        let b = branch(22);
+        oracle.add_frida_coverage(b.clone(), true);
+        let conf = oracle.coverage_confidence(&b);
+        assert!(conf > 0.85, "expected high confidence for frida covered, got {conf}");
+    }
+
+    #[test]
+    fn frida_coverage_lower_than_wrap() {
+        // Frida has lower confidence (0.90) than wrap (0.95).
+        let mut wrap_oracle = CompoundOracle::new();
+        let mut frida_oracle = CompoundOracle::new();
+        let b = branch(23);
+        wrap_oracle.add_wrap_coverage(b.clone(), true);
+        frida_oracle.add_frida_coverage(b.clone(), true);
+        let wrap_conf = wrap_oracle.coverage_confidence(&b);
+        let frida_conf = frida_oracle.coverage_confidence(&b);
+        assert!(
+            wrap_conf > frida_conf,
+            "wrap confidence ({wrap_conf}) should exceed frida ({frida_conf})"
+        );
+    }
+
+    #[test]
+    fn instrumented_coverage_highest_confidence() {
+        let mut oracle = CompoundOracle::new();
+        let b = branch(24);
+        oracle.add_instrumented_coverage(b.clone(), true);
+        let conf = oracle.coverage_confidence(&b);
+        assert!(conf > 0.99, "expected very high confidence for instrumented, got {conf}");
+    }
+
+    #[test]
+    fn instrumented_exceeds_wrap_and_frida() {
+        let b = branch(25);
+
+        let mut inst = CompoundOracle::new();
+        inst.add_instrumented_coverage(b.clone(), true);
+
+        let mut wrap = CompoundOracle::new();
+        wrap.add_wrap_coverage(b.clone(), true);
+
+        let mut frida = CompoundOracle::new();
+        frida.add_frida_coverage(b.clone(), true);
+
+        let ic = inst.coverage_confidence(&b);
+        let wc = wrap.coverage_confidence(&b);
+        let fc = frida.coverage_confidence(&b);
+
+        assert!(ic > wc, "instrumented ({ic}) > wrap ({wc})");
+        assert!(wc > fc, "wrap ({wc}) > frida ({fc})");
+    }
+
+    #[test]
+    fn mixed_sources_combine() {
+        let mut oracle = CompoundOracle::new();
+        let b = branch(26);
+        oracle.add_wrap_coverage(b.clone(), true);
+        oracle.add_frida_coverage(b.clone(), true);
+        let combined = oracle.coverage_confidence(&b);
+
+        // Two agreeing positive signals should be higher than either alone.
+        let mut single = CompoundOracle::new();
+        single.add_wrap_coverage(b.clone(), true);
+        let single_conf = single.coverage_confidence(&b);
+
+        assert!(
+            combined > single_conf,
+            "combined ({combined}) should exceed single ({single_conf})"
+        );
+    }
+
+    #[test]
+    fn contradicting_wrap_and_frida() {
+        let mut oracle = CompoundOracle::new();
+        let b = branch(27);
+        oracle.add_wrap_coverage(b.clone(), true); // covered at 0.95
+        oracle.add_frida_coverage(b.clone(), false); // not covered at 0.90
+        let conf = oracle.coverage_confidence(&b);
+        // Wrap has higher confidence, so net should lean slightly positive.
+        assert!(
+            conf > 0.4 && conf < 0.85,
+            "expected moderate confidence from contradiction, got {conf}"
         );
     }
 
