@@ -7,6 +7,7 @@
 //! integration tests can exercise CLI logic without spawning a subprocess.
 
 pub mod agent_dispatch;
+pub mod ci_report;
 pub mod doctor;
 pub mod fuzz;
 pub mod integrate;
@@ -135,6 +136,8 @@ pub enum Commands {
     Mcp,
     /// Write MCP server config for Claude Code, Cursor, or Windsurf.
     Integrate(integrate::IntegrateArgs),
+    /// Compare findings between base and head audit reports (CI diff).
+    CiReport(CiReportArgs),
 }
 
 #[derive(Parser, Clone)]
@@ -712,6 +715,21 @@ pub struct TestDataArgs {
     pub output_format: OutputFormat,
 }
 
+#[derive(Parser)]
+pub struct CiReportArgs {
+    /// Path to the base findings JSON (e.g. from the target branch).
+    #[arg(long)]
+    pub base: PathBuf,
+
+    /// Path to the head findings JSON (e.g. from the PR branch).
+    #[arg(long)]
+    pub head: PathBuf,
+
+    /// Output format: text (markdown) or json.
+    #[arg(long, default_value = "text")]
+    pub output_format: OutputFormat,
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 pub enum OutputFormat {
     Text,
@@ -797,6 +815,15 @@ pub async fn run_cli(cli: Cli, cfg: &ApexConfig) -> Result<()> {
         Commands::TestData(args) => run_test_data(args).await,
         Commands::Mcp => mcp::run_mcp().await,
         Commands::Integrate(args) => integrate::run_integrate(args).await,
+        Commands::CiReport(args) => {
+            let json_output = matches!(args.output_format, OutputFormat::Json);
+            let has_new_high_critical =
+                ci_report::run_ci_report(&args.base, &args.head, json_output)?;
+            if has_new_high_critical {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
     }
 }
 
