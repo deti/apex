@@ -782,6 +782,60 @@ impl<'a> InternalGoParser<'a> {
         Self { filename }
     }
 
+    /// Find the matching `)` for the `(` at position `open_pos`, respecting
+    /// nested parentheses and ignoring brackets `[]` (Go generics).
+    fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {
+        let bytes = s.as_bytes();
+        if open_pos >= bytes.len() || bytes[open_pos] != b'(' {
+            return None;
+        }
+        let mut depth: i32 = 0;
+        for (i, &b) in bytes[open_pos..].iter().enumerate() {
+            match b {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(open_pos + i);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Join multi-line Go function signatures into a single string.
+    /// If the `func` line has unbalanced parens or the next line looks like
+    /// a continuation (doesn't start with `{` and is indented), merge them.
+    fn join_func_signature(lines: &[&str], start: usize) -> String {
+        let first = lines[start].trim();
+        // Quick check: if parens are balanced, it's a single-line signature.
+        let open_count = first.chars().filter(|&c| c == '(').count();
+        let close_count = first.chars().filter(|&c| c == ')').count();
+        if open_count <= close_count {
+            return first.to_string();
+        }
+        // Unbalanced — join continuation lines
+        let mut combined = first.to_string();
+        let mut total_open = open_count;
+        let mut total_close = close_count;
+        let mut i = start + 1;
+        while i < lines.len() && total_open > total_close {
+            let next = lines[i].trim();
+            if next.is_empty() {
+                i += 1;
+                continue;
+            }
+            combined.push(' ');
+            combined.push_str(next);
+            total_open += next.chars().filter(|&c| c == '(').count();
+            total_close += next.chars().filter(|&c| c == ')').count();
+            i += 1;
+        }
+        combined
+    }
+
     fn parse(&mut self, source: &str, cpg: &mut Cpg) {
         let lines: Vec<&str> = source.lines().collect();
         let mut i = 0;
@@ -796,15 +850,22 @@ impl<'a> InternalGoParser<'a> {
     }
 
     fn parse_func(&self, lines: &[&str], def_idx: usize, cpg: &mut Cpg) -> usize {
-        let def_line = lines[def_idx].trim();
+        // Join continuation lines: if the definition line has unbalanced parens
+        // or the next line doesn't start with `{` and is indented, treat it as
+        // part of the same signature.
+        let def_line = Self::join_func_signature(lines, def_idx);
         let line_no = (def_idx + 1) as u32;
 
         // Strip `func ` prefix, skip optional receiver `(recv Type)`
         let after_func = def_line.trim_start_matches("func").trim();
         let after_func = if after_func.starts_with('(') {
-            // receiver: skip to closing paren
-            let close = after_func.find(')').map(|i| i + 1).unwrap_or(0);
-            after_func[close..].trim()
+            // receiver: skip to the *matching* closing paren (handles generics like [T])
+            if let Some(close) = Self::find_matching_paren(after_func, 0) {
+                after_func[close + 1..].trim()
+            } else {
+                // Malformed receiver — skip the whole `(` prefix best-effort
+                after_func
+            }
         } else {
             after_func
         };
@@ -812,8 +873,9 @@ impl<'a> InternalGoParser<'a> {
         let paren = after_func.find('(').unwrap_or(after_func.len());
         let fn_name = after_func[..paren].trim().to_string();
 
-        let params: Vec<String> =
-            if let (Some(open), Some(close)) = (after_func.find('('), after_func.find(')')) {
+        let params: Vec<String> = if let Some(open) = after_func.find('(') {
+            // Find the matching `)` for the parameter list (not just any `)`)
+            if let Some(close) = Self::find_matching_paren(after_func, open) {
                 let inner = &after_func[open + 1..close];
                 inner
                     .split(',')
@@ -830,7 +892,10 @@ impl<'a> InternalGoParser<'a> {
                     .collect()
             } else {
                 vec![]
-            };
+            }
+        } else {
+            vec![]
+        };
 
         let method_id = cpg.add_node(NodeKind::Method {
             name: fn_name,
@@ -1603,5 +1668,131 @@ mod tests {
                 .any(|(_, k)| matches!(k, NodeKind::Method { .. })),
             "boxed CpgBuilder should produce a Method node"
         );
+    }
+
+    // ── Go function signature parsing — bounds-check regression tests ────────
+
+    /// Simple Go function — baseline.
+    #[test]
+    fn go_simple_func() {
+        let source = "func main() {\n    fmt.Println(\"hello\")\n}\n";
+        let cpg = build_go_cpg(source, "main.go");
+        assert!(method_names(&cpg).contains(&"main".to_string()));
+    }
+
+    /// Go function with parameters.
+    #[test]
+    fn go_func_with_params() {
+        let source = "func add(a int, b int) int {\n    return a + b\n}\n";
+        let cpg = build_go_cpg(source, "math.go");
+        assert!(method_names(&cpg).contains(&"add".to_string()));
+        let params = param_names(&cpg);
+        assert!(params.contains(&"a".to_string()));
+        assert!(params.contains(&"b".to_string()));
+    }
+
+    /// Go method with receiver — previously crashed with generic receivers.
+    #[test]
+    fn go_method_with_receiver() {
+        let source = "func (s *Server) Start(port int) error {\n    return nil\n}\n";
+        let cpg = build_go_cpg(source, "server.go");
+        assert!(method_names(&cpg).contains(&"Start".to_string()));
+        assert!(param_names(&cpg).contains(&"port".to_string()));
+    }
+
+    /// Go generic receiver `func (r Receiver[T]) Method()` — the `[T]` inside
+    /// the receiver must not confuse the paren-matching logic.
+    #[test]
+    fn go_generic_receiver_no_panic() {
+        let source = "func (c Cache[K, V]) Get(key K) (V, bool) {\n    return c.m[key]\n}\n";
+        let cpg = build_go_cpg(source, "cache.go");
+        assert!(method_names(&cpg).contains(&"Get".to_string()));
+        assert!(param_names(&cpg).contains(&"key".to_string()));
+    }
+
+    /// Go generic receiver with pointer — `func (c *Cache[K, V]) Set(...)`.
+    #[test]
+    fn go_generic_pointer_receiver_no_panic() {
+        let source =
+            "func (c *Cache[K, V]) Set(key K, val V) {\n    c.m[key] = val\n}\n";
+        let cpg = build_go_cpg(source, "cache.go");
+        assert!(method_names(&cpg).contains(&"Set".to_string()));
+        let params = param_names(&cpg);
+        assert!(params.contains(&"key".to_string()));
+        assert!(params.contains(&"val".to_string()));
+    }
+
+    /// Multi-line Go function signature — parameters wrap onto next line.
+    #[test]
+    fn go_multiline_func_signature() {
+        let source = "func CreateUser(\n    name string,\n    age int,\n) error {\n    return nil\n}\n";
+        let cpg = build_go_cpg(source, "user.go");
+        assert!(method_names(&cpg).contains(&"CreateUser".to_string()));
+        let params = param_names(&cpg);
+        assert!(params.contains(&"name".to_string()));
+        assert!(params.contains(&"age".to_string()));
+    }
+
+    /// Multi-line method with receiver — `func (r *Receiver)\n    MethodName(...)`.
+    #[test]
+    fn go_multiline_method_with_receiver() {
+        let source = "func (s *Server) HandleRequest(\n    w http.ResponseWriter,\n    r *http.Request,\n) {\n    w.Write(nil)\n}\n";
+        let cpg = build_go_cpg(source, "handler.go");
+        assert!(method_names(&cpg).contains(&"HandleRequest".to_string()));
+        let params = param_names(&cpg);
+        assert!(params.contains(&"w".to_string()));
+        assert!(params.contains(&"r".to_string()));
+    }
+
+    /// Go function with no parameters and multiple return values.
+    #[test]
+    fn go_func_multiple_returns_no_params() {
+        let source = "func Version() (string, error) {\n    return \"1.0\", nil\n}\n";
+        let cpg = build_go_cpg(source, "version.go");
+        assert!(method_names(&cpg).contains(&"Version".to_string()));
+        assert!(param_names(&cpg).is_empty());
+    }
+
+    /// Go function where closing paren of return type could confuse naive find(')').
+    #[test]
+    fn go_func_return_tuple_paren_confusion() {
+        let source = "func Parse(input string) (Result, error) {\n    return Result{}, nil\n}\n";
+        let cpg = build_go_cpg(source, "parse.go");
+        assert!(method_names(&cpg).contains(&"Parse".to_string()));
+        assert!(param_names(&cpg).contains(&"input".to_string()));
+    }
+
+    /// Go variadic function `func Printf(format string, args ...interface{})`.
+    #[test]
+    fn go_variadic_func() {
+        let source = "func Printf(format string, args ...interface{}) {\n}\n";
+        let cpg = build_go_cpg(source, "fmt.go");
+        assert!(method_names(&cpg).contains(&"Printf".to_string()));
+        assert!(param_names(&cpg).contains(&"format".to_string()));
+        assert!(param_names(&cpg).contains(&"args".to_string()));
+    }
+
+    /// Empty receiver parens `func () Broken()` — should not panic.
+    #[test]
+    fn go_empty_receiver_no_panic() {
+        let source = "func () Orphan() {\n}\n";
+        let cpg = build_go_cpg(source, "orphan.go");
+        assert!(method_names(&cpg).contains(&"Orphan".to_string()));
+    }
+
+    /// GoCpgBuilder trait impl returns correct language.
+    #[test]
+    fn go_cpg_builder_language_is_go() {
+        use apex_core::types::Language;
+        let builder = GoCpgBuilder;
+        assert_eq!(builder.language(), Language::Go);
+    }
+
+    /// Deeply nested generics in receiver: `func (m Map[K, List[V]]) Keys()`.
+    #[test]
+    fn go_nested_generic_receiver() {
+        let source = "func (m Map[K, List[V]]) Keys() []K {\n    return nil\n}\n";
+        let cpg = build_go_cpg(source, "generic.go");
+        assert!(method_names(&cpg).contains(&"Keys".to_string()));
     }
 }
