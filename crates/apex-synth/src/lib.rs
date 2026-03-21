@@ -18,6 +18,7 @@ pub mod jest;
 pub mod junit;
 pub mod kotlin;
 pub mod llm;
+pub mod mutation_gen;
 pub mod mutation_hint;
 pub mod prompt_registry;
 pub mod property;
@@ -47,6 +48,7 @@ pub use kotlin::KotlinTestSynthesizer;
 pub use llm::{
     CoverageGap, LlmConfig, LlmMessage, LlmRole, LlmSynthesizer, SynthAttempt, TestResult,
 };
+pub use mutation_gen::{GeneratedTest, Mutation, MutationOperator, MutationTestGenerator};
 pub use mutation_hint::{format_hints_block, MutationHint};
 pub use prompt_registry::PromptRegistry;
 pub use property::{InferredProperty, PropertyInferer};
