@@ -106,21 +106,32 @@ pub fn build_go_cpg(source: &str, filename: &str) -> Cpg {
 
 /// Build a CPG from Python source code.
 ///
-/// This is a simplified builder that parses basic Python patterns without
-/// requiring tree-sitter. Good enough to demonstrate taint-flow detection.
+/// When the `treesitter` feature is enabled, uses a tree-sitter-based parser
+/// that correctly handles nested calls, decorators, comprehensions, multi-line
+/// statements, and f-strings. Otherwise falls back to the simplified line-based
+/// parser.
 pub fn build_python_cpg(source: &str, filename: &str) -> Cpg {
-    let mut cpg = Cpg::new();
-    let mut parser = InternalPythonParser::new(filename);
-    parser.parse(source, &mut cpg);
-    cpg
+    #[cfg(feature = "treesitter")]
+    {
+        crate::ts_python::build_ts_python_cpg(source, filename)
+    }
+    #[cfg(not(feature = "treesitter"))]
+    {
+        let mut cpg = Cpg::new();
+        let mut parser = InternalPythonParser::new(filename);
+        parser.parse(source, &mut cpg);
+        cpg
+    }
 }
 
 // ─── Internal builder state ───────────────────────────────────────────────────
 
+#[cfg(not(feature = "treesitter"))]
 struct InternalPythonParser<'a> {
     filename: &'a str,
 }
 
+#[cfg(not(feature = "treesitter"))]
 impl<'a> InternalPythonParser<'a> {
     fn new(filename: &'a str) -> Self {
         Self { filename }
@@ -368,6 +379,7 @@ impl<'a> InternalPythonParser<'a> {
 // ─── Parsing helpers ─────────────────────────────────────────────────────────
 
 /// Parse `def name(p1, p2, ...):` → (name, [params])
+#[cfg(not(feature = "treesitter"))]
 fn parse_def_signature(line: &str) -> (String, Vec<String>) {
     let line = line.trim_start_matches("def ").trim();
     let paren = line.find('(').unwrap_or(line.len());
@@ -396,6 +408,7 @@ fn parse_def_signature(line: &str) -> (String, Vec<String>) {
 }
 
 /// Parse control-structure keywords at the start of a statement.
+#[cfg(not(feature = "treesitter"))]
 fn parse_ctrl(stmt: &str, line_no: u32) -> Option<NodeKind> {
     let kind = if stmt.starts_with("if ") || stmt == "if:" {
         CtrlKind::If
@@ -1254,8 +1267,9 @@ mod tests {
     }
 
     /// Line 247: `try_parse_call` returns `None` when callee contains non-identifier chars.
-    /// e.g. `"str"(x)` — callee `"str"` has quotes so the dotted-name check fails.
+    /// e.g. `"str"(x)` — tree-sitter treats this as a valid call expression.
     #[test]
+    #[cfg(not(feature = "treesitter"))]
     fn try_parse_call_invalid_callee_returns_none() {
         let source = "def foo():\n    \"str\"(x)\n";
         let cpg = build_python_cpg(source, "test.py");
@@ -1304,8 +1318,9 @@ mod tests {
 
     /// Line 299: `parse_def_signature` returns `vec![]` when there are no parens.
     /// A `def` line without parentheses still creates a Method node with no params.
-    /// The name will include any trailing colon since no paren delimiter is found.
+    /// Note: `def bare:` is syntactically invalid Python; tree-sitter rejects it.
     #[test]
+    #[cfg(not(feature = "treesitter"))]
     fn parse_def_signature_no_parens_yields_empty_params() {
         // Without parens, `find('(').unwrap_or(line.len())` returns the full length,
         // so `name` = the whole trimmed string (e.g. "bare:").
@@ -1366,7 +1381,10 @@ mod tests {
     }
 
     /// Line 313: `CtrlKind::Try`
+    /// Note: this test uses syntactically invalid Python (try without except).
+    /// The tree-sitter parser correctly rejects it, so gate behind line-based mode.
     #[test]
+    #[cfg(not(feature = "treesitter"))]
     fn builder_detects_try_control_structure() {
         let source = "def foo():\n    try:\n        pass\n";
         let cpg = build_python_cpg(source, "test.py");

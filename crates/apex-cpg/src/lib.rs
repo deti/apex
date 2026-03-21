@@ -6,6 +6,11 @@
 pub mod architecture;
 pub mod builder;
 pub use builder::{CpgBuilder, GoCpgBuilder, JsCpgBuilder, PythonCpgBuilder};
+
+#[cfg(feature = "treesitter")]
+pub mod ts_python;
+#[cfg(feature = "treesitter")]
+pub use ts_python::TreeSitterPythonCpgBuilder;
 pub mod deepdfa;
 pub mod model_loader;
 pub mod query;
