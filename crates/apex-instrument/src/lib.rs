@@ -32,5 +32,3 @@ pub use ruby::RubyInstrumentor;
 pub use rust_cov::RustCovInstrumentor;
 pub use swift::SwiftInstrumentor;
 pub use wasm::WasmInstrumentor;
-pub mod lcov_export;
-pub mod lcov_export;

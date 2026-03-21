@@ -717,6 +717,7 @@ pub enum OutputFormat {
     Text,
     Json,
     Lcov,
+    Markdown,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -1167,6 +1168,33 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
                 Err(e) => eprintln!("{{\"error\": \"failed to serialize report: {e}\"}}"),
             }
         }
+        OutputFormat::Markdown => {
+            let mut top_findings: Vec<_> = compound
+                .detection
+                .findings
+                .iter()
+                .filter(|f| f.severity.rank() <= min_severity.rank())
+                .collect();
+            top_findings.sort_by(|a, b| a.severity.rank().cmp(&b.severity.rank()));
+
+            let coverage = if has_coverage {
+                Some((
+                    oracle.coverage_percent(),
+                    oracle.covered_count(),
+                    oracle.total_count(),
+                ))
+            } else {
+                None
+            };
+
+            let md = format_findings_markdown(
+                &format!("APEX Analysis \u{2014} {project_name} ({lang})"),
+                &summary,
+                &top_findings,
+                coverage,
+            );
+            print!("{md}");
+        }
         OutputFormat::Text => {
             println!(
                 "\n\x1b[1mAPEX Analysis\x1b[0m \u{2014} {project_name} ({lang})\n"
@@ -1558,7 +1586,7 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         OutputFormat::Json => {
             print_json_gap_report(&oracle, &instrumented.file_paths, &target_path);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Markdown => {
             print_gap_report(&oracle, &instrumented.file_paths, &target_path);
             if let Some(ref compound) = analysis {
                 if !compound.detection.findings.is_empty() {
@@ -2251,6 +2279,90 @@ async fn ratchet(args: RatchetArgs, cfg: &ApexConfig) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Markdown formatting helpers
+// ---------------------------------------------------------------------------
+
+/// Format a severity summary table and findings table in GitHub-flavored Markdown.
+///
+/// Shows the top `top_n` findings directly, and if there are more, wraps the
+/// full list in a `<details>` collapsible block.
+fn format_findings_markdown(
+    heading: &str,
+    summary: &apex_detect::report::SecuritySummary,
+    findings: &[&apex_detect::Finding],
+    coverage: Option<(f64, usize, usize)>,
+) -> String {
+    use std::fmt::Write;
+    let mut buf = String::new();
+    let top_n = 10;
+
+    writeln!(buf, "## {heading}\n").ok();
+
+    writeln!(buf, "| Severity | Count |").ok();
+    writeln!(buf, "|----------|------:|").ok();
+    if summary.critical > 0 {
+        writeln!(buf, "| Critical | {} |", summary.critical).ok();
+    }
+    if summary.high > 0 {
+        writeln!(buf, "| High | {} |", summary.high).ok();
+    }
+    if summary.medium > 0 {
+        writeln!(buf, "| Medium | {} |", summary.medium).ok();
+    }
+    if summary.low > 0 {
+        writeln!(buf, "| Low | {} |", summary.low).ok();
+    }
+    writeln!(buf).ok();
+
+    if let Some((pct, covered, total)) = coverage {
+        writeln!(buf, "**Coverage:** {pct:.1}% ({covered} / {total} branches)\n").ok();
+    }
+
+    if !findings.is_empty() {
+        let show_n = top_n.min(findings.len());
+        writeln!(buf, "### Top Findings\n").ok();
+        write_findings_table(&mut buf, &findings[..show_n]);
+
+        if findings.len() > show_n {
+            writeln!(buf, "<details>").ok();
+            writeln!(buf, "<summary>All {} findings</summary>\n", findings.len()).ok();
+            write_findings_table(&mut buf, findings);
+            writeln!(buf, "\n</details>").ok();
+        }
+    }
+
+    buf
+}
+
+/// Write a markdown table of findings into `buf`.
+fn write_findings_table(buf: &mut String, findings: &[&apex_detect::Finding]) {
+    use std::fmt::Write;
+    writeln!(buf, "| Severity | File | Line | CWE | Description |").ok();
+    writeln!(buf, "|----------|------|-----:|-----|-------------|").ok();
+    for f in findings {
+        let sev = format!("{:?}", f.severity).to_uppercase();
+        let line_str = f.line.map(|l| l.to_string()).unwrap_or_default();
+        let cwe_str = if f.cwe_ids.is_empty() {
+            String::new()
+        } else {
+            f.cwe_ids
+                .iter()
+                .map(|id| format!("CWE-{id}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        writeln!(
+            buf,
+            "| {sev} | {} | {line_str} | {cwe_str} | {} |",
+            f.file.display(),
+            f.title
+        )
+        .ok();
+    }
+    writeln!(buf).ok();
+}
+
+// ---------------------------------------------------------------------------
 // `apex audit`
 // ---------------------------------------------------------------------------
 
@@ -2315,6 +2427,27 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
 
     let output_text = match args.output_format {
         OutputFormat::Json => serde_json::to_string_pretty(&report)?,
+        OutputFormat::Markdown => {
+            let summary = report.security_summary();
+            let mut filtered: Vec<_> = report
+                .findings
+                .iter()
+                .filter(|f| f.severity.rank() <= min_severity.rank())
+                .collect();
+            filtered.sort_by(|a, b| a.severity.rank().cmp(&b.severity.rank()));
+
+            let project_name = target_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".into());
+
+            format_findings_markdown(
+                &format!("APEX Security Audit \u{2014} {project_name}"),
+                &summary,
+                &filtered,
+                None,
+            )
+        }
         OutputFormat::Text | OutputFormat::Lcov => {
             let summary = report.security_summary();
             let mut buf = String::new();
@@ -2686,7 +2819,7 @@ async fn run_test_optimize(args: TestOptimizeArgs) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("Test Suite Optimization:");
             println!("  Minimal covering set: {selected_count} / {total_tests} tests");
             println!("  Redundant tests:     {}", total_tests - selected_count);
@@ -2824,7 +2957,7 @@ async fn run_dead_code(args: DeadCodeArgs) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("Dead Code Analysis:");
             println!(
                 "  {} / {} branches never hit by any test ({} dead)",
@@ -2997,7 +3130,7 @@ async fn run_lint(args: LintArgs, cfg: &ApexConfig) -> Result<()> {
                 .collect();
             println!("{}", serde_json::to_string_pretty(&findings)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             let has_index = index.is_some();
             if has_index {
                 println!("Runtime-prioritized lint findings:\n");
@@ -3256,7 +3389,7 @@ async fn run_flaky_detect(args: FlakyDetectArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&flaky)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             if flaky.is_empty() {
                 println!("No flaky tests detected across {} runs.", args.runs);
             } else {
@@ -3310,7 +3443,7 @@ async fn run_complexity(args: ComplexityArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&results)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("Exercised vs Static Complexity:\n");
             println!(
                 "{:<40} {:>8} {:>8} {:>7} Classification",
@@ -3354,7 +3487,7 @@ async fn run_docs(args: DocsArgs) -> Result<()> {
 
     let output = match args.output_format {
         OutputFormat::Json => serde_json::to_string_pretty(&docs)?,
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             let mut buf = String::new();
             use std::fmt::Write;
             writeln!(buf, "# Behavioral Documentation\n").ok();
@@ -3433,7 +3566,7 @@ async fn run_verify_boundaries(args: VerifyBoundariesArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("Boundary Verification\n");
             println!("  Entry pattern:     \"{}\"", report.entry_pattern);
             println!("  Auth check:        \"{}\"", report.auth_pattern);
@@ -3591,7 +3724,7 @@ async fn run_regression_check(args: RegressionCheckArgs) -> Result<()> {
                 }))?
             );
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             if regressions.is_empty() {
                 println!(
                     "Regression check PASSED — no behavioral changes detected vs {}",
@@ -3637,7 +3770,7 @@ async fn run_risk(args: RiskArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&assessment)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("Risk Assessment: {}\n", assessment.level);
             println!("  Score:                  {}/100", assessment.score);
             println!("  Changed branches:       {}", assessment.changed_branches);
@@ -3674,7 +3807,7 @@ async fn run_hotpaths(args: HotpathsArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&hot)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!(
                 "Top {} Hot Paths ({} total branches)\n",
                 hot.len(),
@@ -3712,7 +3845,7 @@ async fn run_contracts(args: ContractsArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&invariants)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             if invariants.is_empty() {
                 println!("No invariants discovered (need 3+ tests per function for detection).");
                 return Ok(());
@@ -3758,7 +3891,7 @@ async fn run_deploy_score(args: DeployScoreArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&score)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("Deploy Score: {}/100\n", score.total_score);
             println!("  {}\n", score.recommendation);
             println!("Breakdown:");
@@ -3785,7 +3918,7 @@ async fn run_attack_surface(args: AttackSurfaceArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("Attack Surface Analysis\n");
             println!("  Entry pattern:       \"{}\"", report.entry_pattern);
             println!("  Matching tests:      {}", report.entry_tests);
@@ -3845,7 +3978,7 @@ fn run_features(args: FeaturesArgs) -> Result<()> {
             }
             println!("{}", serde_json::to_string_pretty(&map)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             let feature_names: Vec<String> = Language::Python
                 .supported_features()
                 .iter()
@@ -3992,7 +4125,7 @@ fn print_detector_findings(
                 serde_json::to_string_pretty(findings).unwrap_or_default()
             );
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("\n{} finding(s) in {}\n", findings.len(), target.display());
             for f in findings {
                 let sev = format!("{:?}", f.severity).to_uppercase();
@@ -4149,7 +4282,7 @@ async fn run_api_diff(args: ApiDiffArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!(
                 "API Diff: {} \u{2192} {}\n",
                 args.old.display(),
@@ -4227,7 +4360,7 @@ async fn run_data_flow(args: DataFlowArgs) -> Result<()> {
                 .collect();
             println!("{}", serde_json::to_string_pretty(&flow_data)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             if flows.is_empty() {
                 println!("No taint flows detected.");
             } else {
@@ -4278,7 +4411,7 @@ async fn run_blast_radius(args: BlastRadiusArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&assessment)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("\nBlast Radius: {}\n", target_path.display());
             println!("Risk Level:       {}", assessment.level);
             println!("Risk Score:       {}/100", assessment.score);
@@ -4375,7 +4508,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
                 });
                 writeln!(output, "{}", serde_json::to_string_pretty(&val)?).ok();
             }
-            OutputFormat::Text | OutputFormat::Lcov => {
+            OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
                 writeln!(output, "\n=== ASVS Compliance ({:?}) ===\n", asvs.level).ok();
                 writeln!(output, "  Total requirements: {}", asvs.coverage.total).ok();
                 writeln!(output, "  Automated:          {}", asvs.coverage.automated).ok();
@@ -4415,7 +4548,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
                 });
                 writeln!(output, "{}", serde_json::to_string_pretty(&val)?).ok();
             }
-            OutputFormat::Text | OutputFormat::Lcov => {
+            OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
                 writeln!(
                     output,
                     "\n=== SSDF Compliance ({}/{}) ===\n",
@@ -4462,7 +4595,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
                 });
                 writeln!(output, "{}", serde_json::to_string_pretty(&val)?).ok();
             }
-            OutputFormat::Text | OutputFormat::Lcov => {
+            OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
                 writeln!(output, "\n=== STRIDE Threat Model ===\n").ok();
                 for entry in &stride.entries {
                     writeln!(
@@ -4527,7 +4660,7 @@ async fn run_api_coverage(args: ApiCoverageArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("API Spec Coverage\n");
             println!("Spec endpoints:        {}", report.spec_count);
             println!("Implemented:           {}", report.implemented_count);
@@ -4581,7 +4714,7 @@ async fn run_service_map(args: ServiceMapArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&map)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("Service Dependency Map\n");
             println!("HTTP calls:      {}", map.http_count);
             println!("gRPC calls:      {}", map.grpc_count);
@@ -4621,7 +4754,7 @@ async fn run_schema_check(args: SchemaCheckArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             println!("Schema Migration Safety: {}\n", args.migration.display());
             println!("Dangerous: {}", report.dangerous_count);
             println!("Caution:   {}", report.caution_count);
@@ -4670,7 +4803,7 @@ async fn run_test_data(args: TestDataArgs) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
-        OutputFormat::Text | OutputFormat::Lcov => {
+        OutputFormat::Text | OutputFormat::Lcov | OutputFormat::Markdown => {
             if tables.is_empty() {
                 println!("No CREATE TABLE statements found.");
             } else {
@@ -5246,5 +5379,191 @@ mod tests {
         assert!(result.is_ok(), "valid path should be accepted");
         // Returned path should be absolute
         assert!(result.unwrap().is_absolute());
+    }
+
+    // -----------------------------------------------------------------------
+    // Markdown output format tests
+    // -----------------------------------------------------------------------
+
+    fn make_test_finding(
+        severity: apex_detect::Severity,
+        file: &str,
+        line: u32,
+        title: &str,
+        cwe_ids: Vec<u32>,
+    ) -> apex_detect::Finding {
+        apex_detect::Finding {
+            id: uuid::Uuid::nil(),
+            detector: "test".into(),
+            severity,
+            category: apex_detect::FindingCategory::Injection,
+            file: PathBuf::from(file),
+            line: Some(line),
+            title: title.into(),
+            description: "desc".into(),
+            evidence: vec![],
+            covered: false,
+            suggestion: "fix it".into(),
+            explanation: None,
+            fix: None,
+            cwe_ids,
+            noisy: false,
+        }
+    }
+
+    #[test]
+    fn markdown_has_table_headers() {
+        let summary = apex_detect::report::SecuritySummary {
+            detectors_run: vec![],
+            top_risk: None,
+            critical: 1,
+            high: 2,
+            medium: 3,
+            low: 4,
+        };
+        let f = make_test_finding(
+            apex_detect::Severity::Critical,
+            "src/auth.py",
+            67,
+            "SQL injection",
+            vec![89],
+        );
+        let findings: Vec<&apex_detect::Finding> = vec![&f];
+        let md = format_findings_markdown("APEX Analysis", &summary, &findings, None);
+
+        assert!(md.contains("| Severity | Count |"), "missing severity count header");
+        assert!(md.contains("|----------|------:|"), "missing severity count separator");
+        assert!(
+            md.contains("| Severity | File | Line | CWE | Description |"),
+            "missing findings table header"
+        );
+        assert!(
+            md.contains("|----------|------|-----:|-----|-------------|"),
+            "missing findings table separator"
+        );
+    }
+
+    #[test]
+    fn markdown_has_severity_counts() {
+        let summary = apex_detect::report::SecuritySummary {
+            detectors_run: vec![],
+            top_risk: None,
+            critical: 2,
+            high: 5,
+            medium: 0,
+            low: 1,
+        };
+        let md = format_findings_markdown("Test", &summary, &[], None);
+
+        assert!(md.contains("| Critical | 2 |"));
+        assert!(md.contains("| High | 5 |"));
+        assert!(!md.contains("| Medium |"), "zero-count severity should be omitted");
+        assert!(md.contains("| Low | 1 |"));
+    }
+
+    #[test]
+    fn markdown_has_coverage_line() {
+        let summary = apex_detect::report::SecuritySummary {
+            detectors_run: vec![],
+            top_risk: None,
+            critical: 0,
+            high: 0,
+            medium: 0,
+            low: 0,
+        };
+        let md = format_findings_markdown("Test", &summary, &[], Some((93.5, 148_745, 159_856)));
+
+        assert!(md.contains("**Coverage:** 93.5% (148745 / 159856 branches)"));
+    }
+
+    #[test]
+    fn markdown_has_cwe_in_findings() {
+        let summary = apex_detect::report::SecuritySummary {
+            detectors_run: vec![],
+            top_risk: None,
+            critical: 1,
+            high: 0,
+            medium: 0,
+            low: 0,
+        };
+        let f = make_test_finding(
+            apex_detect::Severity::Critical,
+            "src/auth.py",
+            67,
+            "SQL injection via f-string",
+            vec![89],
+        );
+        let findings: Vec<&apex_detect::Finding> = vec![&f];
+        let md = format_findings_markdown("Test", &summary, &findings, None);
+
+        assert!(md.contains("CWE-89"), "CWE ID should appear in table");
+        assert!(md.contains("CRITICAL"), "severity should be uppercase");
+        assert!(md.contains("src/auth.py"), "file path should appear");
+        assert!(md.contains("SQL injection via f-string"), "title should appear");
+    }
+
+    #[test]
+    fn markdown_details_block_for_many_findings() {
+        let summary = apex_detect::report::SecuritySummary {
+            detectors_run: vec![],
+            top_risk: None,
+            critical: 3,
+            high: 5,
+            medium: 4,
+            low: 0,
+        };
+        // Create 12 findings to trigger the <details> block (threshold is 10)
+        let findings_owned: Vec<_> = (0..12)
+            .map(|i| {
+                make_test_finding(
+                    if i < 3 {
+                        apex_detect::Severity::Critical
+                    } else if i < 8 {
+                        apex_detect::Severity::High
+                    } else {
+                        apex_detect::Severity::Medium
+                    },
+                    &format!("src/file{i}.py"),
+                    (i + 1) as u32,
+                    &format!("Finding {i}"),
+                    vec![],
+                )
+            })
+            .collect();
+        let findings: Vec<&apex_detect::Finding> = findings_owned.iter().collect();
+        let md = format_findings_markdown("Test", &summary, &findings, None);
+
+        assert!(md.contains("<details>"), "should have details block");
+        assert!(
+            md.contains("<summary>All 12 findings</summary>"),
+            "should show total count in summary"
+        );
+        assert!(md.contains("</details>"), "should close details block");
+        assert!(md.contains("### Top Findings"), "should have top findings heading");
+    }
+
+    #[test]
+    fn markdown_no_details_for_few_findings() {
+        let summary = apex_detect::report::SecuritySummary {
+            detectors_run: vec![],
+            top_risk: None,
+            critical: 0,
+            high: 1,
+            medium: 0,
+            low: 0,
+        };
+        let f = make_test_finding(apex_detect::Severity::High, "src/api.py", 42, "issue", vec![78]);
+        let findings: Vec<&apex_detect::Finding> = vec![&f];
+        let md = format_findings_markdown("Test", &summary, &findings, None);
+
+        assert!(!md.contains("<details>"), "should not have details block for <= 10 findings");
+    }
+
+    #[test]
+    fn markdown_output_format_variant_parses() {
+        // Verify the Markdown variant works with clap ValueEnum
+        use clap::ValueEnum;
+        let md = OutputFormat::from_str("markdown", true).unwrap();
+        assert!(matches!(md, OutputFormat::Markdown));
     }
 }
