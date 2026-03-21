@@ -716,7 +716,7 @@ pub struct TestDataArgs {
 pub enum OutputFormat {
     Text,
     Json,
-    Sarif,
+    Lcov,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -1126,23 +1126,6 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
     };
 
     match args.output_format {
-        OutputFormat::Sarif => {
-            let filtered: Vec<_> = compound
-                .detection
-                .findings
-                .iter()
-                .filter(|f| f.severity.rank() <= min_severity.rank())
-                .cloned()
-                .collect();
-            let sarif = apex_detect::sarif::findings_to_sarif(
-                &filtered,
-                env!("CARGO_PKG_VERSION"),
-            );
-            match serde_json::to_string_pretty(&sarif) {
-                Ok(json) => println!("{json}"),
-                Err(e) => eprintln!("{{\"error\": \"failed to serialize SARIF report: {e}\"}}"),
-            }
-        }
         OutputFormat::Json => {
             let mut report = serde_json::Map::new();
             report.insert("project".into(), serde_json::Value::String(project_name));
@@ -1291,6 +1274,26 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
             }
 
             println!();
+        }
+        OutputFormat::Lcov => {
+            if has_coverage {
+                let all_branches: Vec<_> = instrumented
+                    .as_ref()
+                    .map(|i| i.branch_ids.clone())
+                    .unwrap_or_default();
+                let exec_branches: Vec<_> = instrumented
+                    .as_ref()
+                    .map(|i| i.executed_branch_ids.clone())
+                    .unwrap_or_default();
+                let lcov = apex_instrument::lcov_export::export_lcov(
+                    &all_branches,
+                    &exec_branches,
+                    &file_paths,
+                );
+                print!("{lcov}");
+            } else {
+                eprintln!("No coverage data available for LCOV export");
+            }
         }
     }
 
@@ -1534,7 +1537,7 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
 
     // 5. Output gap report
     match output_format {
-        OutputFormat::Json | OutputFormat::Sarif if uses_agent => {
+        OutputFormat::Json if uses_agent => {
             let mut report = build_agent_report(&oracle, &instrumented.file_paths, &target_path);
 
             if let Some(ref compound) = analysis {
@@ -1552,7 +1555,7 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
                 Err(e) => eprintln!("{{\"error\": \"failed to serialize report: {e}\"}}"),
             }
         }
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             print_json_gap_report(&oracle, &instrumented.file_paths, &target_path);
         }
         OutputFormat::Text => {
@@ -1585,6 +1588,14 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
                     }
                 }
             }
+        }
+        OutputFormat::Lcov => {
+            let lcov = apex_instrument::lcov_export::export_lcov(
+                &instrumented.branch_ids,
+                &instrumented.executed_branch_ids,
+                &instrumented.file_paths,
+            );
+            print!("{lcov}");
         }
     }
 
@@ -2304,20 +2315,7 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
 
     let output_text = match args.output_format {
         OutputFormat::Json => serde_json::to_string_pretty(&report)?,
-        OutputFormat::Sarif => {
-            let filtered: Vec<_> = report
-                .findings
-                .iter()
-                .filter(|f| f.severity.rank() <= min_severity.rank())
-                .cloned()
-                .collect();
-            let sarif = apex_detect::sarif::findings_to_sarif(
-                &filtered,
-                env!("CARGO_PKG_VERSION"),
-            );
-            serde_json::to_string_pretty(&sarif)?
-        }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             let summary = report.security_summary();
             let mut buf = String::new();
             use std::fmt::Write;
@@ -2674,7 +2672,7 @@ async fn run_test_optimize(args: TestOptimizeArgs) -> Result<()> {
     };
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             let report = serde_json::json!({
                 "total_tests": total_tests,
                 "selected_tests": selected_count,
@@ -2688,7 +2686,7 @@ async fn run_test_optimize(args: TestOptimizeArgs) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("Test Suite Optimization:");
             println!("  Minimal covering set: {selected_count} / {total_tests} tests");
             println!("  Redundant tests:     {}", total_tests - selected_count);
@@ -2810,7 +2808,7 @@ async fn run_dead_code(args: DeadCodeArgs) -> Result<()> {
     let dead_count = index.total_branches.saturating_sub(index.covered_branches);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             let report = serde_json::json!({
                 "total_branches": index.total_branches,
                 "covered_branches": index.covered_branches,
@@ -2826,7 +2824,7 @@ async fn run_dead_code(args: DeadCodeArgs) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("Dead Code Analysis:");
             println!(
                 "  {} / {} branches never hit by any test ({} dead)",
@@ -2981,7 +2979,7 @@ async fn run_lint(args: LintArgs, cfg: &ApexConfig) -> Result<()> {
     });
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             let findings: Vec<serde_json::Value> = enriched
                 .iter()
                 .map(|(priority, f)| {
@@ -2999,7 +2997,7 @@ async fn run_lint(args: LintArgs, cfg: &ApexConfig) -> Result<()> {
                 .collect();
             println!("{}", serde_json::to_string_pretty(&findings)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             let has_index = index.is_some();
             if has_index {
                 println!("Runtime-prioritized lint findings:\n");
@@ -3255,10 +3253,10 @@ async fn run_flaky_detect(args: FlakyDetectArgs) -> Result<()> {
     let flaky = apex_index::analysis::detect_flaky_tests(&all_runs, &file_paths);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&flaky)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             if flaky.is_empty() {
                 println!("No flaky tests detected across {} runs.", args.runs);
             } else {
@@ -3309,10 +3307,10 @@ async fn run_complexity(args: ComplexityArgs) -> Result<()> {
     let results = apex_index::analysis::analyze_complexity(&index, &target_path);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&results)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("Exercised vs Static Complexity:\n");
             println!(
                 "{:<40} {:>8} {:>8} {:>7} Classification",
@@ -3355,8 +3353,8 @@ async fn run_docs(args: DocsArgs) -> Result<()> {
     let docs = apex_index::analysis::generate_docs(&index, &target_path);
 
     let output = match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => serde_json::to_string_pretty(&docs)?,
-        OutputFormat::Text => {
+        OutputFormat::Json => serde_json::to_string_pretty(&docs)?,
+        OutputFormat::Text | OutputFormat::Lcov => {
             let mut buf = String::new();
             use std::fmt::Write;
             writeln!(buf, "# Behavioral Documentation\n").ok();
@@ -3432,10 +3430,10 @@ async fn run_verify_boundaries(args: VerifyBoundariesArgs) -> Result<()> {
     );
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("Boundary Verification\n");
             println!("  Entry pattern:     \"{}\"", report.entry_pattern);
             println!("  Auth check:        \"{}\"", report.auth_pattern);
@@ -3583,7 +3581,7 @@ async fn run_regression_check(args: RegressionCheckArgs) -> Result<()> {
     let exit_code = if regressions.is_empty() { 0 } else { 1 };
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
@@ -3593,7 +3591,7 @@ async fn run_regression_check(args: RegressionCheckArgs) -> Result<()> {
                 }))?
             );
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             if regressions.is_empty() {
                 println!(
                     "Regression check PASSED — no behavioral changes detected vs {}",
@@ -3636,10 +3634,10 @@ async fn run_risk(args: RiskArgs) -> Result<()> {
     let assessment = apex_index::analysis::assess_risk(&index, &args.changed_files);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&assessment)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("Risk Assessment: {}\n", assessment.level);
             println!("  Score:                  {}/100", assessment.score);
             println!("  Changed branches:       {}", assessment.changed_branches);
@@ -3673,10 +3671,10 @@ async fn run_hotpaths(args: HotpathsArgs) -> Result<()> {
     let hot = apex_index::analysis::analyze_hotpaths(&index, args.top);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&hot)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!(
                 "Top {} Hot Paths ({} total branches)\n",
                 hot.len(),
@@ -3711,10 +3709,10 @@ async fn run_contracts(args: ContractsArgs) -> Result<()> {
     let invariants = apex_index::analysis::discover_contracts(&index, &target_path);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&invariants)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             if invariants.is_empty() {
                 println!("No invariants discovered (need 3+ tests per function for detection).");
                 return Ok(());
@@ -3757,10 +3755,10 @@ async fn run_deploy_score(args: DeployScoreArgs) -> Result<()> {
     );
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&score)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("Deploy Score: {}/100\n", score.total_score);
             println!("  {}\n", score.recommendation);
             println!("Breakdown:");
@@ -3784,10 +3782,10 @@ async fn run_attack_surface(args: AttackSurfaceArgs) -> Result<()> {
     let report = apex_index::analysis::analyze_attack_surface(&index, &args.entry_pattern);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("Attack Surface Analysis\n");
             println!("  Entry pattern:       \"{}\"", report.entry_pattern);
             println!("  Matching tests:      {}", report.entry_tests);
@@ -3839,7 +3837,7 @@ fn run_features(args: FeaturesArgs) -> Result<()> {
     };
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             let mut map = serde_json::Map::new();
             for lang in &languages {
                 let features = lang.supported_features();
@@ -3847,7 +3845,7 @@ fn run_features(args: FeaturesArgs) -> Result<()> {
             }
             println!("{}", serde_json::to_string_pretty(&map)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             let feature_names: Vec<String> = Language::Python
                 .supported_features()
                 .iter()
@@ -3988,13 +3986,13 @@ fn print_detector_findings(
         return;
     }
     match format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!(
                 "{}",
                 serde_json::to_string_pretty(findings).unwrap_or_default()
             );
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("\n{} finding(s) in {}\n", findings.len(), target.display());
             for f in findings {
                 let sev = format!("{:?}", f.severity).to_uppercase();
@@ -4148,10 +4146,10 @@ async fn run_api_diff(args: ApiDiffArgs) -> Result<()> {
     let report = ApiDiffer::diff(&old_spec, &new_spec)?;
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!(
                 "API Diff: {} \u{2192} {}\n",
                 args.old.display(),
@@ -4215,7 +4213,7 @@ async fn run_data_flow(args: DataFlowArgs) -> Result<()> {
     let flows = apex_cpg::taint::find_taint_flows(&cpg, args.max_depth);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             let flow_data: Vec<serde_json::Value> = flows
                 .iter()
                 .map(|f| {
@@ -4229,7 +4227,7 @@ async fn run_data_flow(args: DataFlowArgs) -> Result<()> {
                 .collect();
             println!("{}", serde_json::to_string_pretty(&flow_data)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             if flows.is_empty() {
                 println!("No taint flows detected.");
             } else {
@@ -4277,10 +4275,10 @@ async fn run_blast_radius(args: BlastRadiusArgs) -> Result<()> {
     let assessment = apex_index::analysis::assess_risk(&index, &args.changed_files);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&assessment)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("\nBlast Radius: {}\n", target_path.display());
             println!("Risk Level:       {}", assessment.level);
             println!("Risk Score:       {}/100", assessment.score);
@@ -4365,7 +4363,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
     if show_asvs {
         let asvs = apex_detect::compliance::asvs::generate_asvs_report(&detector_ids, asvs_level);
         match args.output_format {
-            OutputFormat::Json | OutputFormat::Sarif => {
+            OutputFormat::Json => {
                 let val = serde_json::json!({
                     "framework": "ASVS",
                     "level": format!("{:?}", asvs.level),
@@ -4377,7 +4375,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
                 });
                 writeln!(output, "{}", serde_json::to_string_pretty(&val)?).ok();
             }
-            OutputFormat::Text => {
+            OutputFormat::Text | OutputFormat::Lcov => {
                 writeln!(output, "\n=== ASVS Compliance ({:?}) ===\n", asvs.level).ok();
                 writeln!(output, "  Total requirements: {}", asvs.coverage.total).ok();
                 writeln!(output, "  Automated:          {}", asvs.coverage.automated).ok();
@@ -4396,7 +4394,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
     if show_ssdf {
         let ssdf = apex_detect::compliance::ssdf::generate_ssdf_report();
         match args.output_format {
-            OutputFormat::Json | OutputFormat::Sarif => {
+            OutputFormat::Json => {
                 let tasks: Vec<serde_json::Value> = ssdf
                     .tasks
                     .iter()
@@ -4417,7 +4415,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
                 });
                 writeln!(output, "{}", serde_json::to_string_pretty(&val)?).ok();
             }
-            OutputFormat::Text => {
+            OutputFormat::Text | OutputFormat::Lcov => {
                 writeln!(
                     output,
                     "\n=== SSDF Compliance ({}/{}) ===\n",
@@ -4445,7 +4443,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
             .join("\n");
         let stride = apex_detect::threat::stride::analyze_stride(&all_source);
         match args.output_format {
-            OutputFormat::Json | OutputFormat::Sarif => {
+            OutputFormat::Json => {
                 let entries: Vec<serde_json::Value> = stride
                     .entries
                     .iter()
@@ -4464,7 +4462,7 @@ async fn run_compliance_export(args: ComplianceExportArgs, cfg: &ApexConfig) -> 
                 });
                 writeln!(output, "{}", serde_json::to_string_pretty(&val)?).ok();
             }
-            OutputFormat::Text => {
+            OutputFormat::Text | OutputFormat::Lcov => {
                 writeln!(output, "\n=== STRIDE Threat Model ===\n").ok();
                 for entry in &stride.entries {
                     writeln!(
@@ -4526,10 +4524,10 @@ async fn run_api_coverage(args: ApiCoverageArgs) -> Result<()> {
     let report = apex_detect::api_coverage::analyze_coverage(&spec_json, &source_cache, lang)?;
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("API Spec Coverage\n");
             println!("Spec endpoints:        {}", report.spec_count);
             println!("Implemented:           {}", report.implemented_count);
@@ -4580,10 +4578,10 @@ async fn run_service_map(args: ServiceMapArgs) -> Result<()> {
     let map = apex_detect::service_map::analyze_service_map(&source_cache);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&map)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("Service Dependency Map\n");
             println!("HTTP calls:      {}", map.http_count);
             println!("gRPC calls:      {}", map.grpc_count);
@@ -4620,10 +4618,10 @@ async fn run_schema_check(args: SchemaCheckArgs) -> Result<()> {
     let report = apex_detect::schema_check::analyze_migration(&sql);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             println!("Schema Migration Safety: {}\n", args.migration.display());
             println!("Dangerous: {}", report.dangerous_count);
             println!("Caution:   {}", report.caution_count);
@@ -4664,7 +4662,7 @@ async fn run_test_data(args: TestDataArgs) -> Result<()> {
     let tables = apex_detect::test_data::parse_schema(&sql);
 
     match args.output_format {
-        OutputFormat::Json | OutputFormat::Sarif => {
+        OutputFormat::Json => {
             let output = serde_json::json!({
                 "tables": tables,
                 "rows_per_table": args.rows,
@@ -4672,7 +4670,7 @@ async fn run_test_data(args: TestDataArgs) -> Result<()> {
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Lcov => {
             if tables.is_empty() {
                 println!("No CREATE TABLE statements found.");
             } else {
@@ -5248,71 +5246,5 @@ mod tests {
         assert!(result.is_ok(), "valid path should be accepted");
         // Returned path should be absolute
         assert!(result.unwrap().is_absolute());
-    }
-
-    #[test]
-    fn output_format_sarif_variant_exists() {
-        // Verify the Sarif variant is a valid CLI value.
-        let fmt = OutputFormat::Sarif;
-        assert!(matches!(fmt, OutputFormat::Sarif));
-    }
-
-    #[test]
-    fn sarif_output_has_runs_and_results() {
-        use apex_detect::finding::{Finding, FindingCategory, Severity};
-        use apex_detect::sarif::findings_to_sarif;
-
-        let findings = vec![Finding {
-            id: uuid::Uuid::nil(),
-            detector: "test-detector".into(),
-            severity: Severity::High,
-            category: FindingCategory::Injection,
-            file: PathBuf::from("src/main.rs"),
-            line: Some(10),
-            title: "SQL injection".into(),
-            description: "Unsanitized input in query".into(),
-            evidence: vec![],
-            covered: false,
-            suggestion: "Use parameterized queries".into(),
-            explanation: None,
-            fix: None,
-            cwe_ids: vec![],
-            noisy: false,
-        }];
-
-        let sarif = findings_to_sarif(&findings, env!("CARGO_PKG_VERSION"));
-        let json_str = serde_json::to_string_pretty(&sarif).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-
-        // Verify SARIF 2.1.0 structure: $.runs[0].results must exist
-        assert_eq!(parsed["version"], "2.1.0");
-        let runs = parsed["runs"].as_array().expect("runs should be an array");
-        assert_eq!(runs.len(), 1);
-        let results = runs[0]["results"]
-            .as_array()
-            .expect("results should be an array");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0]["ruleId"], "test-detector/injection");
-        assert_eq!(results[0]["level"], "error");
-
-        // Verify $schema is present
-        assert!(parsed["$schema"].as_str().unwrap().contains("sarif-schema-2.1.0"));
-    }
-
-    #[test]
-    fn sarif_output_empty_findings_has_runs() {
-        use apex_detect::sarif::findings_to_sarif;
-
-        let sarif = findings_to_sarif(&[], env!("CARGO_PKG_VERSION"));
-        let json_str = serde_json::to_string(&sarif).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-
-        // Even with no findings, $.runs[0].results must exist (empty array)
-        let runs = parsed["runs"].as_array().expect("runs should be an array");
-        assert_eq!(runs.len(), 1);
-        let results = runs[0]["results"]
-            .as_array()
-            .expect("results should be an array");
-        assert!(results.is_empty());
     }
 }

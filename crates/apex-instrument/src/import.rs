@@ -155,7 +155,7 @@ pub fn load_coverage_file(
 /// Parse LCOV info format into branch data.
 ///
 /// Handles both `DA:` (line coverage) and `BRDA:` (branch coverage) records.
-fn parse_lcov(
+pub fn parse_lcov(
     content: &str,
 ) -> Result<CoverageData> {
     let mut all = Vec::new();
