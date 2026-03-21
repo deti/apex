@@ -505,6 +505,8 @@ fn find_expression_sinks(
             fix: None,
             cwe_ids: vec![22],
             noisy: finding_noisy,
+            base_severity: None,
+            coverage_confidence: None,
         });
     }
 
@@ -657,6 +659,8 @@ impl Detector for PathNormalizationDetector {
                         fix: None,
                         cwe_ids: vec![22],
                         noisy,
+                        base_severity: None,
+                        coverage_confidence: None,
                     });
                 }
             }

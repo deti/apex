@@ -98,7 +98,7 @@ impl Detector for OpenWithoutWithDetector {
                     explanation: None,
                     fix: None,
                     cwe_ids: vec![775],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                 });
             }
         }

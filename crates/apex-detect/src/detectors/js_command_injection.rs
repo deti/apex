@@ -157,7 +157,7 @@ impl Detector for JsCommandInjectionDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: vec![78],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                         });
                         break; // One finding per line max
                     }

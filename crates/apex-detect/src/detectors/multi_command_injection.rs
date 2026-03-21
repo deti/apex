@@ -377,6 +377,8 @@ impl Detector for MultiCommandInjectionDetector {
                             fix: None,
                             cwe_ids: vec![78],
                             noisy,
+                            base_severity: None,
+                            coverage_confidence: None,
                         };
 
                         // Check taint flow if CPG is available — downgrade instead of discard.

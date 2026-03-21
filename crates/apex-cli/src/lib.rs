@@ -1302,10 +1302,15 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
                 println!("\n  Top Findings:");
                 for f in top_findings.iter().take(10) {
                     let sev = format!("{:?}", f.severity).to_uppercase();
+                    let cov_label = f
+                        .coverage_label()
+                        .map(|l| format!(" ({l})"))
+                        .unwrap_or_default();
                     let line_str = f.line.map(|l| format!(":{l}")).unwrap_or_default();
                     println!(
-                        "    {:<9} {}{} \u{2014} {}",
+                        "    {:<9}{} {}{} \u{2014} {}",
                         sev,
+                        cov_label,
                         f.file.display(),
                         line_str,
                         f.title
@@ -2376,6 +2381,10 @@ fn write_findings_table(buf: &mut String, findings: &[&apex_detect::Finding]) {
     writeln!(buf, "|----------|------|-----:|-----|-------------|").ok();
     for f in findings {
         let sev = format!("{:?}", f.severity).to_uppercase();
+        let cov_label = f
+            .coverage_label()
+            .map(|l| format!(" ({l})"))
+            .unwrap_or_default();
         let line_str = f.line.map(|l| l.to_string()).unwrap_or_default();
         let cwe_str = if f.cwe_ids.is_empty() {
             String::new()
@@ -2388,7 +2397,7 @@ fn write_findings_table(buf: &mut String, findings: &[&apex_detect::Finding]) {
         };
         writeln!(
             buf,
-            "| {sev} | {} | {line_str} | {cwe_str} | {} |",
+            "| {sev}{cov_label} | {} | {line_str} | {cwe_str} | {} |",
             f.file.display(),
             f.title
         )
@@ -4164,11 +4173,15 @@ fn print_detector_findings(
             println!("\n{} finding(s) in {}\n", findings.len(), target.display());
             for f in findings {
                 let sev = format!("{:?}", f.severity).to_uppercase();
+                let cov_label = f
+                    .coverage_label()
+                    .map(|l| format!(" ({l})"))
+                    .unwrap_or_default();
                 let file_loc = match f.line {
                     Some(l) => format!("{}:{}", f.file.display(), l),
                     None => f.file.display().to_string(),
                 };
-                println!("[{sev}] {file_loc}");
+                println!("[{sev}{cov_label}] {file_loc}");
                 println!("  {}", f.title);
                 if !f.suggestion.is_empty() {
                     println!("  \u{2192} {}", f.suggestion);
@@ -5443,6 +5456,8 @@ mod tests {
             fix: None,
             cwe_ids,
             noisy: false,
+            base_severity: None,
+            coverage_confidence: None,
         }
     }
 

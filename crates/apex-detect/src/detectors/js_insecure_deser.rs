@@ -125,7 +125,7 @@ impl Detector for JsInsecureDeserDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: vec![502],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                         });
                         break; // One finding per line max
                     }

@@ -199,7 +199,7 @@ fn analyze_file(path: &Path, source: &str, pairs: &[TransformPair]) -> Vec<Findi
                     explanation: None,
                     fix: None,
                     cwe_ids: vec![754],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                 });
             }
         }

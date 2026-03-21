@@ -44,7 +44,7 @@ fn tool_not_installed_finding(tool: &str, file: &str) -> Finding {
         explanation: None,
         fix: None,
         cwe_ids: vec![],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
     }
 }
 
@@ -274,7 +274,7 @@ pub fn parse_cargo_audit_output(raw: &str) -> Result<Vec<Finding>> {
                 explanation: None,
                 fix,
                 cwe_ids: vec![1395],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
             });
         }
     }
@@ -309,7 +309,7 @@ pub fn parse_cargo_audit_output(raw: &str) -> Result<Vec<Finding>> {
                     explanation: None,
                     fix: None,
                     cwe_ids: vec![],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                 });
             }
         }
@@ -382,7 +382,7 @@ pub fn parse_pip_audit_output(raw: &str) -> Result<Vec<Finding>> {
                 explanation: None,
                 fix,
                 cwe_ids: vec![1395],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
             });
         }
     }
@@ -469,7 +469,7 @@ pub fn parse_npm_audit_output(raw: &str) -> Result<Vec<Finding>> {
             explanation: None,
             fix,
             cwe_ids: vec![1395],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
         });
     }
 
@@ -518,7 +518,7 @@ pub fn parse_dotnet_audit_output(raw: &str) -> Result<Vec<Finding>> {
             explanation: None,
             fix: None,
             cwe_ids: vec![1395],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
         });
     }
     Ok(findings)
@@ -579,7 +579,7 @@ pub fn parse_bundler_audit(raw: &str) -> Result<Vec<Finding>> {
                 explanation: None,
                 fix: None,
                 cwe_ids: vec![1395],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
             });
         }
     }
@@ -661,7 +661,7 @@ pub fn parse_osv_scanner_output(raw: &str) -> Result<Vec<Finding>> {
                     explanation: None,
                     fix: None,
                     cwe_ids: vec![1395],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                 });
             }
         }

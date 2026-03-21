@@ -145,7 +145,7 @@ impl Detector for InfoExposureDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![200],
-                        noisy: false,
+                        noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
 
@@ -170,7 +170,7 @@ impl Detector for InfoExposureDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![200],
-                        noisy: false,
+                        noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
 
@@ -198,7 +198,7 @@ impl Detector for InfoExposureDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![200],
-                        noisy: false,
+                        noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
 
@@ -223,7 +223,7 @@ impl Detector for InfoExposureDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![200],
-                        noisy: false,
+                        noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
 
@@ -258,7 +258,7 @@ impl Detector for InfoExposureDetector {
                                 explanation: None,
                                 fix: None,
                                 cwe_ids: vec![200],
-                                noisy: false,
+                                noisy: false, base_severity: None, coverage_confidence: None,
                             });
                         }
                     }
@@ -285,7 +285,7 @@ impl Detector for InfoExposureDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![200],
-                        noisy: false,
+                        noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
 
@@ -310,7 +310,7 @@ impl Detector for InfoExposureDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![200],
-                        noisy: false,
+                        noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
             }

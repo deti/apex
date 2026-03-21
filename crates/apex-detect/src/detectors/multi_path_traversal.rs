@@ -341,6 +341,8 @@ impl Detector for MultiPathTraversalDetector {
                             fix: None,
                             cwe_ids: vec![22],
                             noisy,
+                            base_severity: None,
+                            coverage_confidence: None,
                         });
                         break;
                     }

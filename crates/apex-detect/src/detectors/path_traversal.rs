@@ -101,7 +101,7 @@ pub fn scan_path_traversal(source: &str, file_path: &str) -> Vec<Finding> {
                 explanation: None,
                 fix: None,
                 cwe_ids: vec![22],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
             });
         }
     }

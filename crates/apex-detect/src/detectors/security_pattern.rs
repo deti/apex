@@ -1194,6 +1194,8 @@ impl Detector for SecurityPatternDetector {
                             fix: None,
                             cwe_ids: pattern.cwe.to_vec(),
                             noisy,
+                            base_severity: None,
+                            coverage_confidence: None,
                         };
 
                         // Check taint flow if CPG is available — downgrade instead of discard.

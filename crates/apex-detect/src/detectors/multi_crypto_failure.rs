@@ -575,7 +575,7 @@ impl Detector for MultiCryptoFailureDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: pattern.kind.cwe_ids(),
-                        noisy: false,
+                        noisy: false, base_severity: None, coverage_confidence: None,
                     });
                     break; // one finding per line
                 }

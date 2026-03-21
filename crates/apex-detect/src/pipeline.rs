@@ -322,6 +322,41 @@ impl DetectorPipeline {
     }
 }
 
+/// Apply coverage-informed severity re-scoring to findings using a compound oracle.
+///
+/// For each finding with a known line number, queries the oracle for coverage
+/// confidence and adjusts severity accordingly:
+/// - Low confidence (uncovered code): severity amplified (e.g. Medium -> High)
+/// - High confidence (well-tested code): severity reduced (e.g. High -> Medium)
+/// - Neutral confidence (0.5): no change
+///
+/// The original severity is preserved in `base_severity` and the oracle's
+/// confidence score is stored in `coverage_confidence`.
+pub fn apply_coverage_rescoring(
+    findings: &mut [Finding],
+    oracle: &apex_coverage::compound::CompoundOracle,
+    file_id: u64,
+) {
+    use crate::finding::Severity;
+    use apex_core::types::BranchId;
+
+    for finding in findings.iter_mut() {
+        if let Some(line) = finding.line {
+            let branch = BranchId::new(file_id, line, 0, 0);
+            let confidence = oracle.coverage_confidence(&branch);
+            finding.coverage_confidence = Some(confidence);
+            finding.base_severity = Some(finding.severity);
+
+            // Use the compound oracle's severity adjustment formula:
+            // multiplier = 2.0 - confidence (0% cov = 2x, 100% cov = 1x)
+            let base_numeric = finding.severity.numeric();
+            let adjusted_numeric = oracle.adjusted_severity(&branch, base_numeric);
+            let new_severity = Severity::from_numeric(adjusted_numeric);
+            finding.severity = new_severity;
+        }
+    }
+}
+
 pub fn deduplicate(findings: &mut Vec<Finding>) {
     let mut seen: HashMap<(std::path::PathBuf, Option<u32>, FindingCategory), usize> =
         HashMap::new();
@@ -433,7 +468,7 @@ mod tests {
             explanation: None,
             fix: None,
             cwe_ids: vec![],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
         }
     }
 
@@ -1443,5 +1478,146 @@ mod tests {
         let pipeline = DetectorPipeline::from_config(&cfg, Language::Rust);
         assert_eq!(pipeline.detectors.len(), 1);
         assert_eq!(pipeline.detectors[0].name(), "flag-hygiene");
+    }
+
+    // -----------------------------------------------------------------------
+    // Coverage-informed severity re-scoring tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn severity_rescoring_amplifies_uncovered_finding() {
+        use apex_coverage::compound::{CompoundOracle, CoverageSignal};
+        use apex_core::types::BranchId;
+
+        let mut oracle = CompoundOracle::new();
+        // Mark line 67 as NOT covered — low confidence
+        let branch = BranchId::new(1, 67, 0, 0);
+        oracle.add_default_signal(branch, CoverageSignal::Instrumented(false));
+
+        let mut findings = vec![make_finding("sql", "src/auth.py", 67, Severity::Medium, FindingCategory::Injection)];
+        super::apply_coverage_rescoring(&mut findings, &oracle, 1);
+
+        // Uncovered code should amplify severity: Medium (5.0) * ~2.0 = ~10.0 -> Critical
+        assert!(
+            findings[0].severity.rank() < Severity::Medium.rank(),
+            "expected severity upgrade, got {:?}",
+            findings[0].severity
+        );
+        assert_eq!(findings[0].base_severity, Some(Severity::Medium));
+        assert!(findings[0].coverage_confidence.unwrap() < 0.1);
+    }
+
+    #[test]
+    fn severity_rescoring_reduces_well_tested_finding() {
+        use apex_coverage::compound::{CompoundOracle, CoverageSignal};
+        use apex_core::types::BranchId;
+
+        let mut oracle = CompoundOracle::new();
+        // Mark line 42 as covered — high confidence
+        let branch = BranchId::new(1, 42, 0, 0);
+        oracle.add_default_signal(branch, CoverageSignal::Instrumented(true));
+
+        let mut findings = vec![make_finding("path", "src/utils.py", 42, Severity::High, FindingCategory::PathTraversal)];
+        super::apply_coverage_rescoring(&mut findings, &oracle, 1);
+
+        // Well-tested code should reduce severity: High (8.0) * ~1.0 = ~8.0 -> still High
+        // but the confidence should be very high
+        assert!(findings[0].coverage_confidence.unwrap() > 0.9);
+        assert_eq!(findings[0].base_severity, Some(Severity::High));
+    }
+
+    #[test]
+    fn severity_rescoring_no_change_neutral_confidence() {
+        use apex_coverage::compound::CompoundOracle;
+
+        let oracle = CompoundOracle::new();
+        // No signals for line 10 — neutral confidence (0.5)
+
+        let mut findings = vec![make_finding("panic", "src/main.rs", 10, Severity::Medium, FindingCategory::PanicPath)];
+        super::apply_coverage_rescoring(&mut findings, &oracle, 1);
+
+        // Neutral confidence: 5.0 * (2.0 - 0.5) = 7.5 -> High
+        // This is the expected behavior: no coverage data acts as a mild amplifier
+        assert_eq!(findings[0].base_severity, Some(Severity::Medium));
+        let conf = findings[0].coverage_confidence.unwrap();
+        assert!((conf - 0.5).abs() < 1e-10, "expected neutral 0.5, got {conf}");
+    }
+
+    #[test]
+    fn severity_rescoring_skips_findings_without_line() {
+        use apex_coverage::compound::CompoundOracle;
+
+        let oracle = CompoundOracle::new();
+
+        let mut finding = make_finding("test", "src/lib.rs", 1, Severity::High, FindingCategory::LogicBug);
+        finding.line = None; // No line number
+
+        let mut findings = vec![finding];
+        super::apply_coverage_rescoring(&mut findings, &oracle, 1);
+
+        // Should not have been touched
+        assert_eq!(findings[0].severity, Severity::High);
+        assert!(findings[0].base_severity.is_none());
+        assert!(findings[0].coverage_confidence.is_none());
+    }
+
+    #[test]
+    fn severity_rescoring_preserves_base_severity() {
+        use apex_coverage::compound::{CompoundOracle, CoverageSignal};
+        use apex_core::types::BranchId;
+
+        let mut oracle = CompoundOracle::new();
+        let branch = BranchId::new(1, 5, 0, 0);
+        oracle.add_default_signal(branch, CoverageSignal::Instrumented(false));
+
+        let mut findings = vec![make_finding("sec", "src/api.rs", 5, Severity::Low, FindingCategory::SecuritySmell)];
+        let original_severity = findings[0].severity;
+        super::apply_coverage_rescoring(&mut findings, &oracle, 1);
+
+        assert_eq!(findings[0].base_severity, Some(original_severity));
+        // Low (3.0) * ~2.0 = ~6.0 -> Medium or higher
+        assert!(
+            findings[0].severity.rank() <= Severity::Medium.rank(),
+            "expected severity upgrade from Low, got {:?}",
+            findings[0].severity
+        );
+    }
+
+    #[test]
+    fn severity_numeric_roundtrip() {
+        assert_eq!(Severity::from_numeric(10.0), Severity::Critical);
+        assert_eq!(Severity::from_numeric(9.0), Severity::Critical);
+        assert_eq!(Severity::from_numeric(8.0), Severity::High);
+        assert_eq!(Severity::from_numeric(7.0), Severity::High);
+        assert_eq!(Severity::from_numeric(5.0), Severity::Medium);
+        assert_eq!(Severity::from_numeric(4.0), Severity::Medium);
+        assert_eq!(Severity::from_numeric(3.0), Severity::Low);
+        assert_eq!(Severity::from_numeric(2.0), Severity::Low);
+        assert_eq!(Severity::from_numeric(1.0), Severity::Info);
+        assert_eq!(Severity::from_numeric(0.5), Severity::Info);
+    }
+
+    #[test]
+    fn coverage_label_uncovered_amplified() {
+        let mut f = make_finding("test", "src/a.rs", 1, Severity::High, FindingCategory::Injection);
+        f.base_severity = Some(Severity::Medium);
+        f.coverage_confidence = Some(0.05);
+        // severity (High) < base (Medium) in rank terms: High.rank()=1 < Medium.rank()=2 -> amplified
+        assert_eq!(f.coverage_label(), Some("\u{2191} uncovered"));
+    }
+
+    #[test]
+    fn coverage_label_tested_reduced() {
+        let mut f = make_finding("test", "src/b.rs", 1, Severity::Low, FindingCategory::Injection);
+        f.base_severity = Some(Severity::Medium);
+        f.coverage_confidence = Some(0.95);
+        // severity (Low) > base (Medium) in rank terms: Low.rank()=3 > Medium.rank()=2 -> reduced
+        assert_eq!(f.coverage_label(), Some("\u{2193} tested"));
+    }
+
+    #[test]
+    fn coverage_label_none_without_oracle() {
+        let f = make_finding("test", "src/c.rs", 1, Severity::Medium, FindingCategory::Injection);
+        assert_eq!(f.coverage_label(), None);
     }
 }

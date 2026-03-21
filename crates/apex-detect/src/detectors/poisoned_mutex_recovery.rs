@@ -57,7 +57,7 @@ fn analyze_source(path: &std::path::Path, source: &str, lang: Language) -> Vec<F
                 explanation: None,
                 fix: None,
                 cwe_ids: vec![362],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
             });
         } else {
             // Multi-line pattern: `.lock()` on one line, `.unwrap_or_else(|e| e.into_inner())`
@@ -95,7 +95,7 @@ fn analyze_source(path: &std::path::Path, source: &str, lang: Language) -> Vec<F
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![362],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
             }

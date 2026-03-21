@@ -75,7 +75,7 @@ impl Detector for JsSsrfDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![918],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
             }

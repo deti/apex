@@ -228,7 +228,7 @@ impl Detector for MultiSsrfDetector {
                             explanation: None,
                             fix: None,
                             cwe_ids: vec![918],
-                            noisy: false,
+                            noisy: false, base_severity: None, coverage_confidence: None,
                         };
 
                         // Check taint flow if CPG is available — downgrade instead of discard.

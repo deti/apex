@@ -115,7 +115,7 @@ impl Detector for SessionSecurityDetector {
                                 explanation: None,
                                 fix: None,
                                 cwe_ids: vec![798],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                             });
                         }
                     }
@@ -168,7 +168,7 @@ impl Detector for SessionSecurityDetector {
                                     explanation: None,
                                     fix: None,
                                     cwe_ids: vec![798],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                                 });
                             }
 
@@ -200,7 +200,7 @@ impl Detector for SessionSecurityDetector {
                                     explanation: None,
                                     fix: None,
                                     cwe_ids: vec![614],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                                 });
                             }
 
@@ -227,7 +227,7 @@ impl Detector for SessionSecurityDetector {
                                     explanation: None,
                                     fix: None,
                                     cwe_ids: vec![1004],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                                 });
                             }
 
@@ -252,7 +252,7 @@ impl Detector for SessionSecurityDetector {
                                     explanation: None,
                                     fix: None,
                                     cwe_ids: vec![352],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                                 });
                             }
                         }

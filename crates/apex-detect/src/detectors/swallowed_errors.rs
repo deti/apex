@@ -169,7 +169,7 @@ fn make_finding(path: &std::path::Path, line_1based: u32, lang: Language) -> Fin
         explanation: None,
         fix: None,
         cwe_ids: vec![390],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
     }
 }
 

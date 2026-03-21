@@ -174,7 +174,7 @@ impl Detector for FileUploadDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![434],
-                        noisy: false,
+                        noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
 
@@ -198,7 +198,7 @@ impl Detector for FileUploadDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![434],
-                        noisy: false,
+                        noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
             }
@@ -225,7 +225,7 @@ impl Detector for FileUploadDetector {
                     explanation: None,
                     fix: None,
                     cwe_ids: vec![434],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                 });
             }
         }

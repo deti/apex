@@ -74,7 +74,7 @@ pub fn scan_sql_injection(source: &str, file_path: &str) -> Vec<Finding> {
                 explanation: None,
                 fix: None,
                 cwe_ids: vec![89],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
             });
         }
     }

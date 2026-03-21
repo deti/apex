@@ -89,7 +89,7 @@ mod tests {
             explanation: None,
             fix: None,
             cwe_ids: vec![],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
         }
     }
 

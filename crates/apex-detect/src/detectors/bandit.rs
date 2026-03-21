@@ -252,7 +252,7 @@ impl Detector for BanditRuleDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![cr.rule.cwe],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
             }
@@ -320,7 +320,7 @@ fn find_b110_findings(path: &std::path::Path, source: &str) -> Vec<Finding> {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![390],
-                    noisy: false,
+                    noisy: false, base_severity: None, coverage_confidence: None,
                     });
                 }
                 break; // only check the first non-empty line after except:

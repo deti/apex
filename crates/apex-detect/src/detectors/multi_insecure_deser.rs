@@ -429,7 +429,7 @@ impl Detector for MultiInsecureDeserDetector {
                         explanation: None,
                         fix: None,
                         cwe_ids: vec![502],
-                            noisy: false,
+                            noisy: false, base_severity: None, coverage_confidence: None,
                     });
                     break; // one finding per line
                 }

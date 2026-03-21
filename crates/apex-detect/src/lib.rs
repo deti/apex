@@ -49,7 +49,7 @@ pub use config::{DetectConfig, DetectMode};
 pub use context::AnalysisContext;
 pub use finding::{Evidence, Finding, FindingCategory, Fix, Severity};
 pub use hunt_hints::{HuntHint, HuntHintConfig, HuntHints};
-pub use pipeline::DetectorPipeline;
+pub use pipeline::{apply_coverage_rescoring, DetectorPipeline};
 pub use report::{AnalysisReport, SecuritySummary};
 
 use apex_core::error::Result;

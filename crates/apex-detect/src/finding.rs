@@ -28,6 +28,14 @@ pub struct Finding {
     /// summaries while still showing them in full reports.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub noisy: bool,
+    /// Original severity before coverage-informed re-scoring.
+    /// Set by `apply_coverage_rescoring` — `None` means no re-scoring was applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_severity: Option<Severity>,
+    /// Coverage confidence from the compound oracle (0.0 = uncovered, 1.0 = well-tested).
+    /// Set by `apply_coverage_rescoring` — `None` means oracle was unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage_confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -49,6 +57,59 @@ impl Severity {
             Severity::Low => 3,
             Severity::Info => 4,
         }
+    }
+
+    /// Numeric score for severity (higher = more severe).
+    pub fn numeric(&self) -> f64 {
+        match self {
+            Severity::Critical => 10.0,
+            Severity::High => 8.0,
+            Severity::Medium => 5.0,
+            Severity::Low => 3.0,
+            Severity::Info => 1.0,
+        }
+    }
+
+    /// Convert a numeric severity score back to a Severity enum.
+    /// Uses threshold-based mapping: >= 9 Critical, >= 7 High, >= 4 Medium, >= 2 Low, else Info.
+    pub fn from_numeric(score: f64) -> Self {
+        if score >= 9.0 {
+            Severity::Critical
+        } else if score >= 7.0 {
+            Severity::High
+        } else if score >= 4.0 {
+            Severity::Medium
+        } else if score >= 2.0 {
+            Severity::Low
+        } else {
+            Severity::Info
+        }
+    }
+}
+
+impl Finding {
+    /// Returns a coverage annotation label for display.
+    ///
+    /// - `Some("↑ uncovered")` when coverage confidence < 0.3 and severity was amplified
+    /// - `Some("↓ tested")` when coverage confidence > 0.7 and severity was reduced
+    /// - `None` when no coverage data is available or confidence is neutral
+    pub fn coverage_label(&self) -> Option<&'static str> {
+        let conf = self.coverage_confidence?;
+        let base = self.base_severity?;
+        if conf < 0.3 && self.severity.rank() < base.rank() {
+            Some("\u{2191} uncovered")
+        } else if conf > 0.7 && self.severity.rank() > base.rank() {
+            Some("\u{2193} tested")
+        } else {
+            None
+        }
+    }
+
+    /// True if coverage re-scoring changed the severity from the base.
+    pub fn severity_was_adjusted(&self) -> bool {
+        self.base_severity
+            .map(|base| base != self.severity)
+            .unwrap_or(false)
     }
 }
 
@@ -156,6 +217,8 @@ mod tests {
             fix: None,
             cwe_ids: vec![],
                     noisy: false,
+            base_severity: None,
+            coverage_confidence: None,
         };
         let json = serde_json::to_string(&f).unwrap();
         assert!(json.contains("\"severity\":\"high\""));
@@ -286,6 +349,8 @@ mod tests {
             }),
             cwe_ids: vec![],
                     noisy: false,
+            base_severity: None,
+            coverage_confidence: None,
         };
         let json = serde_json::to_string(&f).unwrap();
         assert!(json.contains("\"explanation\":\"detailed explanation\""));
@@ -314,6 +379,8 @@ mod tests {
             fix: None,
             cwe_ids: vec![],
                     noisy: false,
+            base_severity: None,
+            coverage_confidence: None,
         };
         let json = serde_json::to_string(&f).unwrap();
         let f2: Finding = serde_json::from_str(&json).unwrap();
@@ -341,6 +408,8 @@ mod tests {
             fix: None,
             cwe_ids: vec![78, 94],
                     noisy: false,
+            base_severity: None,
+            coverage_confidence: None,
         };
         let json = serde_json::to_string(&f).unwrap();
         assert!(json.contains("\"cwe_ids\":[78,94]"));
@@ -364,6 +433,8 @@ mod tests {
             fix: None,
             cwe_ids: vec![],
                     noisy: false,
+            base_severity: None,
+            coverage_confidence: None,
         };
         let json = serde_json::to_string(&f).unwrap();
         assert!(!json.contains("cwe_ids"));
