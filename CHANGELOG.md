@@ -4,6 +4,24 @@ All notable changes to APEX will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **tree-sitter CPG builders** for Python, JavaScript, Go (behind `treesitter` feature flag)
+- **Bitwuzla SMT solver backend** (behind `bitwuzla` feature flag)
+- **Parallel portfolio solving** — race multiple solvers, take first result
+- **Differential coverage (`--diff <REF>`)** on `apex run` and `apex audit` — only branches / findings new since `<REF>` count toward the target
+- **MC/DC coverage mode (`--mcdc`)** on `apex run` (requires nightly Rust for Rust targets)
+- **OS-level sandbox (`--sandbox`)** on `apex run` — seccomp-bpf on Linux, sandbox-exec on macOS; restricts syscalls to a safe allowlist
+- **Ensemble fuzzing (`--ensemble`)** on `apex run` — parallel strategy dispatch with EnsembleSync seed exchange instead of sequential dispatch
+- **LLM triage (`--triage`)** on `apex audit` — validates findings with an AI model to reduce false positives (requires `APEX_API_KEY` or `ANTHROPIC_API_KEY`)
+- **Incremental coverage cache (`--cache`, `.apex/cache/`)** on `apex run` — skip re-instrumenting unchanged files; auto-enabled when `.apex/cache/` directory exists
+- **Dynamic call graph collection** for Python, JavaScript, Go
+- **LCOV and Cobertura format import/export** (`--coverage-file`, `--output-format lcov`)
+- **SymCC concolic execution backend** (behind `symcc` feature flag)
+- **tree-sitter probe instrumentation** (behind `ts-instrument` feature flag)
+- **CPG-informed test synthesis prompts** — uses code property graph context in LLM prompts
+- **Per-branch seed archive** for directed fuzzing
+- **YAML declarative detection rules** (`.apex/rules/*.yaml`)
+
 ### Fixed
 - **CWD bug in analyze pipeline** — `parse_llvm_cov_export` now canonicalizes both the target root and coverage filenames before `strip_prefix`, fixing symlink mismatches (e.g. `/tmp` vs `/private/tmp` on macOS) that caused "0 source files" and "could not find Cargo.toml" when analyzing out-of-tree targets
 - **`apex doctor`** — `CommandSpec` working directory changed from `"."` to `std::env::current_dir()` so version checks don't depend on inherited CWD

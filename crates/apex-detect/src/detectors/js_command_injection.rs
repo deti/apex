@@ -167,7 +167,15 @@ impl Detector for JsCommandInjectionDetector {
                             ctx,
                             path,
                             line_1based,
-                            &["user_input", "request", "req", "args", "params", "stdin", "cmd"],
+                            &[
+                                "user_input",
+                                "request",
+                                "req",
+                                "args",
+                                "params",
+                                "stdin",
+                                "cmd",
+                            ],
                         ) {
                             if !has_taint {
                                 finding.noisy = true;
@@ -351,7 +359,10 @@ mod tests {
         let ctx = make_ctx_with_cpg(files, Language::JavaScript, cpg);
         let findings = JsCommandInjectionDetector.analyze(&ctx).await.unwrap();
         assert_eq!(findings.len(), 1);
-        assert!(!findings[0].noisy, "taint flow present — should not be noisy");
+        assert!(
+            !findings[0].noisy,
+            "taint flow present — should not be noisy"
+        );
         assert_eq!(findings[0].severity, Severity::High);
     }
 

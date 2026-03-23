@@ -137,7 +137,16 @@ impl Detector for JsPathTraversalDetector {
                             ctx,
                             path,
                             line_1based,
-                            &["user_input", "request", "req", "params", "query", "body", "path", "file"],
+                            &[
+                                "user_input",
+                                "request",
+                                "req",
+                                "params",
+                                "query",
+                                "body",
+                                "path",
+                                "file",
+                            ],
                         ) {
                             if !has_taint {
                                 finding.noisy = true;

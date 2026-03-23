@@ -159,7 +159,15 @@ impl Detector for JsSqlInjectionDetector {
                             ctx,
                             path,
                             line_1based,
-                            &["user_input", "request", "req", "args", "params", "body", "input"],
+                            &[
+                                "user_input",
+                                "request",
+                                "req",
+                                "args",
+                                "params",
+                                "body",
+                                "input",
+                            ],
                         ) {
                             if !has_taint {
                                 finding.noisy = true;

@@ -124,8 +124,8 @@ pub async fn triage_findings(
     source_cache: &HashMap<PathBuf, String>,
     cpg: Option<&apex_cpg::Cpg>,
 ) -> Vec<(Finding, TriageVerdict)> {
-    let has_api_key = std::env::var("ANTHROPIC_API_KEY").is_ok()
-        || std::env::var("OPENAI_API_KEY").is_ok();
+    let has_api_key =
+        std::env::var("ANTHROPIC_API_KEY").is_ok() || std::env::var("OPENAI_API_KEY").is_ok();
 
     findings
         .iter()
@@ -349,7 +349,10 @@ mod tests {
 
         let finding = make_finding("src/app.js", None);
         let slice = extract_finding_slice(&cache, &finding, 5);
-        assert!(slice.is_empty(), "no line number should return empty string");
+        assert!(
+            slice.is_empty(),
+            "no line number should return empty string"
+        );
     }
 
     #[test]
@@ -357,10 +360,7 @@ mod tests {
         let cache = HashMap::new();
         let finding = make_finding("src/missing.js", Some(1));
         let slice = extract_finding_slice(&cache, &finding, 5);
-        assert!(
-            slice.is_empty(),
-            "missing file should return empty string"
-        );
+        assert!(slice.is_empty(), "missing file should return empty string");
     }
 
     #[test]
@@ -382,13 +382,17 @@ mod tests {
             confidence: 0.9,
         };
         let json = serde_json::to_string(&verdict).unwrap();
-        assert!(json.contains("\"confirmed\""), "classification should serialize as snake_case");
+        assert!(
+            json.contains("\"confirmed\""),
+            "classification should serialize as snake_case"
+        );
         assert!(json.contains("0.9"), "confidence should be in JSON");
     }
 
     #[test]
     fn triage_verdict_deserializes_correctly() {
-        let json = r#"{"classification":"false_positive","reasoning":"No user input.","confidence":0.8}"#;
+        let json =
+            r#"{"classification":"false_positive","reasoning":"No user input.","confidence":0.8}"#;
         let verdict: TriageVerdict = serde_json::from_str(json).unwrap();
         assert_eq!(verdict.classification, TriageClass::FalsePositive);
         assert!((verdict.confidence - 0.8).abs() < f64::EPSILON);
@@ -481,7 +485,10 @@ mod tests {
             summary.contains("CPG taint flow"),
             "should report taint flow: {summary}"
         );
-        assert!(summary.contains("cmd"), "should name the tainted identifier");
+        assert!(
+            summary.contains("cmd"),
+            "should name the tainted identifier"
+        );
     }
 
     #[test]
@@ -509,7 +516,10 @@ mod tests {
         let finding = make_finding("src/run.js", Some(10));
         let slice = "    10: exec(cmd)\n";
         let prompt = build_triage_prompt(&finding, slice, "");
-        assert!(prompt.contains("test-detector"), "should include detector name");
+        assert!(
+            prompt.contains("test-detector"),
+            "should include detector name"
+        );
         assert!(prompt.contains("CWE-78"), "should include CWE");
         assert!(prompt.contains("run.js"), "should include file name");
     }

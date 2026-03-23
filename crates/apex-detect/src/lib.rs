@@ -45,6 +45,7 @@ pub mod threat;
 pub mod threat_model;
 pub mod trace_analysis;
 pub mod vuln_pipeline;
+pub mod yaml_rules;
 
 pub use config::{DetectConfig, DetectMode};
 pub use context::AnalysisContext;

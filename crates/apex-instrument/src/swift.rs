@@ -394,14 +394,13 @@ fn count_swift_source_files(dir: &Path) -> usize {
             }
             if path.is_dir() {
                 count += count_swift_source_files(&path);
-            } else if path.is_file() {
-                if path
+            } else if path.is_file()
+                && path
                     .extension()
                     .and_then(|e| e.to_str())
                     .is_some_and(|ext| ext == "swift")
-                {
-                    count += 1;
-                }
+            {
+                count += 1;
             }
         }
     }

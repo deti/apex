@@ -144,7 +144,7 @@ mod tests {
     use apex_core::{
         error::Result,
         traits::Strategy,
-        types::{ExecutionResult, ExplorationContext, InputSeed, SeedOrigin, Target, Language},
+        types::{ExecutionResult, ExplorationContext, InputSeed, Language, SeedOrigin, Target},
     };
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -209,7 +209,10 @@ mod tests {
 
     #[tokio::test]
     async fn two_strategies_produce_seeds_in_parallel() {
-        let s1 = Arc::new(FixedStrategy::new("s1", vec![b"aaa".to_vec(), b"bbb".to_vec()]));
+        let s1 = Arc::new(FixedStrategy::new(
+            "s1",
+            vec![b"aaa".to_vec(), b"bbb".to_vec()],
+        ));
         let s2 = Arc::new(FixedStrategy::new("s2", vec![b"ccc".to_vec()]));
 
         let corpus = Arc::new(Mutex::new(Corpus::new(1000)));
@@ -228,14 +231,14 @@ mod tests {
     #[tokio::test]
     async fn shared_corpus_receives_seeds_from_both_strategies() {
         let s1 = Arc::new(FixedStrategy::new("s1", vec![b"alpha".to_vec()]));
-        let s2 = Arc::new(FixedStrategy::new("s2", vec![b"beta".to_vec(), b"gamma".to_vec()]));
+        let s2 = Arc::new(FixedStrategy::new(
+            "s2",
+            vec![b"beta".to_vec(), b"gamma".to_vec()],
+        ));
 
         let corpus = Arc::new(Mutex::new(Corpus::new(1000)));
-        let runner = EnsembleRunner::new(
-            vec![s1, s2],
-            Arc::clone(&corpus),
-            Duration::from_millis(50),
-        );
+        let runner =
+            EnsembleRunner::new(vec![s1, s2], Arc::clone(&corpus), Duration::from_millis(50));
 
         runner.run_parallel(&make_ctx()).await;
 
@@ -284,11 +287,8 @@ mod tests {
         let s2 = Arc::new(FixedStrategy::new("s2", vec![b"run2".to_vec()]));
 
         let corpus = Arc::new(Mutex::new(Corpus::new(1000)));
-        let runner = EnsembleRunner::new(
-            vec![s1, s2],
-            Arc::clone(&corpus),
-            Duration::from_millis(50),
-        );
+        let runner =
+            EnsembleRunner::new(vec![s1, s2], Arc::clone(&corpus), Duration::from_millis(50));
 
         runner.run_parallel(&make_ctx()).await;
         let after_first = corpus.lock().unwrap().len();
@@ -307,11 +307,7 @@ mod tests {
         let s1 = Arc::new(FixedStrategy::new("solo", vec![b"only-seed".to_vec()]));
 
         let corpus = Arc::new(Mutex::new(Corpus::new(100)));
-        let runner = EnsembleRunner::new(
-            vec![s1],
-            Arc::clone(&corpus),
-            Duration::from_millis(50),
-        );
+        let runner = EnsembleRunner::new(vec![s1], Arc::clone(&corpus), Duration::from_millis(50));
 
         let seeds = runner.run_parallel(&make_ctx()).await;
         assert_eq!(seeds.len(), 1);

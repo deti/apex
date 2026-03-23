@@ -80,6 +80,7 @@ fn collect_jacoco_reports(dir: &Path, depth: usize, max_depth: usize, results: &
 
 /// Detect Kotlin Multiplatform projects (which may need Xcode for native targets).
 fn is_kotlin_multiplatform(target: &Path) -> bool {
+    // Check root build files
     for name in &["build.gradle.kts", "build.gradle"] {
         if let Ok(content) = std::fs::read_to_string(target.join(name)) {
             if content.contains("kotlin(\"multiplatform\")")
@@ -90,7 +91,7 @@ fn is_kotlin_multiplatform(target: &Path) -> bool {
             }
         }
     }
-    // Also check settings.gradle for plugin declarations
+    // Check settings.gradle for plugin declarations
     for name in &["settings.gradle.kts", "settings.gradle"] {
         if let Ok(content) = std::fs::read_to_string(target.join(name)) {
             if content.contains("kotlin(\"multiplatform\")") || content.contains("kotlin-multiplatform") {
@@ -98,7 +99,47 @@ fn is_kotlin_multiplatform(target: &Path) -> bool {
             }
         }
     }
+    // Check build-logic/convention plugins (projects like ktor apply KMP via convention plugins)
+    let build_logic = target.join("build-logic").join("src");
+    if build_logic.is_dir() {
+        if let Ok(entries) = glob_kmp_in_dir(&build_logic) {
+            if entries {
+                return true;
+            }
+        }
+    }
+    // Check if any first-level submodule applies KMP
+    if let Ok(entries) = std::fs::read_dir(target) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+            for name in &["build.gradle.kts", "build.gradle"] {
+                if let Ok(content) = std::fs::read_to_string(path.join(name)) {
+                    if content.contains("kotlin(\"multiplatform\")") || content.contains("ktorbuild.kmp") {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
     false
+}
+
+/// Check if any file in dir tree contains multiplatform references.
+fn glob_kmp_in_dir(dir: &Path) -> std::io::Result<bool> {
+    for entry in std::fs::read_dir(dir)?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if glob_kmp_in_dir(&path)? { return Ok(true); }
+        } else if path.extension().and_then(|s| s.to_str()) == Some("kts")
+            || path.extension().and_then(|s| s.to_str()) == Some("kt")
+        {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if content.contains("multiplatform") { return Ok(true); }
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Detect whether the root project is a non-Java umbrella (applies only `base`,

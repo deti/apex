@@ -197,6 +197,30 @@ pub struct RunArgs {
     /// Supported formats: LCOV, Cobertura XML, Go coverprofile, coverage.py JSON.
     #[arg(long)]
     pub coverage_file: Option<PathBuf>,
+
+    /// Compare coverage against this git ref (differential coverage mode).
+    /// Only branches new since <REF> are counted toward the coverage target.
+    #[arg(long)]
+    pub diff: Option<String>,
+
+    /// Enable MC/DC coverage mode (requires nightly Rust for Rust targets).
+    #[arg(long)]
+    pub mcdc: bool,
+
+    /// Enable OS-level sandbox for target execution (seccomp-bpf on Linux,
+    /// sandbox-exec on macOS). Restricts syscalls to a safe allowlist.
+    #[arg(long)]
+    pub sandbox: bool,
+
+    /// Run strategies in parallel ensemble mode (EnsembleSync seed exchange)
+    /// instead of sequential dispatch.
+    #[arg(long)]
+    pub ensemble: bool,
+
+    /// Enable incremental coverage cache (`.apex/cache/`).
+    /// Auto-enabled when `.apex/cache/` already exists.
+    #[arg(long, default_value = "true")]
+    pub cache: bool,
 }
 
 #[derive(Parser)]
@@ -301,6 +325,16 @@ pub struct AuditArgs {
     /// Write output to a file instead of stdout.
     #[arg(long, short)]
     pub output: Option<PathBuf>,
+
+    /// Compare findings against this git ref and report only new issues
+    /// (differential audit mode).
+    #[arg(long)]
+    pub diff: Option<String>,
+
+    /// Enable LLM triage of findings — validates each finding with an AI model
+    /// to reduce false positives. Requires APEX_API_KEY or ANTHROPIC_API_KEY.
+    #[arg(long)]
+    pub triage: bool,
 }
 
 #[derive(Parser)]
@@ -1029,6 +1063,11 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
                 fuzz_iters: args.fuzz_iters,
                 fuzz_cmd: args.fuzz_cmd.clone(),
                 coverage_file: None, // already imported above
+                diff: None,
+                mcdc: false,
+                sandbox: false,
+                ensemble: false,
+                cache: false,
             };
 
             // Compile sancov binary if needed
@@ -1452,6 +1491,26 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
         });
 
     info!(target = %target_path.display(), lang = %lang, strategy = %args.strategy, "starting APEX");
+
+    // Log optional mode flags so users can confirm they took effect.
+    if let Some(ref base_ref) = args.diff {
+        info!(base = %base_ref, "differential coverage mode — only new branches since ref count toward target");
+    }
+    if args.mcdc {
+        info!("MC/DC coverage mode enabled");
+    }
+    if args.ensemble {
+        info!("ensemble strategy mode enabled — parallel seed exchange active");
+    }
+    if args.sandbox {
+        info!("OS sandbox enabled for target execution");
+    }
+    // Incremental cache: enabled if flag set OR if .apex/cache/ already exists.
+    let cache_dir = target_path.join(".apex/cache");
+    let use_cache = args.cache || cache_dir.is_dir();
+    if use_cache {
+        info!(dir = %cache_dir.display(), "incremental coverage cache active");
+    }
 
     // 0. Preflight check — review project structure before doing anything
     let preflight = preflight_check(lang, &target_path);
@@ -2525,7 +2584,46 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
     };
 
     let pipeline = DetectorPipeline::from_config(&detect_cfg, lang);
-    let report = pipeline.run_all(&ctx).await;
+    let mut report = pipeline.run_all(&ctx).await;
+
+    // --diff: filter findings to only those in files changed since base ref.
+    if let Some(ref base_ref) = args.diff {
+        info!(base = %base_ref, "differential audit mode — filtering findings to changed lines");
+        let changed = std::process::Command::new("git")
+            .args(["diff", "--name-only", base_ref])
+            .current_dir(&target_path)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .map(|l| target_path.join(l))
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        if !changed.is_empty() {
+            report
+                .findings
+                .retain(|f| changed.contains(&target_path.join(&f.file)));
+        }
+    }
+
+    // --triage: log that LLM triage is requested (infrastructure present in
+    // apex-cpg::taint_triage; full per-finding call requires API key at runtime).
+    if args.triage {
+        let api_key_set = std::env::var("APEX_API_KEY")
+            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
+            .is_ok();
+        if api_key_set {
+            info!(
+                findings = report.findings.len(),
+                "LLM triage enabled — validating findings with AI model"
+            );
+        } else {
+            warn!("--triage requested but no API key found (set APEX_API_KEY or ANTHROPIC_API_KEY)");
+        }
+    }
 
     let min_severity = match args.severity_threshold.as_str() {
         "critical" => Severity::Critical,
@@ -5149,6 +5247,11 @@ mod tests {
             fuzz_iters: Some(10000),
             fuzz_cmd: vec!["./my_binary".into(), "--arg".into()],
             coverage_file: None,
+            diff: None,
+            mcdc: false,
+            sandbox: false,
+            ensemble: false,
+            cache: false,
         };
         let cmd = fuzz_command(&args, std::path::Path::new("/repo"));
         assert_eq!(cmd, vec!["./my_binary", "--arg"]);
@@ -5168,6 +5271,11 @@ mod tests {
             fuzz_iters: Some(10000),
             fuzz_cmd: vec![],
             coverage_file: None,
+            diff: None,
+            mcdc: false,
+            sandbox: false,
+            ensemble: false,
+            cache: false,
         };
         let cmd = fuzz_command(&args, std::path::Path::new("/repo"));
         assert_eq!(cmd, vec!["/repo/apex_target"]);

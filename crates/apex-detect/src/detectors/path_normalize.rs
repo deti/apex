@@ -701,8 +701,18 @@ impl Detector for PathNormalizationDetector {
         // Pass 3: CPG taint validation — downgrade findings where no taint
         // flow from user-controlled sources is detected.
         let source_indicators = &[
-            "user_input", "request", "req", "args", "params", "query",
-            "path", "url", "uri", "file", "body", "input",
+            "user_input",
+            "request",
+            "req",
+            "args",
+            "params",
+            "query",
+            "path",
+            "url",
+            "uri",
+            "file",
+            "body",
+            "input",
         ];
         for finding in &mut findings {
             if let Some(has_taint) = taint_reaches_sink(

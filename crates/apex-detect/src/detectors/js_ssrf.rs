@@ -85,7 +85,16 @@ impl Detector for JsSsrfDetector {
                         ctx,
                         path,
                         line_1based,
-                        &["user_input", "request", "req", "args", "params", "body", "url", "endpoint"],
+                        &[
+                            "user_input",
+                            "request",
+                            "req",
+                            "args",
+                            "params",
+                            "body",
+                            "url",
+                            "endpoint",
+                        ],
                     ) {
                         if !has_taint {
                             finding.noisy = true;
