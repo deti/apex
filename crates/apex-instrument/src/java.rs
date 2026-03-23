@@ -141,6 +141,69 @@ fn is_umbrella_project(target: &Path) -> bool {
     false
 }
 
+/// Detect KMP submodules that should be excluded from JVM test runs.
+///
+/// Scans for modules whose build files reference platform-specific toolchains
+/// (Rust/Cargo, WebRTC native) that cause compilation errors on JVM-only runs.
+fn find_excludable_kmp_modules(target: &Path) -> Vec<String> {
+    let mut excluded = Vec::new();
+    collect_excludable_modules(target, target, &mut excluded);
+    excluded
+}
+
+fn collect_excludable_modules(root: &Path, dir: &Path, results: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with('.')
+            || matches!(name_str.as_ref(), "build" | "node_modules" | "target" | "buildSrc" | "gradle")
+        {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let has_build = path.join("build.gradle.kts").exists() || path.join("build.gradle").exists();
+        if has_build && should_exclude_module(&path) {
+            if let Ok(rel) = path.strip_prefix(root) {
+                let module_path = format!(
+                    ":{}",
+                    rel.components()
+                        .map(|c| c.as_os_str().to_string_lossy().to_string())
+                        .collect::<Vec<_>>()
+                        .join(":")
+                );
+                results.push(module_path);
+            }
+        }
+        collect_excludable_modules(root, &path, results);
+    }
+}
+
+fn should_exclude_module(module_dir: &Path) -> bool {
+    if let Ok(props) = std::fs::read_to_string(module_dir.join("gradle.properties")) {
+        if props.contains("rustCompilation") || props.contains("cargo") {
+            return true;
+        }
+    }
+    for name in &["build.gradle.kts", "build.gradle"] {
+        if let Ok(content) = std::fs::read_to_string(module_dir.join(name)) {
+            if content.contains("cargo") && content.contains("rust") {
+                return true;
+            }
+            if content.contains("webrtc") && content.contains("native") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Check whether a Gradle build file already applies the JaCoCo plugin.
 fn gradle_has_jacoco(target: &Path) -> bool {
     for name in &["build.gradle", "build.gradle.kts"] {
@@ -172,7 +235,8 @@ allprojects {
     afterEvaluate {
         def hasJava = plugins.hasPlugin('java') ||
                       plugins.hasPlugin('java-library') ||
-                      plugins.hasPlugin('org.jetbrains.kotlin.jvm')
+                      plugins.hasPlugin('org.jetbrains.kotlin.jvm') ||
+                      plugins.hasPlugin('org.jetbrains.kotlin.multiplatform')
         if (!hasJava) return
 
         // Apply JaCoCo if not already present.
@@ -305,10 +369,35 @@ async fn run_jacoco_gradle(
     }
 
     if is_kmp {
-        // Skip native/JS compilation that requires platform-specific toolchains
-        args.push("-x".into());
-        args.push("compileKotlinNative".into());
-        info!("Kotlin Multiplatform detected — running jvmTest only");
+        // Also request jacocoJvmTestReport (KMP auto-creates this task name)
+        args.push("jacocoJvmTestReport".into());
+
+        // Exclude native/JS/Wasm compilation tasks that require platform-specific toolchains
+        for exclude in &[
+            "compileKotlinNative",
+            "compileKotlinJs",
+            "compileKotlinWasmJs",
+            "compileKotlinWasmWasi",
+        ] {
+            args.push("-x".into());
+            args.push((*exclude).into());
+        }
+
+        // Detect and exclude modules that cause compilation errors (e.g. WebRTC with Rust/Cargo)
+        let excluded = find_excludable_kmp_modules(target);
+        for module_path in &excluded {
+            args.push("-x".into());
+            args.push(format!("{module_path}:jvmTest"));
+            args.push("-x".into());
+            args.push(format!("{module_path}:jacocoTestReport"));
+            args.push("-x".into());
+            args.push(format!("{module_path}:jacocoJvmTestReport"));
+        }
+
+        info!(
+            excluded_modules = excluded.len(),
+            "Kotlin Multiplatform detected — running jvmTest only"
+        );
     }
 
     let spec = jvm_command("./gradlew", target, timeout_ms).args(args);

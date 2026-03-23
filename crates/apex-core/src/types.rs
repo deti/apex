@@ -111,36 +111,6 @@ impl std::fmt::Display for CoverageLevel {
 }
 
 // ---------------------------------------------------------------------------
-// CoverageMode
-// ---------------------------------------------------------------------------
-
-/// Instrumentation granularity for coverage collection.
-///
-/// Used by `--mcdc` flag in the CLI and `RustCovInstrumentor` to select
-/// between standard branch coverage (LLVM default) and MC/DC
-/// (Modified Condition/Decision Coverage, requires LLVM 18+ / nightly Rust).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
-pub enum CoverageMode {
-    /// Standard branch coverage — the default and universally supported mode.
-    #[default]
-    Branch,
-    /// MC/DC coverage — requires nightly Rust and LLVM 18+.
-    ///
-    /// When requested but nightly is unavailable, the instrumentor falls back
-    /// to `Branch` and emits a warning.
-    Mcdc,
-}
-
-impl std::fmt::Display for CoverageMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CoverageMode::Branch => write!(f, "branch"),
-            CoverageMode::Mcdc => write!(f, "mcdc"),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // BranchState
 // ---------------------------------------------------------------------------
 
@@ -794,28 +764,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
-    fn coverage_mode_default_is_branch() {
-        let mode = CoverageMode::default();
-        assert_eq!(mode, CoverageMode::Branch);
-    }
-
-    #[test]
-    fn coverage_mode_display() {
-        assert_eq!(CoverageMode::Branch.to_string(), "branch");
-        assert_eq!(CoverageMode::Mcdc.to_string(), "mcdc");
-    }
-
-    #[test]
-    fn coverage_mode_serde_roundtrip() {
-        let modes = [CoverageMode::Branch, CoverageMode::Mcdc];
-        for mode in modes {
-            let json = serde_json::to_string(&mode).unwrap();
-            let back: CoverageMode = serde_json::from_str(&json).unwrap();
-            assert_eq!(mode, back);
-        }
-    }
-
     fn coverage_gap_report_percent() {
         let report = CoverageGapReport {
             total_branches: 100,

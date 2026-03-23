@@ -4,6 +4,7 @@
 pub mod cmplog;
 pub mod control;
 pub mod corpus;
+pub mod ensemble;
 pub mod de_scheduler;
 pub mod directed;
 pub mod distill;
@@ -24,6 +25,7 @@ pub mod thompson;
 pub mod traits;
 
 pub use de_scheduler::DeScheduler;
+pub use ensemble::EnsembleRunner;
 pub use semantic_feedback::{SemFeedbackScore, SemanticFeedback};
 pub use shrinker::BinaryShrinker;
 pub use thompson::ThompsonScheduler;

@@ -3,11 +3,12 @@
 //! All other APEX crates depend on `apex-core` for common abstractions.
 
 pub mod agent_report;
+pub mod cache;
 pub mod command;
 pub mod config;
-pub mod diff;
 pub mod error;
 pub mod fixture_runner;
+pub mod formats;
 pub mod git;
 pub mod hash;
 pub mod llm;

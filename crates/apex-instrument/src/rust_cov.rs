@@ -11,7 +11,7 @@ use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
     traits::Instrumentor,
-    types::{BranchId, CoverageMode, InstrumentedTarget, Target},
+    types::{BranchId, CoverageLevel, InstrumentedTarget, Target},
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -265,7 +265,7 @@ pub async fn is_nightly_toolchain(runner: &dyn CommandRunner, repo: &Path) -> bo
         .unwrap_or(false)
 }
 
-/// Build the `cargo llvm-cov` args for the requested [`CoverageMode`].
+/// Build the `cargo llvm-cov` args for the requested [`CoverageLevel`].
 ///
 /// For MC/DC mode:
 /// - Verifies nightly is active; warns + falls back to branch if not.
@@ -273,20 +273,20 @@ pub async fn is_nightly_toolchain(runner: &dyn CommandRunner, repo: &Path) -> bo
 ///
 /// Returns `(extra_cargo_args, extra_env_vars, effective_mode)`.
 pub async fn build_coverage_args(
-    mode: CoverageMode,
+    mode: CoverageLevel,
     runner: &dyn CommandRunner,
     repo: &Path,
-) -> (Vec<String>, Vec<(String, String)>, CoverageMode) {
+) -> (Vec<String>, Vec<(String, String)>, CoverageLevel) {
     match mode {
-        CoverageMode::Branch => (vec![], vec![], CoverageMode::Branch),
-        CoverageMode::Mcdc => {
+        CoverageLevel::Statement | CoverageLevel::Branch => (vec![], vec![], CoverageLevel::Branch),
+        CoverageLevel::Mcdc => {
             if !is_nightly_toolchain(runner, repo).await {
                 warn!(
                     "MC/DC coverage requested but nightly Rust is not active. \
                      Falling back to branch coverage. \
                      Install nightly with: rustup toolchain install nightly"
                 );
-                return (vec![], vec![], CoverageMode::Branch);
+                return (vec![], vec![], CoverageLevel::Branch);
             }
             // `-Zcoverage-options=mcdc` requires nightly rustc.
             // We append to any existing RUSTFLAGS rather than replacing.
@@ -300,7 +300,7 @@ pub async fn build_coverage_args(
             (
                 vec![],
                 vec![("RUSTFLAGS".to_string(), rustflags)],
-                CoverageMode::Mcdc,
+                CoverageLevel::Mcdc,
             )
         }
     }
@@ -1348,19 +1348,19 @@ mod tests {
     async fn build_coverage_args_branch_mode_is_empty() {
         let runner = ToolchainRunner::stable();
         let (args, env, mode) =
-            build_coverage_args(CoverageMode::Branch, &runner, Path::new("/repo")).await;
+            build_coverage_args(CoverageLevel::Branch, &runner, Path::new("/repo")).await;
         assert!(args.is_empty());
         assert!(env.is_empty());
-        assert_eq!(mode, CoverageMode::Branch);
+        assert_eq!(mode, CoverageLevel::Branch);
     }
 
     #[tokio::test]
     async fn build_coverage_args_mcdc_on_nightly_adds_rustflags() {
         let runner = ToolchainRunner::nightly();
         let (args, env, mode) =
-            build_coverage_args(CoverageMode::Mcdc, &runner, Path::new("/repo")).await;
+            build_coverage_args(CoverageLevel::Mcdc, &runner, Path::new("/repo")).await;
         assert!(args.is_empty());
-        assert_eq!(mode, CoverageMode::Mcdc);
+        assert_eq!(mode, CoverageLevel::Mcdc);
         let rustflags = env
             .iter()
             .find(|(k, _)| k == "RUSTFLAGS")
@@ -1373,10 +1373,10 @@ mod tests {
     async fn build_coverage_args_mcdc_fallback_on_stable() {
         let runner = ToolchainRunner::stable();
         let (args, env, mode) =
-            build_coverage_args(CoverageMode::Mcdc, &runner, Path::new("/repo")).await;
+            build_coverage_args(CoverageLevel::Mcdc, &runner, Path::new("/repo")).await;
         // Fallen back to branch — no special flags
         assert!(args.is_empty());
         assert!(env.is_empty());
-        assert_eq!(mode, CoverageMode::Branch);
+        assert_eq!(mode, CoverageLevel::Branch);
     }
 }

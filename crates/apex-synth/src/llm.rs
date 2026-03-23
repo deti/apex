@@ -34,6 +34,15 @@ pub struct CoverageGap {
     /// Code around the uncovered line.
     pub source_segment: String,
     pub uncovered_lines: Vec<u32>,
+    /// Optional CPG data-flow context for uncovered branches.
+    ///
+    /// When present (non-empty), this string is appended to the prompt as a
+    /// `## Branch Context (from CPG analysis)` section so the LLM understands
+    /// what values reach each branch and what constraints must be satisfied.
+    ///
+    /// Produced by [`crate::cpg_context::build_cpg_prompt_context`].
+    /// Leave as `None` (or `Some(String::new())`) when no CPG is available.
+    pub cpg_context: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -141,15 +150,24 @@ impl LlmSynthesizer {
 
         let uncovered = Self::format_uncovered_lines(gap);
 
+        // Append CPG data-flow context when available (non-empty string).
+        let cpg_section = gap
+            .cpg_context
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|ctx| format!("\n\n{ctx}"))
+            .unwrap_or_default();
+
         let user_content = format!(
             "File: {file}{fn_hint}\n\
              Uncovered: {uncovered}\n\n\
-             Source segment:\n```\n{segment}\n```\n\n\
+             Source segment:\n```\n{segment}\n```{cpg_section}\n\n\
              Write a test that exercises {uncovered} in {file}.",
             file = gap.file_path,
             fn_hint = fn_hint,
             uncovered = uncovered,
             segment = gap.source_segment,
+            cpg_section = cpg_section,
         );
 
         let user = LlmMessage {
@@ -263,6 +281,7 @@ mod tests {
             function_name: None,
             source_segment: "x = 1\n".into(),
             uncovered_lines: vec![5],
+            cpg_context: None,
         }
     }
 
@@ -275,6 +294,7 @@ mod tests {
             function_name: Some("process".into()),
             source_segment: "def process(x):\n    if x > 0:\n        return x\n".into(),
             uncovered_lines: vec![12],
+            cpg_context: None,
         };
         let messages = synth.initial_prompt(&gap);
         assert!(
@@ -302,6 +322,7 @@ mod tests {
             function_name: Some("compute".into()),
             source_segment: "def compute(): pass\n".into(),
             uncovered_lines: vec![3],
+            cpg_context: None,
         };
         let messages = synth.initial_prompt(&gap);
         assert!(messages[1].content.contains("compute"));
@@ -324,6 +345,7 @@ mod tests {
             function_name: None,
             source_segment: String::new(),
             uncovered_lines: vec![7, 8, 9],
+            cpg_context: None,
         };
         let msg = synth.missing_coverage_prompt(&gap);
         assert_eq!(msg.role, LlmRole::User);
@@ -485,6 +507,7 @@ mod tests {
             function_name: None,
             source_segment: String::new(),
             uncovered_lines: vec![], // <-- triggers the is_empty() branch
+            cpg_context: None,
         };
         let messages = synth.initial_prompt(&gap);
         // The user message must reference "line 42" (the target_line fallback).
@@ -514,6 +537,71 @@ mod tests {
         assert!(
             attempt.coverage_delta.is_empty(),
             "coverage_delta should be empty"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // CPG context integration tests
+    // -----------------------------------------------------------------------
+
+    /// When `cpg_context` is `Some(non-empty)`, the initial prompt user message
+    /// must include the CPG context section header.
+    #[test]
+    fn initial_prompt_includes_cpg_context_when_present() {
+        let synth = LlmSynthesizer::new(LlmConfig::default());
+        let cpg_ctx = "## Branch Context (from CPG analysis)\n- foo.py:5 [true branch] — `if x > 0` (depends on: `x` from parameter `x` (arg #0))\n".to_string();
+        let gap = CoverageGap {
+            file_path: "foo.py".into(),
+            target_line: 5,
+            function_name: Some("process".into()),
+            source_segment: "def process(x):\n    if x > 0:\n        return x\n".into(),
+            uncovered_lines: vec![5],
+            cpg_context: Some(cpg_ctx),
+        };
+        let messages = synth.initial_prompt(&gap);
+        assert!(
+            messages[1].content.contains("## Branch Context (from CPG analysis)"),
+            "user message must embed CPG context section, got:\n{}",
+            messages[1].content
+        );
+        assert!(
+            messages[1].content.contains("depends on"),
+            "CPG context should include data-flow dependency text, got:\n{}",
+            messages[1].content
+        );
+    }
+
+    /// When `cpg_context` is `None`, the prompt must not contain the CPG section header.
+    #[test]
+    fn initial_prompt_excludes_cpg_context_when_none() {
+        let synth = LlmSynthesizer::new(LlmConfig::default());
+        let gap = make_gap();
+        let messages = synth.initial_prompt(&gap);
+        assert!(
+            !messages[1].content.contains("## Branch Context"),
+            "prompt should not include CPG section when cpg_context is None, got:\n{}",
+            messages[1].content
+        );
+    }
+
+    /// When `cpg_context` is `Some("")` (empty string), the prompt must not contain
+    /// the CPG section header — same behaviour as `None`.
+    #[test]
+    fn initial_prompt_excludes_cpg_context_when_empty_string() {
+        let synth = LlmSynthesizer::new(LlmConfig::default());
+        let gap = CoverageGap {
+            file_path: "bar.py".into(),
+            target_line: 3,
+            function_name: None,
+            source_segment: "x = 1\n".into(),
+            uncovered_lines: vec![3],
+            cpg_context: Some(String::new()),
+        };
+        let messages = synth.initial_prompt(&gap);
+        assert!(
+            !messages[1].content.contains("## Branch Context"),
+            "empty cpg_context string should not inject a section header, got:\n{}",
+            messages[1].content
         );
     }
 }

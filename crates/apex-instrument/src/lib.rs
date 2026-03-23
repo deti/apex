@@ -19,6 +19,8 @@ pub mod rust_cov;
 pub mod rustc_wrapper;
 pub mod source_map;
 pub mod swift;
+#[cfg(feature = "ts-instrument")]
+pub mod ts_instrument;
 pub mod v8_coverage;
 pub mod wasm;
 pub mod wrap;
@@ -33,4 +35,9 @@ pub use python::PythonInstrumentor;
 pub use ruby::RubyInstrumentor;
 pub use rust_cov::RustCovInstrumentor;
 pub use swift::SwiftInstrumentor;
+#[cfg(feature = "ts-instrument")]
+pub use ts_instrument::{
+    InstrumentedSource, ProbeInfo, ProbeKind, TreeSitterInstrumentor, GO_PROBE_RUNTIME,
+    JS_PROBE_RUNTIME, PYTHON_PROBE_RUNTIME,
+};
 pub use wasm::WasmInstrumentor;

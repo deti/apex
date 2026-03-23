@@ -101,7 +101,7 @@ pub fn parse_simplecov_json(json: &str) -> (Vec<BranchId>, Vec<BranchId>, HashMa
 
     // Try .resultset.json format: {"<Framework>": {"coverage": {"file.rb": {"lines": [...]}}}}
     if let Ok(data) = serde_json::from_str::<HashMap<String, SimpleCovJson>>(json) {
-        for (_framework, cov_data) in &data {
+        for cov_data in data.values() {
             for (file_path, coverage) in &cov_data.coverage {
                 let lines = match coverage {
                     FileCoverage::Lines(lc) => &lc.lines,
