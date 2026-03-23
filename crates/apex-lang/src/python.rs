@@ -383,9 +383,17 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
         if cov_check.exit_code != 0 {
             debug!("coverage.py not found, installing");
             let output = if let Some(uv) = Self::resolve_uv() {
-                // uv pip install --system works on PEP 668 / externally-managed envs.
+                // Create a .apex-venv if needed, then install into it.
+                // uv pip install --system fails on PEP 668 / Arch / Fedora,
+                // so we always use a venv for safety.
+                let venv_dir = target.join(".apex-venv");
+                if !venv_dir.join("bin").join("python").exists() {
+                    let venv_spec = CommandSpec::new(&uv, target)
+                        .args(["venv", ".apex-venv"]);
+                    let _ = self.runner.run_command(&venv_spec).await;
+                }
                 let spec = CommandSpec::new(&uv, target)
-                    .args(["pip", "install", "--system", "coverage", "pytest"]);
+                    .args(["pip", "install", "--python", ".apex-venv/bin/python", "coverage", "pytest"]);
                 self.runner
                     .run_command(&spec)
                     .await
@@ -1132,17 +1140,18 @@ mod tests {
             .withf(|spec| is_python_program(&spec.program))
             .times(1)
             .returning(|_| Ok(CommandOutput::failure(1, b"ModuleNotFoundError".to_vec())));
-        // Either `uv pip install --system coverage pytest`
-        // OR    `pip3 install coverage pytest` — accept both.
+        // uv path: venv creation + pip install, OR pip3 install — accept all.
         mock.expect_run_command()
             .withf(|spec| {
-                (spec.program == "uv"
-                    && spec.args.contains(&"--system".to_string())
+                // uv venv .apex-venv
+                (spec.program == "uv" && spec.args.contains(&"venv".to_string()))
+                // uv pip install --python .apex-venv/bin/python coverage pytest
+                || (spec.program == "uv"
                     && spec.args.contains(&"coverage".to_string()))
-                    || (spec.args.contains(&"coverage".to_string())
-                        && is_pip_program(&spec.program))
+                // pip3 install coverage pytest
+                || (spec.args.contains(&"coverage".to_string())
+                    && is_pip_program(&spec.program))
             })
-            .times(1)
             .returning(|_| Ok(CommandOutput::success(b"".to_vec())));
 
         let runner = PythonRunner::with_runner(mock);
