@@ -149,6 +149,10 @@ $ /apex-intel
 
 ## Installation
 
+### 1. Install the APEX Binary
+
+Pick one method:
+
 **Standalone installer** (recommended — macOS and Linux):
 
 ```bash
@@ -185,6 +189,151 @@ nix run github:sahajamoth/apex
 cargo install --git https://github.com/sahajamoth/apex
 ```
 
+Verify the installation:
+
+```bash
+apex doctor    # Check all prerequisites
+apex --version # Should print v0.5.0
+```
+
+### 2. Initialize Your Project
+
+```bash
+cd your-project
+apex init
+```
+
+This auto-detects your language, toolchain, venvs, and generates `apex.toml`.
+No manual config needed.
+
+### 3. Connect to Claude Code (MCP Server)
+
+APEX ships a built-in MCP server with 33 tools. Set it up in one command:
+
+```bash
+# Auto-detect your editor and write config
+apex integrate
+
+# Or specify explicitly
+apex integrate --editor claude     # Claude Code (.mcp.json)
+apex integrate --editor cursor     # Cursor (.cursor/mcp.json)
+apex integrate --editor windsurf   # Windsurf (~/.codeium/windsurf/mcp_config.json)
+
+# Preview without writing
+apex integrate --dry-run
+```
+
+This adds APEX as an MCP server so Claude/Cursor/Windsurf can call any APEX
+command directly: coverage analysis, security audit, deploy score, etc.
+
+<details>
+<summary><strong>Manual MCP setup (if apex integrate doesn't work)</strong></summary>
+
+Add to `.mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "apex": {
+      "command": "apex",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+If `apex` is not on PATH, use the full path:
+
+```json
+{
+  "mcpServers": {
+    "apex": {
+      "command": "/usr/local/bin/apex",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+</details>
+
+### 4. Install APEX Agents for Claude Code
+
+APEX ships agent definitions that Claude Code can use as specialized subagents
+for coverage hunting, security detection, and code analysis.
+
+**Option A: Install as a local marketplace plugin**
+
+```bash
+# From the APEX repo directory
+cd /path/to/apex
+
+# Register as a local marketplace
+claude plugins add-marketplace ./
+
+# Install the APEX plugin
+claude plugins install apex@local
+```
+
+This registers all APEX agents (`apex`, `apex-hunter`, `apex-captain`, and
+20+ crew agents) as available subagents in Claude Code.
+
+**Option B: Copy agent files directly**
+
+```bash
+# Copy APEX agents to your project
+mkdir -p .claude/agents
+cp /path/to/apex/.claude/agents/apex*.md .claude/agents/
+
+# Or fetch from GitHub
+for agent in apex apex-hunter apex-captain; do
+  curl -sL "https://raw.githubusercontent.com/sahajamoth/apex/main/.claude/agents/${agent}.md" \
+    -o ".claude/agents/${agent}.md"
+done
+```
+
+**Option C: Install from the plugin registry (if published)**
+
+```bash
+claude plugins install apex
+```
+
+<details>
+<summary><strong>Available APEX agents</strong></summary>
+
+| Agent | What it does |
+|-------|-------------|
+| `apex` | Orchestrator — runs the full analysis cycle (discover → hunt → detect → report) |
+| `apex-hunter` | Bug hunter — writes tests targeting uncovered code, thinks adversarially |
+| `apex-captain` | Planning coordinator — designs implementation plans, dispatches crews |
+| `apex-crew-security-detect` | Security detector specialist — 63 detectors, 40+ CWEs |
+| `apex-crew-platform` | CLI + MCP specialist — apex-cli, integration tests |
+| `apex-crew-foundation` | Core types specialist — apex-core, config, coverage oracle |
+| `apex-crew-exploration` | Fuzzing + symbolic specialist — apex-fuzz, apex-symbolic |
+| `apex-crew-runtime` | Language runtime specialist — apex-lang, apex-instrument, apex-sandbox |
+| `apex-crew-intelligence` | AI/synthesis specialist — apex-agent, apex-synth |
+| `apex-crew-mcp-integration` | MCP server specialist — 33 tool definitions |
+| `apex-crew-lang-*` | Per-language specialists (Python, JS, Rust, Go, Java, Ruby, C, Swift, .NET) |
+
+</details>
+
+### 5. Verify Everything Works
+
+```bash
+# Binary works
+apex doctor
+
+# MCP server responds
+echo '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{}}' | apex mcp
+
+# Run a scan
+apex audit --target . --lang python
+
+# If agents are installed, Claude Code can use them:
+# "Run /apex on this project"
+# "Use the apex-hunter to find bugs in the auth module"
+```
+
 <details>
 <summary><strong>Build from source with optional features</strong></summary>
 
@@ -197,8 +346,10 @@ cargo install cargo-llvm-cov
 git clone https://github.com/sahajamoth/apex.git && cd apex
 cargo build --release
 
-# With optional heavy features (Z3, LibAFL, PyO3)
-cargo build --release --features "apex-symbolic/z3-solver,apex-fuzz/libafl-backend"
+# With optional features
+cargo build --release --features "treesitter"           # tree-sitter CPG (99% accuracy)
+cargo build --release --features "apex-symbolic/z3-solver"  # Z3 constraint solving
+cargo build --release --features "apex-fuzz/libafl-backend" # LibAFL fuzzing engine
 ```
 
 </details>
