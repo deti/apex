@@ -31,15 +31,64 @@ zero config. Works as both a CLI tool and a set of AI agents inside Claude Code.
 
 ## Quick Start
 
+### 1. Install the binary
+
+**macOS (Apple Silicon):**
 ```bash
-# 1. Install the APEX binary
+curl -sL https://github.com/sahajamoth/apex/releases/latest/download/apex-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv apex /usr/local/bin/
+```
+
+**macOS (Intel):**
+```bash
+curl -sL https://github.com/sahajamoth/apex/releases/latest/download/apex-x86_64-apple-darwin.tar.gz | tar xz
+sudo mv apex /usr/local/bin/
+```
+
+**Linux (x86_64):**
+```bash
+curl -sL https://github.com/sahajamoth/apex/releases/latest/download/apex-x86_64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv apex /usr/local/bin/
+```
+
+**Linux (ARM64):**
+```bash
+curl -sL https://github.com/sahajamoth/apex/releases/latest/download/apex-aarch64-unknown-linux-gnu.tar.gz | tar xz
+sudo mv apex /usr/local/bin/
+```
+
+<details>
+<summary><strong>Alternative install methods</strong></summary>
+
+```bash
+# Install script (auto-detects platform)
 curl -sSL https://raw.githubusercontent.com/sahajamoth/apex/main/install.sh | sh
 
-# 2. Install the Claude Code plugin
+# Cargo (from source)
+cargo install --git https://github.com/sahajamoth/apex
+
+# Homebrew (tap first)
+brew tap sahajamoth/tap && brew install apex
+
+# npm / pip / nix
+npx @apex-coverage/cli
+pipx install apex-coverage
+nix run github:sahajamoth/apex
+```
+
+</details>
+
+### 2. Install the Claude Code plugin
+
+```bash
 claude plugins add-marketplace https://github.com/sahajamoth/apex
 claude plugins install apex@apex
+```
 
-# 3. Open your project in Claude Code:
+### 3. Run
+
+```
+# In Claude Code:
 /apex init      # Auto-detect language, venv, toolchain
 /apex           # Full analysis: coverage + security + intelligence
 /apex detect    # Security scan (63 detectors, 40+ CWEs)
@@ -47,7 +96,7 @@ claude plugins install apex@apex
 /apex deploy    # Deploy readiness score
 ```
 
-That's it. APEX agents detect your environment, install missing tools
+APEX agents detect your environment, install missing tools
 (via uv, bun, mise), run coverage, write tests, and produce reports.
 
 > **Not using Claude Code?** See [Standalone Installation](docs/STANDALONE.md)
