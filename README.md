@@ -31,90 +31,28 @@ zero config. Works as both a CLI tool and a set of AI agents inside Claude Code.
 
 ## Quick Start
 
-> **Note:** All commands below run inside **Claude Code** (the Claude CLI).
-> APEX works as a Claude Code plugin with slash commands and AI agents.
-> You can also run `apex` directly from a terminal for CI/CD pipelines.
-
-**Step 1 — Install APEX in Claude Code:**
-
-```
-# In Claude Code, install the APEX plugin:
-/install-plugin apex
-
-# Or from a local clone:
-/install-plugin /path/to/apex
-```
-
-**Step 2 — Initialize your project:**
-
-```
-# Claude Code auto-detects your language, venv, toolchain:
-/apex init
-```
-
-**Step 3 — Run:**
-
-```
-# Scan for security issues (63 detectors, 40+ CWEs)
-/apex detect
-
-# Full analysis: coverage + security + intelligence
-/apex
-
-# Hunt for bugs in uncovered code
-/apex hunt
-
-# Deploy readiness check
-/apex deploy
-```
-
-Claude Code's APEX agents handle everything: they detect your environment,
-install missing tools (via uv, bun, mise), run coverage, write tests, and
-produce reports — all inside your editor.
-
-<details>
-<summary><strong>Standalone CLI (for CI/CD, scripts, non-Claude environments)</strong></summary>
+All commands run inside [Claude Code](https://claude.com/claude-code).
 
 ```bash
-# Install the binary
-curl -sSL https://raw.githubusercontent.com/sahajamoth/apex/main/install.sh | sh
+# 1. Register the APEX marketplace
+claude plugins add-marketplace https://github.com/sahajamoth/apex
 
-# Or: brew install sahajamoth/tap/apex
-# Or: npx @apex-coverage/cli
-# Or: pipx install apex-coverage
-# Or: nix run github:sahajamoth/apex
-# Or: cargo install --git https://github.com/sahajamoth/apex
+# 2. Install the plugin
+claude plugins install apex@apex
 
-# Initialize
-apex init
-
-# Run
-apex audit --target . --lang python
-apex run --target . --lang python
-apex deploy-score --target .
+# 3. Open your project in Claude Code, then:
+/apex init      # Auto-detect language, venv, toolchain
+/apex           # Full analysis: coverage + security + intelligence
+/apex detect    # Security scan (63 detectors, 40+ CWEs)
+/apex hunt      # Bug hunting in uncovered code
+/apex deploy    # Deploy readiness score
 ```
 
-</details>
+That's it. APEX agents detect your environment, install missing tools
+(via uv, bun, mise), run coverage, write tests, and produce reports.
 
-<details>
-<summary><strong>GitHub Actions</strong></summary>
-
-```yaml
-# .github/workflows/apex.yml
-name: APEX Coverage Gate
-on: [push, pull_request]
-jobs:
-  apex:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install APEX
-        run: curl -sSL https://raw.githubusercontent.com/sahajamoth/apex/main/install.sh | sh
-      - name: Coverage Gate
-        run: apex ratchet --target . --lang python --min-cov 0.8
-```
-
-</details>
+> **Not using Claude Code?** See [Standalone Installation](docs/STANDALONE.md)
+> for CLI binary, GitHub Actions, and CI/CD setup.
 
 ---
 
@@ -210,202 +148,60 @@ Then ask Claude for intelligence:
 
 ## Installation
 
-### 1. Install in Claude Code (Recommended)
-
-```
-# Install the APEX plugin
-/install-plugin apex
-
-# Or from a local clone
-/install-plugin /path/to/apex
-```
-
-This installs both the APEX binary and all AI agents. Everything works
-inside Claude Code — slash commands, subagents, MCP tools.
-
-### 2. Initialize Your Project
-
-```
-# In Claude Code:
-/apex init
-
-# Or from terminal:
-apex init
-```
-
-Auto-detects your language, toolchain, venvs, and generates `apex.toml`.
-No manual config needed.
-
-<details>
-<summary><strong>Standalone binary install (CI/CD, non-Claude environments)</strong></summary>
+### Claude Code Plugin (Recommended)
 
 ```bash
-# Pick one:
-curl -sSL https://raw.githubusercontent.com/sahajamoth/apex/main/install.sh | sh
-brew install sahajamoth/tap/apex
-npx @apex-coverage/cli
-pipx install apex-coverage
-nix run github:sahajamoth/apex
-cargo install --git https://github.com/sahajamoth/apex
+# Register the APEX marketplace
+claude plugins add-marketplace https://github.com/sahajamoth/apex
 
-# Verify
-apex doctor
-apex --version  # v0.5.0
+# Install
+claude plugins install apex@apex
 ```
 
-</details>
+This installs the APEX binary, 33 MCP tools, slash commands, and 20+ AI agents.
 
-### 3. Connect to Claude Code (MCP Server)
-
-APEX ships a built-in MCP server with 33 tools. Set it up in one command:
+### From a Local Clone
 
 ```bash
-# Auto-detect your editor and write config
-apex integrate
+git clone https://github.com/sahajamoth/apex.git
 
-# Or specify explicitly
-apex integrate --editor claude     # Claude Code (.mcp.json)
-apex integrate --editor cursor     # Cursor (.cursor/mcp.json)
-apex integrate --editor windsurf   # Windsurf (~/.codeium/windsurf/mcp_config.json)
+# Register as local marketplace
+claude plugins add-marketplace ./apex
 
-# Preview without writing
-apex integrate --dry-run
-```
-
-This adds APEX as an MCP server so Claude/Cursor/Windsurf can call any APEX
-command directly: coverage analysis, security audit, deploy score, etc.
-
-<details>
-<summary><strong>Manual MCP setup (if apex integrate doesn't work)</strong></summary>
-
-Add to `.mcp.json` in your project root:
-
-```json
-{
-  "mcpServers": {
-    "apex": {
-      "command": "apex",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-If `apex` is not on PATH, use the full path:
-
-```json
-{
-  "mcpServers": {
-    "apex": {
-      "command": "/usr/local/bin/apex",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-</details>
-
-### 4. Install APEX Agents for Claude Code
-
-APEX ships agent definitions that Claude Code can use as specialized subagents
-for coverage hunting, security detection, and code analysis.
-
-**Option A: Install as a local marketplace plugin**
-
-```bash
-# From the APEX repo directory
-cd /path/to/apex
-
-# Register as a local marketplace
-claude plugins add-marketplace ./
-
-# Install the APEX plugin
+# Install from it
 claude plugins install apex@local
 ```
 
-This registers all APEX agents (`apex`, `apex-hunter`, `apex-captain`, and
-20+ crew agents) as available subagents in Claude Code.
+### Verify
 
-**Option B: Copy agent files directly**
-
-```bash
-# Copy APEX agents to your project
-mkdir -p .claude/agents
-cp /path/to/apex/.claude/agents/apex*.md .claude/agents/
-
-# Or fetch from GitHub
-for agent in apex apex-hunter apex-captain; do
-  curl -sL "https://raw.githubusercontent.com/sahajamoth/apex/main/.claude/agents/${agent}.md" \
-    -o ".claude/agents/${agent}.md"
-done
+In Claude Code:
 ```
-
-**Option C: Install from the plugin registry (if published)**
-
-```bash
-claude plugins install apex
+/apex init      # Should detect your project and generate apex.toml
+apex doctor     # Should show all green checks
 ```
 
 <details>
-<summary><strong>Available APEX agents</strong></summary>
+<summary><strong>What gets installed</strong></summary>
 
-| Agent | What it does |
-|-------|-------------|
-| `apex` | Orchestrator — runs the full analysis cycle (discover → hunt → detect → report) |
-| `apex-hunter` | Bug hunter — writes tests targeting uncovered code, thinks adversarially |
-| `apex-captain` | Planning coordinator — designs implementation plans, dispatches crews |
-| `apex-crew-security-detect` | Security detector specialist — 63 detectors, 40+ CWEs |
-| `apex-crew-platform` | CLI + MCP specialist — apex-cli, integration tests |
-| `apex-crew-foundation` | Core types specialist — apex-core, config, coverage oracle |
-| `apex-crew-exploration` | Fuzzing + symbolic specialist — apex-fuzz, apex-symbolic |
-| `apex-crew-runtime` | Language runtime specialist — apex-lang, apex-instrument, apex-sandbox |
-| `apex-crew-intelligence` | AI/synthesis specialist — apex-agent, apex-synth |
-| `apex-crew-mcp-integration` | MCP server specialist — 33 tool definitions |
-| `apex-crew-lang-*` | Per-language specialists (Python, JS, Rust, Go, Java, Ruby, C, Swift, .NET) |
+| Component | Description |
+|-----------|-------------|
+| `apex` binary | CLI tool with 35+ subcommands |
+| 33 MCP tools | `apex_run`, `apex_audit`, `apex_complexity`, etc. — callable by Claude |
+| `/apex` slash commands | `/apex`, `/apex detect`, `/apex hunt`, `/apex deploy`, `/apex intel` |
+| 20+ AI agents | `apex`, `apex-hunter`, `apex-captain`, per-language crew agents |
+| `apex.toml` generator | Auto-config via `apex init` |
 
 </details>
 
-### 5. Verify Everything Works
-
-```bash
-# Binary works
-apex doctor
-
-# MCP server responds
-echo '{"jsonrpc":"2.0","method":"initialize","id":1,"params":{}}' | apex mcp
-
-# Run a scan
-apex audit --target . --lang python
-
-# If agents are installed, Claude Code can use them:
-# "Run /apex on this project"
-# "Use the apex-hunter to find bugs in the auth module"
-```
-
-<details>
-<summary><strong>Build from source with optional features</strong></summary>
-
-```bash
-# Prerequisites
-rustup component add llvm-tools-preview
-cargo install cargo-llvm-cov
-
-# Clone and build
-git clone https://github.com/sahajamoth/apex.git && cd apex
-cargo build --release
-
-# With optional features
-cargo build --release --features "treesitter"           # tree-sitter CPG (99% accuracy)
-cargo build --release --features "apex-symbolic/z3-solver"  # Z3 constraint solving
-cargo build --release --features "apex-fuzz/libafl-backend" # LibAFL fuzzing engine
-```
-
-</details>
+> **Standalone CLI, GitHub Actions, CI/CD:** See [docs/STANDALONE.md](docs/STANDALONE.md)
 
 ---
 
-## Standalone CLI — 20 commands, 6 packs
+## Commands Reference
+
+> All commands work both as Claude Code slash commands (`/apex detect`)
+> and as standalone CLI (`apex audit --target . --lang python`).
+> Full standalone docs: [docs/STANDALONE.md](docs/STANDALONE.md)
 
 <details>
 <summary><strong>Core</strong></summary>
