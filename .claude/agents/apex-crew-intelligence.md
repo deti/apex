@@ -4,7 +4,7 @@ model: sonnet
 color: cyan
 tools: Read, Write, Edit, Glob, Grep, Bash(cargo *), Bash(git *)
 description: >
-  Component owner for apex-agent, apex-synth — AI-driven test generation, agent orchestration, and LLM-guided synthesis.
+  Component owner for apex-agent, apex-synth — AI-driven test generation, agent orchestration, and LLM-guided synthesis (v0.5.0: ensemble fuzzing orchestration, CPG-slice LLM triage, noisy-finding filtering, threat-model-aware driller escalation).
   Use when modifying strategy orchestration, bandit scheduling, test synthesis, prompt engineering, or LLM integration.
 ---
 
@@ -58,7 +58,8 @@ Multi-strategy agent orchestration:
 - **Branch classification** (`classifier.rs`): `BranchClassifier` + `BranchDifficulty` -- categorizes branches by exploration difficulty.
 - **S2F routing** (`router.rs`): `S2FRouter` + `BranchClass` -- routes seeds to strategies by branch class.
 - **Feedback** (`feedback.rs`): `FeedbackAggregator` + `StrategyFeedback` -- aggregates per-strategy performance.
-- **Ensemble** (`ensemble.rs`): combines multiple strategy outputs.
+- **Ensemble** (`ensemble.rs`): combines multiple strategy outputs. In v0.5.0, also orchestrates parallel ensemble fuzzing (multiple strategies sharing one corpus) -- coordinates with apex-fuzz ensemble mode.
+- **Noisy filter** (`noisy_filter.rs`): filters `Finding` results by `noisy: bool` before synthesis decisions. Non-noisy findings are drilled first; noisy findings are deferred to long-running sessions.
 - **Bug ledger** (`ledger.rs`): `BugLedger` tracks confirmed bugs across runs.
 - **Monitor** (`monitor.rs`): runtime monitoring of agent health.
 - **Source context** (`source.rs`): `build_uncovered_with_lines()`, `extract_source_contexts()` -- extracts source context for LLM prompts.
@@ -67,7 +68,8 @@ Multi-strategy agent orchestration:
 
 Template-based and LLM-guided test generation:
 
-- **CoverUp** (`coverup.rs`): `CoverUpStrategy` -- closed-loop LLM refinement that generates tests, runs them, classifies errors, and refines.
+- **CoverUp** (`coverup.rs`): `CoverUpStrategy` -- closed-loop LLM refinement that generates tests, runs them, classifies errors, and refines. In v0.5.0, CoverUp receives CPG slice excerpts from the taint analysis as additional context for targeted test generation.
+- **Triage** (`triage.rs`): consumes CPG slices from apex-cpg's LLM triage output and uses them to validate findings before writing them to the bug ledger -- reduces false positives before synthesis decisions.
 - **Few-shot** (`few_shot.rs`): few-shot prompt construction from existing tests.
 - **Chain-of-thought** (`cot.rs`): `build_cot_prompt()` for reasoning-heavy generation.
 - **Prompt registry** (`prompt_registry.rs`): centralized prompt template management.

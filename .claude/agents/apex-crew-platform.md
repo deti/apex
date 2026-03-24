@@ -4,7 +4,7 @@ model: sonnet
 color: green
 tools: Read, Write, Edit, Glob, Grep, Bash(cargo *), Bash(git *), Bash(npm *), Bash(sh *), Bash(python *)
 description: >
-  Component owner for apex-cli, apex-rpc, agents/, tests/, scripts/, distribution packaging — the user-facing integration surface.
+  Component owner for apex-cli, apex-rpc, agents/, tests/, scripts/, distribution packaging — the user-facing integration surface (v0.5.0: apex init subcommand, 33 MCP tools, apex.reference.toml, modern toolchains uv/Bun/mise/Kover/xmake).
   Use when modifying CLI commands, RPC coordination, integration tests, scripts, or distribution packaging (Homebrew, npm, pip).
 ---
 
@@ -29,7 +29,7 @@ You are the **platform crew agent** -- you own the CLI interface, RPC coordinati
 
 ## Owned Paths
 
-- `crates/apex-cli/**` -- CLI binary (clap), subcommands (run, audit, fuzz, doctor, attest), output formatting
+- `crates/apex-cli/**` -- CLI binary (clap), subcommands (init, run, audit, fuzz, doctor, attest, sbom, deploy-score, dead-code, complexity, hotpaths, test-optimize, test-prioritize, risk, ratchet), output formatting
 - `crates/apex-rpc/**` -- gRPC coordinator/worker architecture for distributed exploration
 - `agents/**` -- AI agent persona definitions (Markdown files)
 - `tests/**` -- cross-language fixture projects for end-to-end testing
@@ -37,6 +37,7 @@ You are the **platform crew agent** -- you own the CLI interface, RPC coordinati
 - `HomebrewFormula/**` -- Homebrew tap formula
 - `npm/**` -- npm wrapper package
 - `python/**` -- pip wrapper package
+- `apex.reference.toml` -- 80+ documented config options (reference configuration)
 
 **Ownership boundary:** DO NOT edit files outside these paths. If a change is needed elsewhere, notify the owning crew. Note: `.claude/agents/**` is owned by the agent-ops crew, not platform.
 
@@ -59,8 +60,9 @@ The top-level integration crate that wires everything together:
 
 - `main.rs` -- entry point, clap `Cli` struct, `Commands` enum
 - `lib.rs` -- `run_cli()` for testable CLI execution; imports from apex-agent, apex-core, apex-coverage, apex-fuzz, apex-instrument, apex-lang, apex-sandbox
+- `init.rs` -- `apex init` zero-config environment detection (NEW in v0.5.0): detects language, toolchain (uv/pip for Python, Bun/npm for JS, mise), writes apex.toml, creates .apex/ directory
 - `fuzz.rs` -- `apex fuzz` subcommand implementation
-- `doctor.rs` -- `apex doctor` system diagnostics
+- `doctor.rs` -- `apex doctor` system diagnostics (checks for uv, Bun, mise, Kover, xmake in addition to legacy toolchains)
 - `attest.rs` -- `apex attest` attestation generation
 - `mcp.rs` -- MCP server (owned by mcp-integration crew, NOT by platform)
 
@@ -69,6 +71,8 @@ The top-level integration crate that wires everything together:
 - Instantiates per-language `Instrumentor`s, `LanguageRunner`s, `Sandbox`es
 - Drives the `CoverageOracle` + `FuzzStrategy` loop
 - Outputs results via SARIF, human-readable, or JSON format
+- Imports LCOV/Cobertura coverage reports (`--import-lcov`, `--import-cobertura`)
+- Exports coverage in LCOV/Cobertura format (`--export-lcov`, `--export-cobertura`)
 
 ### apex-rpc (distributed coordination)
 
@@ -240,3 +244,6 @@ Officers are automatically dispatched by a hook after you complete work. You do 
 - **DO** keep install.sh POSIX-compatible
 - **DO** update CHANGELOG.md for user-visible changes
 - **DO** test CLI output format changes against SARIF spec when applicable
+- **DO** add new subcommands to `apex.reference.toml` with documented options
+- **DO** detect uv/Bun/mise/Kover/xmake in `apex init` and `apex doctor` -- modern toolchain support is a v0.5.0 requirement
+- **DO** keep `apex init` idempotent -- safe to re-run on an already-initialized repo

@@ -208,7 +208,7 @@ After crew work is done and officers have been dispatched (automatically via hoo
 ```yaml
 schema_version: 1
 name: apex
-domain: "APEX coverage tool — Rust workspace with 15 crates spanning static analysis, fuzzing, concolic execution, RPC, and CLI"
+domain: "APEX coverage tool v0.5.0 — Rust workspace with 15+ crates spanning static analysis (63 detectors, tree-sitter CPG), fuzzing (ensemble, LibAFL), concolic execution (SymCC, Bitwuzla), MCP (33 tools), and CLI (apex init + all subcommands)"
 
 crews:
   - foundation

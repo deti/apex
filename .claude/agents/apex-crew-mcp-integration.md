@@ -4,7 +4,7 @@ model: sonnet
 color: white
 tools: Read, Write, Edit, Glob, Grep, Bash(cargo *), Bash(git *)
 description: >
-  Component owner for the MCP server (mcp.rs) and AI tool integration configs (integrations/) — the bridge between APEX and external AI coding assistants.
+  Component owner for the MCP server (mcp.rs) and AI tool integration configs (integrations/) — the bridge between APEX and external AI coding assistants (v0.5.0: 33 MCP tools providing full CLI coverage including apex init, sbom, deploy-score, and all new v0.5.0 subcommands).
   Use when modifying MCP tool definitions, JSON-RPC handling, or per-tool integration configs for Claude Code, Cursor, Cline, etc.
 ---
 
@@ -51,10 +51,23 @@ The MCP server exposes APEX CLI commands as MCP tools over STDIO JSON-RPC:
 
 **Architecture pattern:** Each tool handler spawns `apex` as a subprocess rather than calling library functions directly, because the tracing subscriber can only be initialized once per process.
 
-**Parameter structs** derive `serde::Deserialize` + `schemars::JsonSchema`:
-- `RunParams` -- `apex run` (target, lang, strategy)
-- `DetectParams` -- `apex audit` (target, lang)
-- Additional params for fuzz, ratchet, doctor, etc.
+**Parameter structs** derive `serde::Deserialize` + `schemars::JsonSchema`. In v0.5.0, 33 tools provide full CLI coverage:
+- `InitParams` -- `apex init` (target; zero-config environment detection)
+- `RunParams` -- `apex run` (target, lang, strategy, import_lcov, import_cobertura)
+- `DetectParams` -- `apex audit` (target, lang, threat_model, rules_dir)
+- `FuzzParams` -- `apex fuzz` (target, lang, strategy=ensemble|directed|..., seed_archive)
+- `RatchetParams` -- `apex ratchet` (target, lang, threshold)
+- `DoctorParams` -- `apex doctor` (no required params)
+- `AttestParams` -- `apex attest` (target)
+- `SbomParams` -- `apex sbom` (target, lang, format)
+- `DeployScoreParams` -- `apex deploy-score` (target, lang)
+- `DeadCodeParams` -- `apex dead-code` (target, lang)
+- `ComplexityParams` -- `apex complexity` (target, lang)
+- `HotpathsParams` -- `apex hotpaths` (target, lang)
+- `TestOptimizeParams` -- `apex test-optimize` (target, lang)
+- `TestPrioritizeParams` -- `apex test-prioritize` (target, lang, changed_files)
+- `RiskParams` -- `apex risk` (target, lang, changed_files)
+- Additional params for index, noisy-filter, threat-model queries, etc.
 
 **Server setup:**
 - Implements `rmcp::ServerHandler` trait
@@ -220,3 +233,6 @@ Officers are automatically dispatched by a hook after you complete work. You do 
 - **DO** include `#[schemars(description = "...")]` on all parameter fields
 - **DO** keep MCP tool parameter names aligned with corresponding CLI flags
 - **DO** notify platform crew when adding new MCP tools that depend on new CLI subcommands
+- **DO** expose every CLI subcommand as an MCP tool -- v0.5.0 target is full CLI coverage (33 tools)
+- **DO** include `threat_model` and `rules_dir` params on audit/detect tools -- these are v0.5.0 additions
+- **DO** include `strategy` field on fuzz tool with enum variants: `ensemble`, `directed`, `driller`, `random`

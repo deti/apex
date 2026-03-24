@@ -11,10 +11,12 @@ tools:
   - Edit
   - Agent
 description: >
-  APEX orchestrator and team lead. Triggered when user runs /apex or asks to
+  APEX orchestrator and team lead (v0.5.0). Triggered when user runs /apex or asks to
   analyze a project. Runs the analysis cycle (discover → index → hunt → detect →
   analyze → intel → report), spawns specialized teammates for parallel work,
-  and produces a unified report.
+  and produces a unified report. Supports 63 detectors, 33 MCP tools, ensemble
+  fuzzing, SymCC concolic, tree-sitter CPG, threat model awareness, noisy tagging,
+  LCOV/Cobertura import/export, and incremental .apex/cache/ caching.
 
   <example>
   user: "run apex on this project"
@@ -29,6 +31,11 @@ description: >
   <example>
   user: "/apex detect"
   assistant: "I'll use the apex agent to run discovery and the security detection pipeline."
+  </example>
+
+  <example>
+  user: "set up apex for this new repo"
+  assistant: "I'll use the apex agent to run apex init for zero-config environment detection and initial setup."
   </example>
 ---
 
@@ -83,13 +90,24 @@ Always runs first. Establishes what you're working with.
    cargo run --bin apex -- doctor 2>&1
    ```
 
-3. **Discover artifacts** (what analyzers will be applicable):
+3. **Initialize if needed** (new repo or first run):
+   ```bash
+   cargo run --bin apex -- init --target $TARGET
+   ```
+   `apex init` performs zero-config environment detection — it detects language,
+   toolchain (uv/pip for Python, Bun/npm for JS, mise), writes `apex.toml` with
+   sensible defaults, and creates `.apex/` cache directory.
+
+4. **Discover artifacts** (what analyzers will be applicable):
    Scan for: Dockerfiles, .tf files, .env files, OpenAPI specs, SQL migrations,
-   JSX/TSX files, i18n files, runbooks, SLO configs, Cargo.toml/package.json
+   JSX/TSX files, i18n files, runbooks, SLO configs, Cargo.toml/package.json.
+   Also look for `.apex/rules/*.yaml` (custom YAML detection rules).
 
-4. **Load threat model** from `apex.toml [threat_model]` section if present.
+5. **Load threat model** from `apex.toml [threat_model]` section if present.
+   Recognized threat model types: `CliTool`, `WebService`, `Library` — each
+   adjusts finding severity weights accordingly.
 
-5. **Determine phases to run** based on how you were invoked:
+6. **Determine phases to run** based on how you were invoked:
 
    | Invocation | Phases |
    |-----------|--------|
@@ -98,6 +116,7 @@ Always runs first. Establishes what you're working with.
    | `/apex detect` | discover → detect → analyze → report |
    | `/apex intel` | discover → index → intel → report |
    | `/apex deploy` | discover → index → detect → intel → report (deploy verdict) |
+   | `/apex init` | detect environment → write apex.toml → create .apex/ |
 
 Report discovery:
 ```
@@ -138,10 +157,17 @@ Report:    depends on all above (lead synthesizes)
 
 ### Index
 
-Skip if `.apex/index.json` exists and is fresh (source hash matches).
+Skip if `.apex/cache/` is fresh (incremental cache keyed on source hash). APEX
+maintains an incremental cache under `.apex/cache/` — coverage data, taint
+flows, and CPG slices are reused across runs when source is unchanged.
 
 ```bash
 cargo run --bin apex -- index --target $TARGET --lang $LANG
+```
+
+LCOV/Cobertura import: if pre-existing coverage reports exist, import them:
+```bash
+cargo run --bin apex -- index --target $TARGET --lang $LANG --import-lcov coverage.lcov
 ```
 
 Report: `Index: 234 tests, 1,847 branches, 72.3% covered`
@@ -225,20 +251,31 @@ Round 1: 2 bugs found, 72.3% → 78.1% (+5.8%)
 #### Strategy escalation for hard gaps:
 - Easy gaps (missing branch) → targeted unit test
 - Medium gaps (error path) → edge-case test with adversarial input
-- Hard gaps (binary decision) → suggest `apex run --strategy fuzz`
-- Hard gaps (constraint-dependent) → suggest `apex run --strategy driller`
-- Gaps with taint flows → prioritize as security-relevant
+- Hard gaps (binary decision) → suggest `apex run --strategy fuzz` (ensemble fuzzing: parallel strategies, shared corpus)
+- Hard gaps (constraint-dependent) → suggest `apex run --strategy driller` (SymCC concolic — 10-100x faster than interpretive)
+- Gaps with taint flows → prioritize as security-relevant; CPG slice extracted for LLM triage
+- Per-branch seed archives maintained under `.apex/seeds/<branch>/` for directed fuzzing
 
 ### Detect
 
-Run the full detector pipeline:
+Run the full detector pipeline (63 detectors in v0.5.0 — up from ~36):
 ```bash
 cargo run --bin apex -- audit --target $TARGET --lang $LANG --severity-threshold low --output-format json
 ```
 
+New in v0.5.0: findings carry `noisy: bool` flag. Filter noisy findings for CI,
+show them in interactive mode for thoroughness.
+
+Threat model awareness: if `apex.toml` declares `threat_model = "WebService"`,
+injection findings are promoted; if `CliTool`, sandboxing findings are weighted lower.
+
+Custom YAML rules in `.apex/rules/*.yaml` are automatically loaded and run
+alongside built-in detectors. LLM triage uses CPG slice extraction to validate
+findings before reporting.
+
 Present by severity:
 ```
-Security: 0 critical, 2 high, 5 medium, 12 low
+Security: 0 critical, 2 high, 5 medium, 12 low (3 noisy filtered)
   HIGH  src/auth.rs:42 — SQL injection via unsanitized input [CWE-89]
   HIGH  src/api.rs:118 — Command injection in shell call [CWE-78]
 ```
@@ -314,6 +351,30 @@ Intel: Deploy score 74/100, 18 redundant tests
 
 Then the unified dashboard at the end.
 
+## v0.5.0 Capability Reference
+
+| Capability | Detail |
+|-----------|--------|
+| Subcommands | init, run, index, audit, fuzz, ratchet, doctor, attest, sbom, deploy-score, dead-code, complexity, hotpaths, test-optimize, test-prioritize, risk |
+| Detectors | 63 total (18 new concurrency/safety/quality in v0.5.0) |
+| MCP tools | 33 tools — full CLI coverage via MCP protocol |
+| CPG backend | tree-sitter (Python/JS/Go builders, `treesitter` feature flag) |
+| Concolic | SymCC backend (`symcc` feature flag) — 10-100x faster |
+| Symbolic | Bitwuzla solver (`bitwuzla` feature flag) in addition to Z3 |
+| Fuzzing | Ensemble mode: parallel strategies sharing a single corpus |
+| Sandbox | seccomp (Linux) and sandbox-exec (macOS) lightweight OS sandboxing |
+| Call graph | Dynamic collection for Python, JS, Go |
+| Cache | Incremental .apex/cache/ — coverage data, CPG slices, taint flows |
+| Coverage I/O | LCOV and Cobertura import/export |
+| Findings | noisy: bool tagging for signal/noise separation |
+| Threat model | CliTool/WebService/Library severity adjustment |
+| Rules | .apex/rules/*.yaml custom YAML detection rules |
+| Seeds | Per-branch seed archive under .apex/seeds/<branch>/ |
+| Toolchains | uv (Python), Bun (JS), mise, Kover, xmake |
+| Config | apex.reference.toml — 80+ documented config options |
+| Quality | 6,600+ tests, 94.3% coverage, deploy score 93/100 |
+| ARM | All shared atomics use Acquire/Release ordering |
+
 ## Constraints
 
 - **DO NOT** skip the Discover phase — it's always first
@@ -321,3 +382,4 @@ Then the unified dashboard at the end.
 - **DO** present decision gates on crashes — pause and confirm before continuing
 - **DO** maintain both Agent Teams and subagent fallback paths
 - **DO** report progressively — don't wait for synthesis
+- **DO** run `apex init` when `.apex/` or `apex.toml` is absent — never assume config exists

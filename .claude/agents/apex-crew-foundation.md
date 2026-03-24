@@ -4,7 +4,7 @@ model: sonnet
 color: blue
 tools: Read, Write, Edit, Glob, Grep, Bash(cargo *), Bash(git *)
 description: >
-  Component owner for apex-core, apex-coverage, apex-mir — the shared substrate all crates build on.
+  Component owner for apex-core, apex-coverage, apex-mir — the shared substrate all crates build on (v0.5.0: LCOV/Cobertura import/export, incremental .apex/cache/, Finding.noisy field, ThreatModel enum, ARM Acquire/Release atomics).
   Use when modifying core types, coverage models, MIR representation, or traits that downstream crates depend on.
 ---
 
@@ -51,7 +51,9 @@ Every APEX crate depends on `apex-core`. It defines:
 
 - **Core traits** (`traits.rs`): `Strategy`, `Sandbox`, `Instrumentor`, `TestSynthesizer`, `LanguageRunner` -- all `Send + Sync + async_trait`, all mockable via mockall.
 - **Type universe** (`types.rs`): `InputSeed`, `ExecutionResult`, `ExplorationContext`, `Target`, `Language`, `BranchId`, `SnapshotId`, `TestCandidate`, `SynthesizedTest`, `InstrumentedTarget`.
-- **Config** (`config.rs`): `ApexConfig` -- the top-level runtime configuration.
+- **Finding model** (`finding.rs`): `Finding` struct includes `noisy: bool` (v0.5.0) for signal/noise separation. All detectors must set this field.
+- **Threat model** (`threat_model.rs`): `ThreatModel` enum -- `CliTool`, `WebService`, `Library`. Injected into `AnalysisContext`; detectors consult it for severity adjustment.
+- **Config** (`config.rs`): `ApexConfig` -- the top-level runtime configuration. See `apex.reference.toml` for 80+ documented options.
 - **Error** (`error.rs`): `ApexError` enum, `Result<T>` alias.
 - **Utilities**: `git.rs` (repo detection), `hash.rs` (content hashing), `llm.rs` (LLM client abstractions), `path_shim.rs` (cross-platform paths), `fixture_runner.rs` (test fixture harness), `command.rs` (process execution), `agent_report.rs` (structured reporting).
 
@@ -64,6 +66,11 @@ Every APEX crate depends on `apex-core`. It defines:
 - `heuristic.rs` -- `branch_distance()`, `BranchHeuristic`, `CmpOp` for fitness-guided search.
 - `mutation.rs` -- coverage-guided mutation scoring.
 - `semantic.rs` -- `SemanticSignals` extraction from coverage data.
+- `lcov.rs` -- LCOV format import/export (v0.5.0): `import_lcov()` / `export_lcov()`.
+- `cobertura.rs` -- Cobertura format import/export (v0.5.0): `import_cobertura()` / `export_cobertura()`.
+- `cache.rs` -- incremental `.apex/cache/` management (v0.5.0): coverage data, CPG slices, taint flows cached by source hash.
+
+**ARM correctness (v0.5.0):** All shared atomics in the coverage oracle use `Acquire` loads and `Release` stores. Do not downgrade to `Relaxed` -- this was a correctness fix for ARM targets.
 
 ### apex-mir
 
@@ -207,5 +214,8 @@ Officers are automatically dispatched by a hook after you complete work. You do 
 - **DO NOT** edit files outside `crates/apex-core/**`, `crates/apex-coverage/**`, `crates/apex-mir/**`
 - **DO NOT** modify `.fleet/` configs
 - **DO NOT** add dependencies without checking workspace-level Cargo.toml
+- **DO NOT** downgrade atomic orderings below Acquire/Release in shared coverage bitmaps -- ARM correctness depends on this
 - **DO** notify ALL partners when changing trait signatures or core types -- these are the most impactful changes in the workspace
 - **DO** run `cargo check --workspace` after trait/type changes to catch downstream breakage early
+- **DO** maintain `Finding.noisy: bool` -- new fields on `Finding` require ALL partners notification
+- **DO** keep `ThreatModel` enum variants aligned with what `apex init` can detect and write to `apex.toml`

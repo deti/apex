@@ -4,7 +4,7 @@ model: sonnet
 color: yellow
 tools: Read, Write, Edit, Glob, Grep, Bash(cargo *), Bash(git *)
 description: >
-  Component owner for apex-fuzz, apex-symbolic, apex-concolic, fuzz/ — dynamic path exploration via fuzzing, symbolic/concolic execution, and constraint solving.
+  Component owner for apex-fuzz, apex-symbolic, apex-concolic, fuzz/ — dynamic path exploration via fuzzing, symbolic/concolic execution, and constraint solving (v0.5.0: ensemble fuzzing with shared corpus, SymCC concolic backend 10-100x faster, Bitwuzla solver, per-branch seed archives).
   Use when modifying fuzzing engines, mutators, symbolic solvers, concolic search, or coverage-guided exploration.
 ---
 
@@ -39,8 +39,10 @@ You are the **exploration crew agent** -- you own dynamic path exploration: cove
 ## Tech Stack
 
 - **Rust** (workspace crate, `resolver = "2"`)
-- **Optional libafl** -- LibAFL fuzzing framework backend (behind feature flag)
-- **Optional z3** -- Z3 SMT solver (behind feature flag)
+- **Optional libafl** -- LibAFL fuzzing framework backend (behind `libafl` feature flag)
+- **Optional z3** -- Z3 SMT solver (behind `z3` feature flag)
+- **Optional bitwuzla** -- Bitwuzla SMT solver (behind `bitwuzla` feature flag; faster than Z3 on bitvector constraints)
+- **Optional symcc** -- SymCC concolic backend (behind `symcc` feature flag; 10-100x faster than interpretive concolic)
 - **SMT-LIB** -- constraint encoding format for solver interaction
 - **Grammar-based mutation** -- grammar definitions for structured input generation
 - **Performance-critical** -- hot loops in mutators and schedulers; benchmark regressions matter
@@ -61,12 +63,13 @@ Coverage-guided fuzzing with advanced scheduling:
 - **LLM mutator** (`llm_mutator.rs`): LLM-guided mutation for semantic-aware fuzzing.
 - **Semantic feedback** (`semantic_feedback.rs`): `SemanticFeedback` + `SemFeedbackScore` -- semantic coverage signals beyond edge counts.
 - **CmpLog** (`cmplog.rs`): comparison logging for input-to-state correspondence.
-- **Directed fuzzing** (`directed.rs`): target-directed seed scheduling.
+- **Directed fuzzing** (`directed.rs`): target-directed seed scheduling. Per-branch seed archives stored under `.apex/seeds/<branch>/` (v0.5.0) enable directed replay.
+- **Ensemble** (`ensemble.rs`): parallel fuzzing strategies sharing a single corpus (v0.5.0). Multiple mutators run concurrently, feeding discoveries back into the shared pool.
 - **Distillation** (`distill.rs`): corpus distillation to minimal covering set.
 - **Shrinker** (`shrinker.rs`): `BinaryShrinker` -- input minimization.
 - **SeedMind** (`seedmind.rs`): neural-guided seed selection.
 - **HGFuzzer** (`hgfuzzer.rs`): hybrid greybox fuzzer integration.
-- **LibAFL backend** (`libafl_backend.rs`): optional LibAFL integration (behind feature flag).
+- **LibAFL backend** (`libafl_backend.rs`): optional LibAFL integration (behind `libafl` feature flag).
 - **QEMU backend** (`qemu_backend.rs`): QEMU-based binary fuzzing backend.
 - **Plugin system** (`plugin.rs`): extensible fuzzer plugins.
 - **Control** (`control.rs`): fuzzing campaign lifecycle management.
@@ -77,8 +80,9 @@ Coverage-guided fuzzing with advanced scheduling:
 Constraint-based path exploration:
 
 - **Solver** (`solver.rs`): core constraint solver interface.
-- **SMT-LIB** (`smtlib.rs`): SMT-LIB2 encoding/decoding for Z3 interaction.
-- **Portfolio** (`portfolio.rs`): portfolio solver combining multiple backends.
+- **SMT-LIB** (`smtlib.rs`): SMT-LIB2 encoding/decoding for solver interaction.
+- **Portfolio** (`portfolio.rs`): portfolio solver combining multiple backends (Z3, Bitwuzla, LLM).
+- **Bitwuzla backend** (`bitwuzla_backend.rs`): Bitwuzla SMT solver (v0.5.0, behind `bitwuzla` feature flag). Faster than Z3 on bitvector-heavy constraints; preferred for integer overflow and bit manipulation paths.
 - **LLM solver** (`llm_solver.rs`): LLM-based constraint solving for complex predicates.
 - **Path decomposition** (`path_decomp.rs`): splits complex paths for parallel solving.
 - **BMC** (`bmc.rs`): bounded model checking.
@@ -94,6 +98,8 @@ Constraint-based path exploration:
 Hybrid concrete-symbolic execution:
 
 - **Search** (`search.rs`): concolic search strategy (negate-and-solve loop).
+- **SymCC backend** (`symcc_backend.rs`): SymCC-based concolic execution (v0.5.0, behind `symcc` feature flag). Compile-time symbolic instrumentation is 10-100x faster than interpretive approaches. Preferred over the interpretive backend when the target can be recompiled.
+- **Interpretive backend** (`interpretive.rs`): original interpretive concolic execution (baseline, no recompilation needed).
 - **Condition tree** (`condition_tree.rs`): path condition tree construction.
 - **Selective** (`selective.rs`): selective concolic execution -- skip already-covered branches.
 - **Taint** (`taint.rs`): dynamic taint tracking for concolic inputs.
@@ -235,7 +241,9 @@ Officers are automatically dispatched by a hook after you complete work. You do 
 
 - **DO NOT** edit files outside your 3 owned crates and `fuzz/`
 - **DO NOT** modify `.fleet/` configs
-- **DO NOT** add z3 or libafl as unconditional dependencies -- they must stay behind feature flags
+- **DO NOT** add z3, libafl, bitwuzla, or symcc as unconditional dependencies -- they must stay behind feature flags
 - **DO** benchmark performance-sensitive changes (mutators, schedulers, corpus operations)
-- **DO** test with both default features and optional backends enabled
+- **DO** test with both default features and optional backends enabled: `cargo nextest run -p apex-fuzz --features libafl` and `cargo nextest run -p apex-symbolic --features bitwuzla`
 - **DO** notify intelligence crew when changing fuzzing strategy APIs or escalation behavior
+- **DO** write per-branch seed archives to `.apex/seeds/<branch>/` when directed fuzzing discovers new seeds -- this is the v0.5.0 directed fuzzing convention
+- **DO** prefer Bitwuzla over Z3 for bitvector-heavy constraint solving (faster); use portfolio solver to auto-select
