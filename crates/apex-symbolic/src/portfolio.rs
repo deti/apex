@@ -82,10 +82,7 @@ impl PortfolioSolver {
     /// - `Ok(Some(seed))` — the first satisfying assignment found by any solver.
     /// - `Ok(None)` — all solvers returned `None` (collectively UNSAT/unknown).
     /// - `Err(e)` — every solver returned `Err`; the last error is propagated.
-    pub async fn solve_parallel(
-        &self,
-        constraints: &[String],
-    ) -> Result<Option<InputSeed>> {
+    pub async fn solve_parallel(&self, constraints: &[String]) -> Result<Option<InputSeed>> {
         use tokio::task::spawn_blocking;
 
         if self.solvers.is_empty() {
@@ -99,8 +96,7 @@ impl PortfolioSolver {
         for solver in &self.solvers {
             let solver = Arc::clone(solver);
             let cs = constraints_owned.clone();
-            let handle =
-                spawn_blocking(move || solver.solve(&cs, false));
+            let handle = spawn_blocking(move || solver.solve(&cs, false));
             handles.push(handle);
         }
 
@@ -436,7 +432,10 @@ mod tests {
     #[tokio::test]
     async fn solve_parallel_empty_portfolio_returns_none() {
         let portfolio = PortfolioSolver::new(vec![], Duration::from_secs(5));
-        let result = portfolio.solve_parallel(&["x > 0".to_string()]).await.unwrap();
+        let result = portfolio
+            .solve_parallel(&["x > 0".to_string()])
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 
@@ -461,7 +460,10 @@ mod tests {
             Box::new(SatSolver::new(vec![7, 8, 9])),
         ];
         let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));
-        let result = portfolio.solve_parallel(&["x > 0".to_string()]).await.unwrap();
+        let result = portfolio
+            .solve_parallel(&["x > 0".to_string()])
+            .await
+            .unwrap();
         assert!(result.is_some());
     }
 

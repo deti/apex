@@ -169,11 +169,7 @@ impl TreeSitterInstrumentor {
     ///
     /// On parse failure tree-sitter recovers as best it can; we return the
     /// original source with zero probes rather than an error.
-    pub fn instrument_source(
-        &self,
-        source: &str,
-        filename: &str,
-    ) -> Result<InstrumentedSource> {
+    pub fn instrument_source(&self, source: &str, filename: &str) -> Result<InstrumentedSource> {
         match self.language {
             Language::Python => instrument_python(source, filename),
             Language::JavaScript => instrument_javascript(source, filename),
@@ -212,7 +208,11 @@ struct PendingProbe {
 ///
 /// Probes are inserted from last-to-first so that earlier byte offsets remain
 /// valid after each splice.
-fn apply_probes(source: &str, mut pending: Vec<PendingProbe>, probe_call: fn(u32) -> String) -> InstrumentedSource {
+fn apply_probes(
+    source: &str,
+    mut pending: Vec<PendingProbe>,
+    probe_call: fn(u32) -> String,
+) -> InstrumentedSource {
     // Sort in reverse order of insertion point so splices don't shift earlier
     // offsets.
     pending.sort_by(|a, b| b.insert_at.cmp(&a.insert_at));
@@ -240,7 +240,10 @@ fn apply_probes(source: &str, mut pending: Vec<PendingProbe>, probe_call: fn(u32
         p.id = i as u32;
     }
 
-    InstrumentedSource { source: src, probes }
+    InstrumentedSource {
+        source: src,
+        probes,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -274,11 +277,7 @@ fn instrument_python(source: &str, _filename: &str) -> Result<InstrumentedSource
     Ok(apply_probes(source, pending, py_probe))
 }
 
-fn collect_python_probes(
-    node: &tree_sitter::Node,
-    src: &[u8],
-    pending: &mut Vec<PendingProbe>,
-) {
+fn collect_python_probes(node: &tree_sitter::Node, src: &[u8], pending: &mut Vec<PendingProbe>) {
     let kind = node.kind();
 
     match kind {
@@ -287,7 +286,11 @@ fn collect_python_probes(
             if let Some(body) = node.child_by_field_name("body") {
                 let insert_at = probe_after_colon_python(&body, src);
                 let line = node.start_position().row as u32 + 1;
-                pending.push(PendingProbe { insert_at, line, kind: ProbeKind::FunctionEntry });
+                pending.push(PendingProbe {
+                    insert_at,
+                    line,
+                    kind: ProbeKind::FunctionEntry,
+                });
             }
         }
         // if_statement: probe at start of consequence (true branch)
@@ -296,7 +299,11 @@ fn collect_python_probes(
             // consequence = the "if" body block
             if let Some(consequence) = node.child_by_field_name("consequence") {
                 let insert_at = probe_after_colon_python(&consequence, src);
-                pending.push(PendingProbe { insert_at, line, kind: ProbeKind::BranchTrue });
+                pending.push(PendingProbe {
+                    insert_at,
+                    line,
+                    kind: ProbeKind::BranchTrue,
+                });
             }
             // alternative = elif / else block
             if let Some(alt) = node.child_by_field_name("alternative") {
@@ -319,7 +326,11 @@ fn collect_python_probes(
             let line = node.start_position().row as u32 + 1;
             if let Some(body) = node.child_by_field_name("body") {
                 let insert_at = probe_after_colon_python(&body, src);
-                pending.push(PendingProbe { insert_at, line, kind: ProbeKind::LoopEntry });
+                pending.push(PendingProbe {
+                    insert_at,
+                    line,
+                    kind: ProbeKind::LoopEntry,
+                });
             }
         }
         _ => {}
@@ -379,11 +390,7 @@ fn instrument_javascript(source: &str, _filename: &str) -> Result<InstrumentedSo
     Ok(apply_probes(source, pending, js_probe))
 }
 
-fn collect_js_probes(
-    node: &tree_sitter::Node,
-    src: &[u8],
-    pending: &mut Vec<PendingProbe>,
-) {
+fn collect_js_probes(node: &tree_sitter::Node, src: &[u8], pending: &mut Vec<PendingProbe>) {
     let kind = node.kind();
 
     match kind {
@@ -398,7 +405,11 @@ fn collect_js_probes(
             // body is either a statement_block or an expression (arrow fn)
             if let Some(body) = node.child_by_field_name("body") {
                 if let Some(insert_at) = probe_inside_block_js(&body, src) {
-                    pending.push(PendingProbe { insert_at, line, kind: ProbeKind::FunctionEntry });
+                    pending.push(PendingProbe {
+                        insert_at,
+                        line,
+                        kind: ProbeKind::FunctionEntry,
+                    });
                 }
             }
         }
@@ -407,7 +418,11 @@ fn collect_js_probes(
             let line = node.start_position().row as u32 + 1;
             if let Some(consequence) = node.child_by_field_name("consequence") {
                 if let Some(insert_at) = probe_inside_block_js(&consequence, src) {
-                    pending.push(PendingProbe { insert_at, line, kind: ProbeKind::BranchTrue });
+                    pending.push(PendingProbe {
+                        insert_at,
+                        line,
+                        kind: ProbeKind::BranchTrue,
+                    });
                 }
             }
             if let Some(alternative) = node.child_by_field_name("alternative") {
@@ -435,7 +450,11 @@ fn collect_js_probes(
             let line = node.start_position().row as u32 + 1;
             if let Some(body) = node.child_by_field_name("body") {
                 if let Some(insert_at) = probe_inside_block_js(&body, src) {
-                    pending.push(PendingProbe { insert_at, line, kind: ProbeKind::LoopEntry });
+                    pending.push(PendingProbe {
+                        insert_at,
+                        line,
+                        kind: ProbeKind::LoopEntry,
+                    });
                 }
             }
         }
@@ -494,11 +513,7 @@ fn instrument_go(source: &str, _filename: &str) -> Result<InstrumentedSource> {
     Ok(apply_probes(source, pending, go_probe))
 }
 
-fn collect_go_probes(
-    node: &tree_sitter::Node,
-    src: &[u8],
-    pending: &mut Vec<PendingProbe>,
-) {
+fn collect_go_probes(node: &tree_sitter::Node, src: &[u8], pending: &mut Vec<PendingProbe>) {
     let kind = node.kind();
 
     match kind {
@@ -506,7 +521,11 @@ fn collect_go_probes(
             let line = node.start_position().row as u32 + 1;
             if let Some(body) = node.child_by_field_name("body") {
                 if let Some(insert_at) = probe_inside_block_go(&body, src) {
-                    pending.push(PendingProbe { insert_at, line, kind: ProbeKind::FunctionEntry });
+                    pending.push(PendingProbe {
+                        insert_at,
+                        line,
+                        kind: ProbeKind::FunctionEntry,
+                    });
                 }
             }
         }
@@ -515,7 +534,11 @@ fn collect_go_probes(
             // consequence field holds the block
             if let Some(consequence) = node.child_by_field_name("consequence") {
                 if let Some(insert_at) = probe_inside_block_go(&consequence, src) {
-                    pending.push(PendingProbe { insert_at, line, kind: ProbeKind::BranchTrue });
+                    pending.push(PendingProbe {
+                        insert_at,
+                        line,
+                        kind: ProbeKind::BranchTrue,
+                    });
                 }
             }
             if let Some(alternative) = node.child_by_field_name("alternative") {
@@ -538,7 +561,11 @@ fn collect_go_probes(
             let line = node.start_position().row as u32 + 1;
             if let Some(body) = node.child_by_field_name("body") {
                 if let Some(insert_at) = probe_inside_block_go(&body, src) {
-                    pending.push(PendingProbe { insert_at, line, kind: ProbeKind::LoopEntry });
+                    pending.push(PendingProbe {
+                        insert_at,
+                        line,
+                        kind: ProbeKind::LoopEntry,
+                    });
                 }
             }
         }
@@ -659,9 +686,7 @@ mod tests {
         let branch_probes: Vec<_> = result
             .probes
             .iter()
-            .filter(|p| {
-                p.kind == ProbeKind::BranchTrue || p.kind == ProbeKind::BranchFalse
-            })
+            .filter(|p| p.kind == ProbeKind::BranchTrue || p.kind == ProbeKind::BranchFalse)
             .collect();
         assert!(
             branch_probes.is_empty(),
@@ -722,13 +747,17 @@ mod tests {
             .iter()
             .filter(|p| p.kind == ProbeKind::FunctionEntry)
             .collect();
-        assert!(!fn_probes.is_empty(), "expected FunctionEntry probe for JS function");
+        assert!(
+            !fn_probes.is_empty(),
+            "expected FunctionEntry probe for JS function"
+        );
         assert!(result.source.contains("__apexProbe("));
     }
 
     #[test]
     fn test_js_if_else_probes() {
-        let src = "function f(x) {\n  if (x > 0) {\n    return 1;\n  } else {\n    return -1;\n  }\n}\n";
+        let src =
+            "function f(x) {\n  if (x > 0) {\n    return 1;\n  } else {\n    return -1;\n  }\n}\n";
         let inst = TreeSitterInstrumentor::new(Language::JavaScript).unwrap();
         let result = inst.instrument_source(src, "f.js").unwrap();
 
@@ -748,7 +777,8 @@ mod tests {
 
     #[test]
     fn test_js_loop_probe() {
-        let src = "function count() {\n  for (let i = 0; i < 10; i++) {\n    console.log(i);\n  }\n}\n";
+        let src =
+            "function count() {\n  for (let i = 0; i < 10; i++) {\n    console.log(i);\n  }\n}\n";
         let inst = TreeSitterInstrumentor::new(Language::JavaScript).unwrap();
         let result = inst.instrument_source(src, "count.js").unwrap();
 
@@ -812,7 +842,11 @@ mod tests {
         let inst = TreeSitterInstrumentor::new(Language::Go).unwrap();
         let result = inst.instrument_source(src, "check.go").unwrap();
 
-        let true_count = result.probes.iter().filter(|p| p.kind == ProbeKind::BranchTrue).count();
+        let true_count = result
+            .probes
+            .iter()
+            .filter(|p| p.kind == ProbeKind::BranchTrue)
+            .count();
         assert!(true_count >= 1, "expected BranchTrue probe");
     }
 
@@ -822,7 +856,11 @@ mod tests {
         let inst = TreeSitterInstrumentor::new(Language::Go).unwrap();
         let result = inst.instrument_source(src, "loop.go").unwrap();
 
-        let loop_probes: Vec<_> = result.probes.iter().filter(|p| p.kind == ProbeKind::LoopEntry).collect();
+        let loop_probes: Vec<_> = result
+            .probes
+            .iter()
+            .filter(|p| p.kind == ProbeKind::LoopEntry)
+            .collect();
         assert!(!loop_probes.is_empty(), "expected LoopEntry probe");
     }
 

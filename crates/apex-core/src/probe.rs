@@ -298,9 +298,7 @@ fn secs_to_iso8601(secs: u64) -> String {
     }
     let day = days + 1;
 
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 fn is_leap(year: u32) -> bool {

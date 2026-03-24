@@ -159,7 +159,10 @@ mod tests {
     fn stub_returns_err_for_non_empty_constraints() {
         let s = BitwuzlaSolver::new(SolverLogic::Auto);
         let result = SolverTrait::solve(&s, &["(> x 0)".to_string()], false);
-        assert!(result.is_err(), "expected Err when bitwuzla feature is absent");
+        assert!(
+            result.is_err(),
+            "expected Err when bitwuzla feature is absent"
+        );
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("bitwuzla not available"),
@@ -171,11 +174,7 @@ mod tests {
     #[test]
     fn stub_returns_err_negate_last() {
         let s = BitwuzlaSolver::new(SolverLogic::QfAbv);
-        let result = SolverTrait::solve(
-            &s,
-            &["(> x 0)".to_string(), "(< y 10)".to_string()],
-            true,
-        );
+        let result = SolverTrait::solve(&s, &["(> x 0)".to_string(), "(< y 10)".to_string()], true);
         assert!(result.is_err());
     }
 

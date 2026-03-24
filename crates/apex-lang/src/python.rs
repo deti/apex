@@ -88,8 +88,15 @@ impl<R: CommandRunner> PythonRunner<R> {
             }
         }
         // Check external apex venv
-        let target_hash = format!("{:x}", apex_core::hash::fnv1a_hash(&target.to_string_lossy()));
-        let external = std::env::temp_dir().join("apex-venvs").join(&target_hash).join("bin").join("python");
+        let target_hash = format!(
+            "{:x}",
+            apex_core::hash::fnv1a_hash(&target.to_string_lossy())
+        );
+        let external = std::env::temp_dir()
+            .join("apex-venvs")
+            .join(&target_hash)
+            .join("bin")
+            .join("python");
         if external.exists() {
             return Some(external.to_string_lossy().into_owned());
         }
@@ -133,7 +140,10 @@ impl<R: CommandRunner> PythonRunner<R> {
         }
 
         // Use external venv dir to avoid importing target's source modules
-        let target_hash = format!("{:x}", apex_core::hash::fnv1a_hash(&target.to_string_lossy()));
+        let target_hash = format!(
+            "{:x}",
+            apex_core::hash::fnv1a_hash(&target.to_string_lossy())
+        );
         let external_venv = std::env::temp_dir().join("apex-venvs").join(&target_hash);
         let external_python = external_venv.join("bin").join("python");
         if external_python.exists() {
@@ -149,7 +159,8 @@ impl<R: CommandRunner> PythonRunner<R> {
         let python = Self::resolve_python();
         // Run from /tmp (NOT from target) so Python doesn't pick up target's source modules
         let venv_path_str = external_venv.to_string_lossy().to_string();
-        let spec = CommandSpec::new(python, std::env::temp_dir()).args(["-m", "venv", &venv_path_str]);
+        let spec =
+            CommandSpec::new(python, std::env::temp_dir()).args(["-m", "venv", &venv_path_str]);
         let output = self
             .runner
             .run_command(&spec)
@@ -388,12 +399,17 @@ impl<R: CommandRunner> LanguageRunner for PythonRunner<R> {
                 // so we always use a venv for safety.
                 let venv_dir = target.join(".apex-venv");
                 if !venv_dir.join("bin").join("python").exists() {
-                    let venv_spec = CommandSpec::new(&uv, target)
-                        .args(["venv", ".apex-venv"]);
+                    let venv_spec = CommandSpec::new(&uv, target).args(["venv", ".apex-venv"]);
                     let _ = self.runner.run_command(&venv_spec).await;
                 }
-                let spec = CommandSpec::new(&uv, target)
-                    .args(["pip", "install", "--python", ".apex-venv/bin/python", "coverage", "pytest"]);
+                let spec = CommandSpec::new(&uv, target).args([
+                    "pip",
+                    "install",
+                    "--python",
+                    ".apex-venv/bin/python",
+                    "coverage",
+                    "pytest",
+                ]);
                 self.runner
                     .run_command(&spec)
                     .await

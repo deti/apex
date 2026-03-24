@@ -560,7 +560,9 @@ mod tests {
         };
         let messages = synth.initial_prompt(&gap);
         assert!(
-            messages[1].content.contains("## Branch Context (from CPG analysis)"),
+            messages[1]
+                .content
+                .contains("## Branch Context (from CPG analysis)"),
             "user message must embed CPG context section, got:\n{}",
             messages[1].content
         );

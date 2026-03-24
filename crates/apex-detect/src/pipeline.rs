@@ -379,14 +379,9 @@ pub fn apply_coverage_rescoring(
 ///
 /// The match is done by normalizing the detector name (replacing `-` with `_`) and
 /// checking whether it appears in the file's stem.
-pub fn is_self_referential_detector_finding(
-    file: &std::path::Path,
-    detector: &str,
-) -> bool {
+pub fn is_self_referential_detector_finding(file: &std::path::Path, detector: &str) -> bool {
     // The file must be inside a `detectors/` directory component.
-    let in_detectors_dir = file
-        .components()
-        .any(|c| c.as_os_str() == "detectors");
+    let in_detectors_dir = file.components().any(|c| c.as_os_str() == "detectors");
 
     if !in_detectors_dir {
         return false;
@@ -1735,9 +1730,7 @@ mod tests {
     #[test]
     fn self_referential_filter_matches_detector_own_file() {
         // substring-security flagging its own source file → self-referential
-        let file = PathBuf::from(
-            "crates/apex-detect/src/detectors/substring_security.rs",
-        );
+        let file = PathBuf::from("crates/apex-detect/src/detectors/substring_security.rs");
         assert!(
             is_self_referential_detector_finding(&file, "substring-security"),
             "detector should suppress findings in its own source file"
@@ -1757,9 +1750,7 @@ mod tests {
     #[test]
     fn self_referential_filter_does_not_match_different_detector_file() {
         // panic-pattern flagging substring_security.rs → different detector, not self-referential
-        let file = PathBuf::from(
-            "crates/apex-detect/src/detectors/substring_security.rs",
-        );
+        let file = PathBuf::from("crates/apex-detect/src/detectors/substring_security.rs");
         assert!(
             !is_self_referential_detector_finding(&file, "panic-pattern"),
             "should not suppress cross-detector findings"
@@ -1769,9 +1760,7 @@ mod tests {
     #[test]
     fn self_referential_filter_handles_dash_underscore_normalization() {
         // "panic-pattern" detector, "panic_pattern.rs" file — name normalization must match
-        let file = PathBuf::from(
-            "crates/apex-detect/src/detectors/panic_pattern.rs",
-        );
+        let file = PathBuf::from("crates/apex-detect/src/detectors/panic_pattern.rs");
         assert!(
             is_self_referential_detector_finding(&file, "panic-pattern"),
             "dash-to-underscore normalization should match"

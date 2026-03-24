@@ -754,7 +754,8 @@ mod tests {
 
     /// A fake runner that returns different responses based on call sequence.
     struct SequentialFakeRunner {
-        responses: Vec<Box<dyn Fn(&CommandSpec) -> apex_core::error::Result<CommandOutput> + Send + Sync>>,
+        responses:
+            Vec<Box<dyn Fn(&CommandSpec) -> apex_core::error::Result<CommandOutput> + Send + Sync>>,
         call_index: AtomicUsize,
     }
 
@@ -773,7 +774,9 @@ mod tests {
 
     #[tokio::test]
     async fn instrument_fallback_on_test_compilation_error() {
-        let responses: Vec<Box<dyn Fn(&CommandSpec) -> apex_core::error::Result<CommandOutput> + Send + Sync>> = vec![
+        let responses: Vec<
+            Box<dyn Fn(&CommandSpec) -> apex_core::error::Result<CommandOutput> + Send + Sync>,
+        > = vec![
             // Call 1: swift test --enable-code-coverage -> fails with "no such module"
             Box::new(|_spec| {
                 Ok(CommandOutput {
@@ -783,16 +786,19 @@ mod tests {
                 })
             }),
             // Call 2: swift build --enable-code-coverage -> succeeds
-            Box::new(|_spec| {
-                Ok(CommandOutput::success(b"Build complete!".to_vec()))
-            }),
+            Box::new(|_spec| Ok(CommandOutput::success(b"Build complete!".to_vec()))),
             // Call 3: xcrun llvm-profdata merge -> fails (expected, /dev/null not profraw)
             Box::new(|_spec| {
-                Ok(CommandOutput::failure(1, b"error: not valid profraw".to_vec()))
+                Ok(CommandOutput::failure(
+                    1,
+                    b"error: not valid profraw".to_vec(),
+                ))
             }),
             // Call 4: swift package dump-package -> returns package info
             Box::new(|_spec| {
-                Ok(CommandOutput::success(br#"{"name": "TestPackage"}"#.to_vec()))
+                Ok(CommandOutput::success(
+                    br#"{"name": "TestPackage"}"#.to_vec(),
+                ))
             }),
         ];
 
@@ -820,7 +826,9 @@ mod tests {
 
     #[tokio::test]
     async fn instrument_non_compilation_error_still_fails() {
-        let responses: Vec<Box<dyn Fn(&CommandSpec) -> apex_core::error::Result<CommandOutput> + Send + Sync>> = vec![
+        let responses: Vec<
+            Box<dyn Fn(&CommandSpec) -> apex_core::error::Result<CommandOutput> + Send + Sync>,
+        > = vec![
             // swift test fails with a non-compilation error
             Box::new(|_spec| {
                 Ok(CommandOutput {

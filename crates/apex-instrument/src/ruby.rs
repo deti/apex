@@ -94,7 +94,13 @@ pub fn parse_simplecov_json(json: &str) -> (Vec<BranchId>, Vec<BranchId>, HashMa
                 FileCoverage::Lines(lc) => &lc.lines,
                 FileCoverage::Detailed(dc) => &dc.lines,
             };
-            collect_line_coverage(file_path, lines, &mut all_branches, &mut executed, &mut file_paths);
+            collect_line_coverage(
+                file_path,
+                lines,
+                &mut all_branches,
+                &mut executed,
+                &mut file_paths,
+            );
         }
         return (all_branches, executed, file_paths);
     }
@@ -107,7 +113,13 @@ pub fn parse_simplecov_json(json: &str) -> (Vec<BranchId>, Vec<BranchId>, HashMa
                     FileCoverage::Lines(lc) => &lc.lines,
                     FileCoverage::Detailed(dc) => &dc.lines,
                 };
-                collect_line_coverage(file_path, lines, &mut all_branches, &mut executed, &mut file_paths);
+                collect_line_coverage(
+                    file_path,
+                    lines,
+                    &mut all_branches,
+                    &mut executed,
+                    &mut file_paths,
+                );
             }
         }
         if !all_branches.is_empty() {

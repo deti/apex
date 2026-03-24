@@ -120,13 +120,11 @@ impl CoverageCache {
                 .collect(),
         };
 
-        let json = serde_json::to_string_pretty(&cache_file).map_err(|e| {
-            ApexError::Config(format!("serialise coverage cache: {e}"))
-        })?;
+        let json = serde_json::to_string_pretty(&cache_file)
+            .map_err(|e| ApexError::Config(format!("serialise coverage cache: {e}")))?;
 
-        std::fs::write(&path, json).map_err(|e| {
-            ApexError::Config(format!("write cache {}: {e}", path.display()))
-        })?;
+        std::fs::write(&path, json)
+            .map_err(|e| ApexError::Config(format!("write cache {}: {e}", path.display())))?;
 
         Ok(())
     }
@@ -145,8 +143,8 @@ impl CoverageCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::BranchId;
     use crate::hash::fnv1a_hash;
+    use crate::types::BranchId;
 
     fn sample_branches() -> Vec<BranchId> {
         vec![
@@ -164,7 +162,10 @@ mod tests {
         let path = PathBuf::from("src/lib.rs");
         let content = "fn foo() {}";
 
-        assert!(!cache.is_fresh(&path, content), "empty cache is never fresh");
+        assert!(
+            !cache.is_fresh(&path, content),
+            "empty cache is never fresh"
+        );
 
         cache.update(&path, content, sample_branches());
         assert!(cache.is_fresh(&path, content), "same content → fresh");

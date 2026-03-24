@@ -471,8 +471,7 @@ fn attach_expr(node: &Node, src: &[u8], parent: u32, arg_index: u32, cpg: &mut C
 fn is_operator_token(kind: &str) -> bool {
     matches!(
         kind,
-        "+"
-            | "-"
+        "+" | "-"
             | "*"
             | "/"
             | "%"
@@ -547,7 +546,8 @@ mod tests {
 
     #[test]
     fn function_declaration_with_params() {
-        let source = "package main\n\nfunc greet(name string, count int) string {\n    return name\n}\n";
+        let source =
+            "package main\n\nfunc greet(name string, count int) string {\n    return name\n}\n";
         let cpg = build_ts_go_cpg(source, "test.go");
         let methods = method_names(&cpg);
         assert!(
@@ -578,10 +578,7 @@ mod tests {
             "should find method Handle"
         );
         let params = param_names(&cpg);
-        assert!(
-            params.contains(&"req".to_string()),
-            "should find param req"
-        );
+        assert!(params.contains(&"req".to_string()), "should find param req");
     }
 
     // ── 3. Short variable declaration (:=) ───────────────────────────────────
@@ -627,7 +624,13 @@ mod tests {
         let cpg = build_ts_go_cpg(source, "test.go");
 
         let has_if = cpg.nodes().any(|(_, k)| {
-            matches!(k, NodeKind::ControlStructure { kind: CtrlKind::If, .. })
+            matches!(
+                k,
+                NodeKind::ControlStructure {
+                    kind: CtrlKind::If,
+                    ..
+                }
+            )
         });
         let has_for = cpg.nodes().any(|(_, k)| {
             matches!(
@@ -737,7 +740,8 @@ mod tests {
 
     #[test]
     fn multiple_functions_in_file() {
-        let source = "package main\n\nfunc foo() {}\nfunc bar(x int) {}\nfunc baz(a, b string) {}\n";
+        let source =
+            "package main\n\nfunc foo() {}\nfunc bar(x int) {}\nfunc baz(a, b string) {}\n";
         let cpg = build_ts_go_cpg(source, "test.go");
         let methods = method_names(&cpg);
         assert!(methods.contains(&"foo".to_string()));

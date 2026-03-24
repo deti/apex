@@ -5,9 +5,9 @@
 
 pub mod c_test;
 pub mod classify;
-pub mod cpg_context;
 pub mod cot;
 pub mod coverup;
+pub mod cpg_context;
 pub mod delta;
 pub mod eliminate;
 pub mod error_classify;
@@ -34,9 +34,9 @@ pub mod xunit;
 
 pub use c_test::CTestSynthesizer;
 pub use classify::{GapClassifier, GapKind};
-pub use cpg_context::build_cpg_prompt_context;
 pub use cot::build_cot_prompt;
 pub use coverup::CoverUpStrategy;
+pub use cpg_context::build_cpg_prompt_context;
 pub use delta::{coverage_delta, format_delta_summary};
 pub use eliminate::eliminate_irrelevant;
 pub use error_classify::{classify_test_error, refinement_prompt, ErrorKind};

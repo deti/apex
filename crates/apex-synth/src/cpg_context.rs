@@ -7,8 +7,8 @@
 //! The context answers: "what values reach this branch, and where do they come from?"
 //! so the LLM can construct inputs that satisfy the branch condition.
 
-use apex_cpg::{Cpg, EdgeKind, NodeId, NodeKind};
 use apex_core::types::BranchId;
+use apex_cpg::{Cpg, EdgeKind, NodeId, NodeKind};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -53,7 +53,8 @@ pub fn build_cpg_prompt_context(
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| format!("<file:{}>", branch.file_id));
 
-        let condition_text = extract_condition_at_line(cpg, branch.line, source_cache, file_paths, branch.file_id);
+        let condition_text =
+            extract_condition_at_line(cpg, branch.line, source_cache, file_paths, branch.file_id);
         let reaching = reaching_info_at_line(cpg, branch.line);
 
         let direction_label = match branch.direction {
@@ -115,9 +116,9 @@ fn extract_condition_at_line(
     file_id: u64,
 ) -> Option<String> {
     // Try to find a ControlStructure node at this line.
-    let ctrl_at_line = cpg.nodes().find(|(_, k)| {
-        matches!(k, NodeKind::ControlStructure { line: l, .. } if *l == line)
-    });
+    let ctrl_at_line = cpg
+        .nodes()
+        .find(|(_, k)| matches!(k, NodeKind::ControlStructure { line: l, .. } if *l == line));
 
     let path = file_paths.get(&file_id)?;
     let source = source_cache.get(path)?;
@@ -310,8 +311,10 @@ mod tests {
             BranchId::new(file_id, 2, 0, 1), // false
         ];
         let ctx = build_cpg_prompt_context(&cpg, &branches, &file_paths, &source_cache);
-        assert!(ctx.contains("true branch") || ctx.contains("false branch"),
-            "should include direction labels, got:\n{ctx}");
+        assert!(
+            ctx.contains("true branch") || ctx.contains("false branch"),
+            "should include direction labels, got:\n{ctx}"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -338,7 +341,10 @@ mod tests {
         let ctx = build_cpg_prompt_context(&cpg, &branches, &file_paths, &source_cache);
         // Line 2 should appear exactly once
         let count = ctx.matches("foo.py:2").count();
-        assert_eq!(count, 1, "duplicate branch should be deduplicated, got:\n{ctx}");
+        assert_eq!(
+            count, 1,
+            "duplicate branch should be deduplicated, got:\n{ctx}"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -413,19 +419,44 @@ mod tests {
         use apex_cpg::{CtrlKind, NodeKind};
 
         let cases: Vec<NodeKind> = vec![
-            NodeKind::Parameter { name: "p".into(), index: 0 },
-            NodeKind::Assignment { lhs: "x".into(), line: 5 },
-            NodeKind::Call { name: "foo".into(), line: 6 },
-            NodeKind::Literal { value: "42".into(), line: 7 },
-            NodeKind::Method { name: "bar".into(), file: "f.py".into(), line: 1 },
-            NodeKind::Identifier { name: "y".into(), line: 8 },
+            NodeKind::Parameter {
+                name: "p".into(),
+                index: 0,
+            },
+            NodeKind::Assignment {
+                lhs: "x".into(),
+                line: 5,
+            },
+            NodeKind::Call {
+                name: "foo".into(),
+                line: 6,
+            },
+            NodeKind::Literal {
+                value: "42".into(),
+                line: 7,
+            },
+            NodeKind::Method {
+                name: "bar".into(),
+                file: "f.py".into(),
+                line: 1,
+            },
+            NodeKind::Identifier {
+                name: "y".into(),
+                line: 8,
+            },
             NodeKind::Return { line: 9 },
-            NodeKind::ControlStructure { kind: CtrlKind::If, line: 10 },
+            NodeKind::ControlStructure {
+                kind: CtrlKind::If,
+                line: 10,
+            },
         ];
 
         for case in &cases {
             let s = format_reaching_source("v", case);
-            assert!(!s.is_empty(), "format_reaching_source should not return empty for {case:?}");
+            assert!(
+                !s.is_empty(),
+                "format_reaching_source should not return empty for {case:?}"
+            );
             assert!(s.contains('`'), "should include backtick-quoted name: {s}");
         }
     }

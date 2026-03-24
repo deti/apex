@@ -1713,8 +1713,7 @@ mod tests {
     /// Go generic receiver with pointer — `func (c *Cache[K, V]) Set(...)`.
     #[test]
     fn go_generic_pointer_receiver_no_panic() {
-        let source =
-            "func (c *Cache[K, V]) Set(key K, val V) {\n    c.m[key] = val\n}\n";
+        let source = "func (c *Cache[K, V]) Set(key K, val V) {\n    c.m[key] = val\n}\n";
         let cpg = build_go_cpg(source, "cache.go");
         assert!(method_names(&cpg).contains(&"Set".to_string()));
         let params = param_names(&cpg);
@@ -1725,7 +1724,8 @@ mod tests {
     /// Multi-line Go function signature — parameters wrap onto next line.
     #[test]
     fn go_multiline_func_signature() {
-        let source = "func CreateUser(\n    name string,\n    age int,\n) error {\n    return nil\n}\n";
+        let source =
+            "func CreateUser(\n    name string,\n    age int,\n) error {\n    return nil\n}\n";
         let cpg = build_go_cpg(source, "user.go");
         assert!(method_names(&cpg).contains(&"CreateUser".to_string()));
         let params = param_names(&cpg);

@@ -133,7 +133,11 @@ pub fn detect_toolchain_versions(target: &Path) -> Vec<DetectedToolchain> {
 }
 
 /// Read a single-line version file like `.python-version`.
-fn read_single_version_file(target: &Path, filename: &str, tool: &str) -> Option<DetectedToolchain> {
+fn read_single_version_file(
+    target: &Path,
+    filename: &str,
+    tool: &str,
+) -> Option<DetectedToolchain> {
     let path = target.join(filename);
     let content = std::fs::read_to_string(&path).ok()?;
     let version = content.lines().next()?.trim().to_string();
@@ -153,7 +157,13 @@ fn extract_go_mod_version(content: &str) -> Option<String> {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("go ") {
             let version = rest.trim();
-            if !version.is_empty() && version.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            if !version.is_empty()
+                && version
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+            {
                 return Some(version.to_string());
             }
         }
@@ -187,7 +197,11 @@ pub fn parse_github_actions(target: &Path) -> Vec<DetectedToolchain> {
             continue;
         }
         if let Ok(content) = std::fs::read_to_string(&path) {
-            let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             detected.extend(extract_setup_actions(&content, &filename));
         }
     }
@@ -280,10 +294,7 @@ fn extract_setup_actions(yaml: &str, source_file: &str) -> Vec<DetectedToolchain
 /// Resolve a `${{ matrix.var-name }}` reference against extracted matrix values.
 /// If the value is a matrix reference, returns the highest version from the matrix.
 /// Otherwise returns the value unchanged.
-fn resolve_matrix_ref(
-    value: &str,
-    matrix_vars: &[(String, Vec<String>)],
-) -> String {
+fn resolve_matrix_ref(value: &str, matrix_vars: &[(String, Vec<String>)]) -> String {
     // Check for ${{ matrix.xxx }} pattern
     let trimmed = value.trim();
     if !trimmed.contains("${{") {
@@ -291,13 +302,10 @@ fn resolve_matrix_ref(
     }
 
     // Extract the variable name from ${{ matrix.var-name }}
-    let var_name = trimmed
-        .split("matrix.")
-        .nth(1)
-        .map(|rest| {
-            let end = rest.find(['}', ' ']);
-            rest[..end.unwrap_or(rest.len())].trim()
-        });
+    let var_name = trimmed.split("matrix.").nth(1).map(|rest| {
+        let end = rest.find(['}', ' ']);
+        rest[..end.unwrap_or(rest.len())].trim()
+    });
 
     let var_name = match var_name {
         Some(name) if !name.is_empty() => name,
@@ -438,7 +446,11 @@ fn extract_matrix_vars(yaml: &str) -> Vec<(String, Vec<String>)> {
 
 /// Detect environment configuration files (devcontainer, devbox, mise).
 pub fn detect_environment_config(target: &Path) -> Option<EnvironmentConfig> {
-    if target.join(".devcontainer").join("devcontainer.json").exists() {
+    if target
+        .join(".devcontainer")
+        .join("devcontainer.json")
+        .exists()
+    {
         return Some(EnvironmentConfig::Devcontainer);
     }
     if target.join("devbox.json").exists() {
@@ -497,10 +509,7 @@ impl MiseBackend {
     /// the mise-managed tools.
     ///
     /// Returns the number of tools successfully installed.
-    pub fn install_and_activate(
-        tools: &[DetectedToolchain],
-        target: &Path,
-    ) -> usize {
+    pub fn install_and_activate(tools: &[DetectedToolchain], target: &Path) -> usize {
         if tools.is_empty() {
             return 0;
         }
@@ -567,12 +576,8 @@ impl MiseBackend {
             let Some(colon_pos) = entry.find(':') else {
                 continue;
             };
-            let key = entry[..colon_pos]
-                .trim()
-                .trim_matches('"');
-            let value = entry[colon_pos + 1..]
-                .trim()
-                .trim_matches('"');
+            let key = entry[..colon_pos].trim().trim_matches('"');
+            let value = entry[colon_pos + 1..].trim().trim_matches('"');
 
             if !key.is_empty() && !value.is_empty() {
                 std::env::set_var(key, value);
@@ -651,7 +656,11 @@ pub struct ToolchainCheck {
 
 impl std::fmt::Display for ToolchainCheck {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let icon = if self.installed { "\x1b[32m✓\x1b[0m" } else { "\x1b[31m✗\x1b[0m" };
+        let icon = if self.installed {
+            "\x1b[32m✓\x1b[0m"
+        } else {
+            "\x1b[31m✗\x1b[0m"
+        };
         let managed = match &self.managed_by {
             Some(m) if self.installed => format!(", installed via {m}"),
             _ if !self.installed => ", not installed".to_string(),
@@ -861,8 +870,12 @@ steps:
         .unwrap();
 
         let detected = detect_toolchain_versions(dir.path());
-        assert!(detected.iter().any(|d| d.tool == "python" && d.version == "3.12.1"));
-        assert!(detected.iter().any(|d| d.tool == "node" && d.version == "20.11.0"));
+        assert!(detected
+            .iter()
+            .any(|d| d.tool == "python" && d.version == "3.12.1"));
+        assert!(detected
+            .iter()
+            .any(|d| d.tool == "node" && d.version == "20.11.0"));
     }
 
     #[test]
@@ -871,7 +884,9 @@ steps:
         fs::write(dir.path().join(".python-version"), "3.11.7\n").unwrap();
 
         let detected = detect_toolchain_versions(dir.path());
-        assert!(detected.iter().any(|d| d.tool == "python" && d.version == "3.11.7"));
+        assert!(detected
+            .iter()
+            .any(|d| d.tool == "python" && d.version == "3.11.7"));
     }
 
     #[test]
@@ -880,7 +895,9 @@ steps:
         fs::write(dir.path().join("go.mod"), "module foo\n\ngo 1.22\n").unwrap();
 
         let detected = detect_toolchain_versions(dir.path());
-        assert!(detected.iter().any(|d| d.tool == "go" && d.version == "1.22"));
+        assert!(detected
+            .iter()
+            .any(|d| d.tool == "go" && d.version == "1.22"));
     }
 
     #[test]
@@ -895,7 +912,9 @@ steps:
         .unwrap();
 
         let detected = detect_toolchain_versions(dir.path());
-        assert!(detected.iter().any(|d| d.tool == "node" && d.version == "18"));
+        assert!(detected
+            .iter()
+            .any(|d| d.tool == "node" && d.version == "18"));
     }
 
     #[test]
@@ -929,7 +948,11 @@ steps:
         let dir = make_temp_dir();
         let wf_dir = dir.path().join(".github").join("workflows");
         fs::create_dir_all(&wf_dir).unwrap();
-        fs::write(wf_dir.join("README.md"), "steps:\n  - uses: actions/setup-go@v4\n").unwrap();
+        fs::write(
+            wf_dir.join("README.md"),
+            "steps:\n  - uses: actions/setup-go@v4\n",
+        )
+        .unwrap();
 
         let result = parse_github_actions(dir.path());
         assert!(result.is_empty());
@@ -1003,7 +1026,9 @@ steps:
         fs::write(dir.path().join(".nvmrc"), "18.19.0\n").unwrap();
 
         let detected = detect_toolchain_versions(dir.path());
-        assert!(detected.iter().any(|d| d.tool == "node" && d.version == "18.19.0"));
+        assert!(detected
+            .iter()
+            .any(|d| d.tool == "node" && d.version == "18.19.0"));
     }
 
     #[test]
@@ -1046,7 +1071,9 @@ jobs:
       - uses: actions/setup-node@v4
 "#;
         let vars = extract_matrix_vars(yaml);
-        assert!(vars.iter().any(|(k, v)| k == "node-version" && v == &["18", "20", "22"]));
+        assert!(vars
+            .iter()
+            .any(|(k, v)| k == "node-version" && v == &["18", "20", "22"]));
         assert!(vars.iter().any(|(k, v)| k == "os" && v.len() == 2));
     }
 
@@ -1063,7 +1090,8 @@ jobs:
 "#;
         let vars = extract_matrix_vars(yaml);
         assert!(
-            vars.iter().any(|(k, v)| k == "java.version" && v == &["17", "21"]),
+            vars.iter()
+                .any(|(k, v)| k == "java.version" && v == &["17", "21"]),
             "Expected java.version=[17,21], got: {:?}",
             vars
         );
@@ -1071,9 +1099,10 @@ jobs:
 
     #[test]
     fn test_resolve_matrix_ref() {
-        let vars = vec![
-            ("node-version".to_string(), vec!["18".to_string(), "20".to_string(), "22".to_string()]),
-        ];
+        let vars = vec![(
+            "node-version".to_string(),
+            vec!["18".to_string(), "20".to_string(), "22".to_string()],
+        )];
         // Matrix reference → picks highest version
         assert_eq!(
             resolve_matrix_ref("${{ matrix.node-version }}", &vars),
@@ -1085,9 +1114,10 @@ jobs:
 
     #[test]
     fn test_resolve_matrix_ref_nested() {
-        let vars = vec![
-            ("java.version".to_string(), vec!["17".to_string(), "21".to_string()]),
-        ];
+        let vars = vec![(
+            "java.version".to_string(),
+            vec!["17".to_string(), "21".to_string()],
+        )];
         assert_eq!(
             resolve_matrix_ref("${{ matrix.java.version }}", &vars),
             "21"

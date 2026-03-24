@@ -28,20 +28,20 @@ pub use ts_go::TsGoCpgBuilder;
 // builders automatically. Without the feature, the lightweight line-based
 // builders remain active — no call-site changes required.
 
-#[cfg(feature = "treesitter")]
-pub use ts_python::TreeSitterPythonCpgBuilder as DefaultPythonCpgBuilder;
 #[cfg(not(feature = "treesitter"))]
 pub use builder::PythonCpgBuilder as DefaultPythonCpgBuilder;
-
 #[cfg(feature = "treesitter")]
-pub use ts_javascript::TsJsCpgBuilder as DefaultJsCpgBuilder;
+pub use ts_python::TreeSitterPythonCpgBuilder as DefaultPythonCpgBuilder;
+
 #[cfg(not(feature = "treesitter"))]
 pub use builder::JsCpgBuilder as DefaultJsCpgBuilder;
-
 #[cfg(feature = "treesitter")]
-pub use ts_go::TsGoCpgBuilder as DefaultGoCpgBuilder;
+pub use ts_javascript::TsJsCpgBuilder as DefaultJsCpgBuilder;
+
 #[cfg(not(feature = "treesitter"))]
 pub use builder::GoCpgBuilder as DefaultGoCpgBuilder;
+#[cfg(feature = "treesitter")]
+pub use ts_go::TsGoCpgBuilder as DefaultGoCpgBuilder;
 
 pub mod deepdfa;
 pub mod model_loader;

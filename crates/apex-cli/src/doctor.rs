@@ -24,9 +24,12 @@ struct Check {
 }
 
 async fn version_of(runner: &dyn CommandRunner, bin: &str, args: &[&str]) -> Option<String> {
-    let spec = CommandSpec::new(bin, std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")))
-        .args(args.iter().copied())
-        .timeout(10_000);
+    let spec = CommandSpec::new(
+        bin,
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")),
+    )
+    .args(args.iter().copied())
+    .timeout(10_000);
 
     let output: CommandOutput = runner.run_command(&spec).await.ok()?;
 
@@ -172,9 +175,12 @@ async fn checks_version_managers(runner: &dyn CommandRunner) -> (Vec<Check>, Vec
 
     let managed_tools: Vec<String> = if mise_found {
         // Run `mise ls --current --json` to find what languages are active
-        let spec = CommandSpec::new("mise", std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")))
-            .args(["ls", "--current", "--json"])
-            .timeout(10_000);
+        let spec = CommandSpec::new(
+            "mise",
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")),
+        )
+        .args(["ls", "--current", "--json"])
+        .timeout(10_000);
         if let Ok(output) = runner.run_command(&spec).await {
             if output.exit_code == 0 {
                 let json = String::from_utf8_lossy(&output.stdout).to_string();
@@ -586,9 +592,7 @@ async fn run_doctor_with_runner(runner: &dyn CommandRunner) -> color_eyre::Resul
     } else {
         let dim = "\x1b[2m";
         let reset = "\x1b[0m";
-        println!(
-            "\n{dim}No cached environment probe found for {cwd_str}.{reset}"
-        );
+        println!("\n{dim}No cached environment probe found for {cwd_str}.{reset}");
         println!("{dim}Run `apex init` to generate one.{reset}");
     }
 

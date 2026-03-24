@@ -63,8 +63,7 @@ impl EnvironmentProbe {
         let dir = root.join(".apex");
         std::fs::create_dir_all(&dir)?;
         let path = dir.join("environment.json");
-        let json = serde_json::to_string_pretty(self)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 
@@ -307,8 +306,11 @@ fn probe_python(root: &Path) -> PythonProbe {
     let interpreter = python_interpreter(root);
     let interp_str = interpreter.to_string_lossy().to_string();
 
-    let version = run_cmd_stdout(&interp_str, &["-c", "import sys; print(sys.version.split()[0])"])
-        .unwrap_or_else(|| "unknown".to_string());
+    let version = run_cmd_stdout(
+        &interp_str,
+        &["-c", "import sys; print(sys.version.split()[0])"],
+    )
+    .unwrap_or_else(|| "unknown".to_string());
 
     // Detect venv
     let venv: Option<PathBuf> = [".venv", "venv", ".env"]
@@ -370,17 +372,13 @@ fn probe_rust(root: &Path) -> RustProbe {
     let toolchain = run_cmd_stdout("rustup", &["show", "active-toolchain"])
         .map(|s| {
             // "stable-x86_64-apple-darwin (default)" → keep first word
-            s.split_whitespace()
-                .next()
-                .unwrap_or("stable")
-                .to_string()
+            s.split_whitespace().next().unwrap_or("stable").to_string()
         })
         .or_else(|| run_cmd_stdout("rustc", &["--version"]))
         .unwrap_or_else(|| "unknown".to_string());
 
     // cargo-llvm-cov
-    let llvm_cov = which_bin("cargo-llvm-cov")
-        .or_else(|| which_bin_path(root, "cargo-llvm-cov"));
+    let llvm_cov = which_bin("cargo-llvm-cov").or_else(|| which_bin_path(root, "cargo-llvm-cov"));
 
     // cargo-nextest
     let nextest_available = run_cmd_stdout("cargo", &["nextest", "--version"]).is_some();
@@ -422,16 +420,12 @@ fn probe_node(root: &Path) -> NodeProbe {
 }
 
 fn probe_go() -> GoProbe {
-    let version =
-        run_cmd_stdout("go", &["version"])
-            .map(|s| {
-                // "go version go1.22.1 linux/amd64" → "go1.22.1"
-                s.split_whitespace()
-                    .nth(2)
-                    .unwrap_or("unknown")
-                    .to_string()
-            })
-            .unwrap_or_else(|| "unknown".to_string());
+    let version = run_cmd_stdout("go", &["version"])
+        .map(|s| {
+            // "go version go1.22.1 linux/amd64" → "go1.22.1"
+            s.split_whitespace().nth(2).unwrap_or("unknown").to_string()
+        })
+        .unwrap_or_else(|| "unknown".to_string());
 
     GoProbe { version }
 }
@@ -469,18 +463,16 @@ fn probe_java(root: &Path) -> JavaProbe {
 // ---------------------------------------------------------------------------
 
 fn which_bin(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH")
-        .as_deref()
-        .and_then(|path| {
-            std::env::split_paths(path).find_map(|dir| {
-                let candidate = dir.join(name);
-                if candidate.is_file() {
-                    Some(candidate)
-                } else {
-                    None
-                }
-            })
+    std::env::var_os("PATH").as_deref().and_then(|path| {
+        std::env::split_paths(path).find_map(|dir| {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                Some(candidate)
+            } else {
+                None
+            }
         })
+    })
 }
 
 fn which_bin_path(root: &Path, name: &str) -> Option<PathBuf> {
@@ -605,13 +597,20 @@ mod tests {
         std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname=\"test\"\n").unwrap();
         let probe = probe_all(tmp.path(), Language::Rust);
         // We may or may not have rustc in PATH in CI, but the section should exist.
-        assert!(probe.rust.is_some(), "Rust section should be populated for a Rust project");
+        assert!(
+            probe.rust.is_some(),
+            "Rust section should be populated for a Rust project"
+        );
     }
 
     #[test]
     fn probe_all_python_project_detects_python_section() {
         let tmp = TempDir::new().unwrap();
-        std::fs::write(tmp.path().join("pyproject.toml"), "[project]\nname=\"test\"\n").unwrap();
+        std::fs::write(
+            tmp.path().join("pyproject.toml"),
+            "[project]\nname=\"test\"\n",
+        )
+        .unwrap();
         let probe = probe_all(tmp.path(), Language::Python);
         assert!(probe.python.is_some());
     }

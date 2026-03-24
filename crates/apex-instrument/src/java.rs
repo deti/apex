@@ -94,7 +94,9 @@ fn is_kotlin_multiplatform(target: &Path) -> bool {
     // Check settings.gradle for plugin declarations
     for name in &["settings.gradle.kts", "settings.gradle"] {
         if let Ok(content) = std::fs::read_to_string(target.join(name)) {
-            if content.contains("kotlin(\"multiplatform\")") || content.contains("kotlin-multiplatform") {
+            if content.contains("kotlin(\"multiplatform\")")
+                || content.contains("kotlin-multiplatform")
+            {
                 return true;
             }
         }
@@ -112,10 +114,14 @@ fn is_kotlin_multiplatform(target: &Path) -> bool {
     if let Ok(entries) = std::fs::read_dir(target) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_dir() { continue; }
+            if !path.is_dir() {
+                continue;
+            }
             for name in &["build.gradle.kts", "build.gradle"] {
                 if let Ok(content) = std::fs::read_to_string(path.join(name)) {
-                    if content.contains("kotlin(\"multiplatform\")") || content.contains("ktorbuild.kmp") {
+                    if content.contains("kotlin(\"multiplatform\")")
+                        || content.contains("ktorbuild.kmp")
+                    {
                         return true;
                     }
                 }
@@ -130,12 +136,16 @@ fn glob_kmp_in_dir(dir: &Path) -> std::io::Result<bool> {
     for entry in std::fs::read_dir(dir)?.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            if glob_kmp_in_dir(&path)? { return Ok(true); }
+            if glob_kmp_in_dir(&path)? {
+                return Ok(true);
+            }
         } else if path.extension().and_then(|s| s.to_str()) == Some("kts")
             || path.extension().and_then(|s| s.to_str()) == Some("kt")
         {
             if let Ok(content) = std::fs::read_to_string(&path) {
-                if content.contains("multiplatform") { return Ok(true); }
+                if content.contains("multiplatform") {
+                    return Ok(true);
+                }
             }
         }
     }
@@ -201,7 +211,10 @@ fn collect_excludable_modules(root: &Path, dir: &Path, results: &mut Vec<String>
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
         if name_str.starts_with('.')
-            || matches!(name_str.as_ref(), "build" | "node_modules" | "target" | "buildSrc" | "gradle")
+            || matches!(
+                name_str.as_ref(),
+                "build" | "node_modules" | "target" | "buildSrc" | "gradle"
+            )
         {
             continue;
         }
@@ -209,7 +222,8 @@ fn collect_excludable_modules(root: &Path, dir: &Path, results: &mut Vec<String>
         if !path.is_dir() {
             continue;
         }
-        let has_build = path.join("build.gradle.kts").exists() || path.join("build.gradle").exists();
+        let has_build =
+            path.join("build.gradle.kts").exists() || path.join("build.gradle").exists();
         if has_build && should_exclude_module(&path) {
             if let Ok(rel) = path.strip_prefix(root) {
                 let module_path = format!(
@@ -1516,11 +1530,7 @@ mod tests {
     fn test_is_umbrella_no_java_with_subprojects() {
         let tmp = tempfile::tempdir().unwrap();
         // Root applies only `base`, not java/java-library/kotlin
-        std::fs::write(
-            tmp.path().join("build.gradle"),
-            "plugins { id 'base' }\n",
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("build.gradle"), "plugins { id 'base' }\n").unwrap();
         std::fs::write(
             tmp.path().join("settings.gradle"),
             "include 'core:spring-boot'\ninclude 'module:spring-boot-web'\n",
@@ -1533,16 +1543,8 @@ mod tests {
     fn test_is_umbrella_java_root_not_umbrella() {
         let tmp = tempfile::tempdir().unwrap();
         // Root applies java plugin => not umbrella even with subprojects
-        std::fs::write(
-            tmp.path().join("build.gradle"),
-            "apply plugin: 'java'\n",
-        )
-        .unwrap();
-        std::fs::write(
-            tmp.path().join("settings.gradle"),
-            "include 'sub'\n",
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("build.gradle"), "apply plugin: 'java'\n").unwrap();
+        std::fs::write(tmp.path().join("settings.gradle"), "include 'sub'\n").unwrap();
         assert!(!is_umbrella_project(tmp.path()));
     }
 
@@ -1554,22 +1556,14 @@ mod tests {
             "plugins { id 'java-library' }\n",
         )
         .unwrap();
-        std::fs::write(
-            tmp.path().join("settings.gradle"),
-            "include 'sub'\n",
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("settings.gradle"), "include 'sub'\n").unwrap();
         assert!(!is_umbrella_project(tmp.path()));
     }
 
     #[test]
     fn test_is_umbrella_no_settings() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("build.gradle"),
-            "plugins { id 'base' }\n",
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("build.gradle"), "plugins { id 'base' }\n").unwrap();
         // No settings.gradle => no subprojects => not umbrella
         assert!(!is_umbrella_project(tmp.path()));
     }
@@ -1577,11 +1571,7 @@ mod tests {
     #[test]
     fn test_is_umbrella_kts_settings() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("build.gradle.kts"),
-            "plugins { base }\n",
-        )
-        .unwrap();
+        std::fs::write(tmp.path().join("build.gradle.kts"), "plugins { base }\n").unwrap();
         std::fs::write(
             tmp.path().join("settings.gradle.kts"),
             "include(\"sub-a\")\ninclude(\"sub-b\")\n",
@@ -1596,25 +1586,13 @@ mod tests {
         let repo_root = tmp.path();
 
         // Umbrella project: root has `base` only, settings has includes
-        std::fs::write(
-            repo_root.join("build.gradle"),
-            "plugins { id 'base' }\n",
-        )
-        .unwrap();
-        std::fs::write(
-            repo_root.join("settings.gradle"),
-            "include 'core:my-lib'\n",
-        )
-        .unwrap();
+        std::fs::write(repo_root.join("build.gradle"), "plugins { id 'base' }\n").unwrap();
+        std::fs::write(repo_root.join("settings.gradle"), "include 'core:my-lib'\n").unwrap();
 
         // Create the JaCoCo XML report in a submodule path
         let report_dir = repo_root.join("core/my-lib/build/reports/jacoco/test");
         std::fs::create_dir_all(&report_dir).unwrap();
-        std::fs::write(
-            report_dir.join("jacocoTestReport.xml"),
-            sample_jacoco_xml(),
-        )
-        .unwrap();
+        std::fs::write(report_dir.join("jacocoTestReport.xml"), sample_jacoco_xml()).unwrap();
 
         let runner = Arc::new(FakeRunner::success());
         let inst = JavaInstrumentor::with_runner(runner.clone());
@@ -1659,19 +1637,11 @@ mod tests {
         let repo_root = tmp.path();
 
         // Standard Java project (not umbrella)
-        std::fs::write(
-            repo_root.join("build.gradle"),
-            "apply plugin: 'java'\n",
-        )
-        .unwrap();
+        std::fs::write(repo_root.join("build.gradle"), "apply plugin: 'java'\n").unwrap();
 
         let report_dir = repo_root.join("build/reports/jacoco/test");
         std::fs::create_dir_all(&report_dir).unwrap();
-        std::fs::write(
-            report_dir.join("jacocoTestReport.xml"),
-            sample_jacoco_xml(),
-        )
-        .unwrap();
+        std::fs::write(report_dir.join("jacocoTestReport.xml"), sample_jacoco_xml()).unwrap();
 
         let runner = Arc::new(FakeRunner::success());
         let inst = JavaInstrumentor::with_runner(runner.clone());
@@ -1701,11 +1671,7 @@ mod tests {
             .path()
             .join("core/spring-boot/build/reports/jacoco/test");
         std::fs::create_dir_all(&deep_dir).unwrap();
-        std::fs::write(
-            deep_dir.join("jacocoTestReport.xml"),
-            sample_jacoco_xml(),
-        )
-        .unwrap();
+        std::fs::write(deep_dir.join("jacocoTestReport.xml"), sample_jacoco_xml()).unwrap();
 
         let found = find_jacoco_report_recursive(tmp.path());
         assert!(found.is_some(), "should find report in deep submodule");

@@ -283,7 +283,10 @@ mod tests {
         let ctx = make_ctx(files, Language::Rust);
         let findings = SubstringSecurityDetector.analyze(&ctx).await.unwrap();
         // vec.contains(&x) is an exact lookup — must not flag
-        assert!(findings.is_empty(), "expected no findings, got {findings:?}");
+        assert!(
+            findings.is_empty(),
+            "expected no findings, got {findings:?}"
+        );
     }
 
     #[tokio::test]
@@ -299,7 +302,10 @@ mod tests {
         );
         let ctx = make_ctx(files, Language::Rust);
         let findings = SubstringSecurityDetector.analyze(&ctx).await.unwrap();
-        assert!(findings.is_empty(), "expected no findings, got {findings:?}");
+        assert!(
+            findings.is_empty(),
+            "expected no findings, got {findings:?}"
+        );
     }
 
     #[tokio::test]

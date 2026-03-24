@@ -54,7 +54,9 @@ impl std::str::FromStr for CoverageFormat {
             "v8" => Ok(CoverageFormat::V8),
             "go-profile" | "goprofile" => Ok(CoverageFormat::GoProfile),
             "simplecov" => Ok(CoverageFormat::SimpleCov),
-            other => Err(ApexError::Config(format!("unknown coverage format: {other}"))),
+            other => Err(ApexError::Config(format!(
+                "unknown coverage format: {other}"
+            ))),
         }
     }
 }
@@ -304,7 +306,9 @@ pub fn export_cobertura(branches: &[BranchCoverage]) -> String {
     };
 
     let mut out = String::from("<?xml version=\"1.0\" ?>\n");
-    out.push_str("<!DOCTYPE coverage SYSTEM \"http://cobertura.sourceforge.net/xml/coverage-04.dtd\">\n");
+    out.push_str(
+        "<!DOCTYPE coverage SYSTEM \"http://cobertura.sourceforge.net/xml/coverage-04.dtd\">\n",
+    );
     out.push_str(&format!(
         "<coverage branch-rate=\"{branch_rate:.4}\" branches-covered=\"{covered_branches}\" branches-valid=\"{total_branches}\" timestamp=\"0\" version=\"apex\">\n"
     ));

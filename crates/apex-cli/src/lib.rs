@@ -912,7 +912,10 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
     // ── 1b. Toolchain detection ─────────────────────────────────────────
     let detected_tools = toolchain::detect_toolchain_versions(&target_path);
     if !detected_tools.is_empty() {
-        info!(count = detected_tools.len(), "detected toolchain requirements");
+        info!(
+            count = detected_tools.len(),
+            "detected toolchain requirements"
+        );
         if toolchain::MiseBackend::is_available() {
             let results = toolchain::MiseBackend::ensure_installed(&detected_tools);
             for (tool, installed) in &results {
@@ -5171,9 +5174,7 @@ pub fn generate_config_from_probe(
             config.push_str(&format!("# Python venv: {}\n", venv.display()));
         }
         if py.pep668_managed {
-            config.push_str(
-                "# PEP 668: externally-managed Python — venv created automatically\n",
-            );
+            config.push_str("# PEP 668: externally-managed Python — venv created automatically\n");
         }
         if let Some(ref pm) = py.package_manager {
             config.push_str(&format!("# Package manager: {pm}\n"));
@@ -6076,8 +6077,14 @@ mod tests {
     fn generate_config_contains_coverage_section() {
         let probe = apex_lang::probe_impl::EnvironmentProbe::default();
         let config = generate_config_from_probe(&probe, Language::Rust);
-        assert!(config.contains("[coverage]"), "should have [coverage] section");
-        assert!(config.contains("target = 0.95"), "should have target = 0.95");
+        assert!(
+            config.contains("[coverage]"),
+            "should have [coverage] section"
+        );
+        assert!(
+            config.contains("target = 0.95"),
+            "should have target = 0.95"
+        );
     }
 
     #[test]
@@ -6148,10 +6155,14 @@ mod tests {
         run_init(args).await.unwrap();
 
         // dry_run: should NOT have written environment.json or apex.toml
-        assert!(!tmp.path().join(".apex").join("environment.json").exists(),
-            "dry-run must not write environment.json");
-        assert!(!tmp.path().join("apex.toml").exists(),
-            "dry-run must not write apex.toml");
+        assert!(
+            !tmp.path().join(".apex").join("environment.json").exists(),
+            "dry-run must not write environment.json"
+        );
+        assert!(
+            !tmp.path().join("apex.toml").exists(),
+            "dry-run must not write apex.toml"
+        );
     }
 
     #[tokio::test]
@@ -6167,10 +6178,14 @@ mod tests {
 
         run_init(args).await.unwrap();
 
-        assert!(tmp.path().join(".apex").join("environment.json").exists(),
-            "should write environment.json");
-        assert!(tmp.path().join("apex.toml").exists(),
-            "should write apex.toml");
+        assert!(
+            tmp.path().join(".apex").join("environment.json").exists(),
+            "should write environment.json"
+        );
+        assert!(
+            tmp.path().join("apex.toml").exists(),
+            "should write apex.toml"
+        );
     }
 
     #[tokio::test]
@@ -6189,6 +6204,9 @@ mod tests {
         run_init(args).await.unwrap();
 
         let content = std::fs::read_to_string(tmp.path().join("apex.toml")).unwrap();
-        assert_eq!(content, existing, "existing apex.toml must not be overwritten");
+        assert_eq!(
+            content, existing,
+            "existing apex.toml must not be overwritten"
+        );
     }
 }

@@ -201,8 +201,7 @@ impl SymCcBackend {
         }
         which_symcc().ok_or_else(|| {
             ApexError::Other(
-                "symcc not found on PATH — install from https://github.com/eurecom-s3/symcc"
-                    .into(),
+                "symcc not found on PATH — install from https://github.com/eurecom-s3/symcc".into(),
             )
         })
     }
@@ -563,5 +562,4 @@ mod tests {
             iteration: 0,
         }
     }
-
 }

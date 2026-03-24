@@ -554,8 +554,7 @@ fn attach_expr(node: &Node, src: &[u8], parent: u32, arg_index: u32, cpg: &mut C
 fn is_operator_token(kind: &str) -> bool {
     matches!(
         kind,
-        "+"
-            | "-"
+        "+" | "-"
             | "*"
             | "/"
             | "%"
@@ -636,7 +635,8 @@ mod tests {
 
     #[test]
     fn function_declaration_with_params() {
-        let source = "function greet(name, greeting) {\n    console.log(greeting + ' ' + name);\n}\n";
+        let source =
+            "function greet(name, greeting) {\n    console.log(greeting + ' ' + name);\n}\n";
         let cpg = build_ts_js_cpg(source, "test.js");
         let methods = method_names(&cpg);
         assert!(
@@ -706,7 +706,13 @@ mod tests {
         let cpg = build_ts_js_cpg(source, "test.js");
 
         let has_if = cpg.nodes().any(|(_, k)| {
-            matches!(k, NodeKind::ControlStructure { kind: CtrlKind::If, .. })
+            matches!(
+                k,
+                NodeKind::ControlStructure {
+                    kind: CtrlKind::If,
+                    ..
+                }
+            )
         });
         let has_while = cpg.nodes().any(|(_, k)| {
             matches!(
@@ -839,9 +845,13 @@ mod tests {
         let for_count = cpg
             .nodes()
             .filter(|(_, k)| {
-                matches!(k, NodeKind::ControlStructure {
-                    kind: CtrlKind::For, ..
-                })
+                matches!(
+                    k,
+                    NodeKind::ControlStructure {
+                        kind: CtrlKind::For,
+                        ..
+                    }
+                )
             })
             .count();
         assert!(for_count >= 2, "should detect both for-of and for-in");
