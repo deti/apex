@@ -15,7 +15,6 @@ pub mod search;
 pub mod selective;
 pub mod static_strategy;
 pub mod swift_conditions;
-pub mod symcc;
 pub mod taint;
 
 pub use boundary::boundary_values;
@@ -29,4 +28,3 @@ pub use ruby_conditions::parse_ruby_conditions;
 pub use rust_conditions::parse_rust_conditions;
 pub use static_strategy::StaticConcolicStrategy;
 pub use swift_conditions::parse_swift_conditions;
-pub use symcc::{PathConstraint, SymCcBackend, SymCcStrategy};

@@ -107,11 +107,6 @@ fn detect_pkg_manager(target: &Path, runtime: JsRuntime) -> PkgManager {
 }
 
 /// Detect test runner from package.json content.
-///
-/// Priority: if the project has a custom `"test"` script that isn't just
-/// a bare `jest`/`mocha`/`vitest` invocation, use `npm test` — the project
-/// author knows best.  Only fall back to direct runner invocation when there
-/// is no npm test script or it's a simple wrapper.
 pub fn detect_test_runner(target: &Path) -> JsTestRunner {
     let pkg_content = std::fs::read_to_string(target.join("package.json")).unwrap_or_default();
 
@@ -131,21 +126,6 @@ pub fn detect_test_runner(target: &Path) -> JsTestRunner {
         return JsTestRunner::BunTest;
     }
 
-    // Check if there's a custom npm test script.  If it's something other
-    // than a bare test-runner invocation, honour it — the project knows its
-    // own test harness better than we do.
-    if let Some(test_script) = extract_npm_test_script(&pkg_content) {
-        let bare = test_script.trim();
-        // Only override if the script is NOT just a bare runner name
-        let is_bare_runner = matches!(
-            bare,
-            "jest" | "mocha" | "vitest" | "vitest run" | "jest --passWithNoTests"
-        );
-        if !is_bare_runner {
-            return JsTestRunner::NpmScript;
-        }
-    }
-
     if pkg_content.contains("\"jest\"") {
         return JsTestRunner::Jest;
     }
@@ -155,61 +135,10 @@ pub fn detect_test_runner(target: &Path) -> JsTestRunner {
     if pkg_content.contains("\"vitest\"") {
         return JsTestRunner::Vitest;
     }
-    // Fallback: if there's a test script at all, use it
     if pkg_content.contains("\"scripts\"") && pkg_content.contains("\"test\"") {
         return JsTestRunner::NpmScript;
     }
     JsTestRunner::Jest
-}
-
-/// Extract the value of `"test"` from the `"scripts"` object in package.json.
-///
-/// Simple line-based extraction — avoids pulling in serde_json.
-fn extract_npm_test_script(pkg_content: &str) -> Option<String> {
-    let mut in_scripts = false;
-    let mut brace_depth = 0;
-
-    for line in pkg_content.lines() {
-        let trimmed = line.trim();
-
-        if trimmed.contains("\"scripts\"") && trimmed.contains('{') {
-            in_scripts = true;
-            brace_depth = 1;
-            // The scripts block might start on this same line
-            if let Some(val) = extract_test_value(trimmed) {
-                return Some(val);
-            }
-            continue;
-        }
-
-        if in_scripts {
-            brace_depth += trimmed.matches('{').count() as i32;
-            brace_depth -= trimmed.matches('}').count() as i32;
-            if brace_depth <= 0 {
-                break;
-            }
-            if let Some(val) = extract_test_value(trimmed) {
-                return Some(val);
-            }
-        }
-    }
-    None
-}
-
-/// Extract value from a line like `"test": "hereby runtests-parallel"`.
-fn extract_test_value(line: &str) -> Option<String> {
-    let trimmed = line.trim().trim_end_matches(',');
-    // Match "test": "value"
-    let after_key = trimmed
-        .strip_prefix("\"test\":")
-        .or_else(|| trimmed.strip_prefix("\"test\" :"))
-        .map(|s| s.trim())?;
-    // Strip surrounding quotes
-    let value = after_key.trim_matches('"');
-    if value.is_empty() {
-        return None;
-    }
-    Some(value.to_string())
 }
 
 fn detect_module_system(target: &Path) -> ModuleSystem {

@@ -5,7 +5,6 @@
 
 pub mod c_test;
 pub mod classify;
-pub mod cpg_context;
 pub mod cot;
 pub mod coverup;
 pub mod delta;
@@ -34,7 +33,6 @@ pub mod xunit;
 
 pub use c_test::CTestSynthesizer;
 pub use classify::{GapClassifier, GapKind};
-pub use cpg_context::build_cpg_prompt_context;
 pub use cot::build_cot_prompt;
 pub use coverup::CoverUpStrategy;
 pub use delta::{coverage_delta, format_delta_summary};

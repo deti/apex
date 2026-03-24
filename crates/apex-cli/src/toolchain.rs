@@ -112,23 +112,6 @@ pub fn detect_toolchain_versions(target: &Path) -> Vec<DetectedToolchain> {
     // CI config files
     detected.extend(parse_github_actions(target));
 
-    // Implicit toolchain detection: if a Gradle/Maven project exists but no
-    // Java version was detected, add a default JDK requirement.
-    let has_java = detected.iter().any(|d| d.tool == "java");
-    if !has_java {
-        let is_jvm_project = target.join("gradlew").exists()
-            || target.join("build.gradle").exists()
-            || target.join("build.gradle.kts").exists()
-            || target.join("pom.xml").exists();
-        if is_jvm_project && !check_tool_on_path("java") {
-            detected.push(DetectedToolchain {
-                tool: "java".into(),
-                version: "21".into(),
-                source: "implicit (Gradle/Maven project)".into(),
-            });
-        }
-    }
-
     detected
 }
 
@@ -203,16 +186,10 @@ pub fn parse_github_actions(target: &Path) -> Vec<DetectedToolchain> {
 ///       go-version: '1.22'
 /// ```
 ///
-/// Handles `${{ matrix.* }}` references by resolving against the matrix
-/// definition and picking the highest version.
-///
 /// Simple line-based parsing — no YAML crate needed.
 fn extract_setup_actions(yaml: &str, source_file: &str) -> Vec<DetectedToolchain> {
     let mut detected = Vec::new();
     let lines: Vec<&str> = yaml.lines().collect();
-
-    // Pre-parse matrix definitions so we can resolve ${{ matrix.* }} references.
-    let matrix_vars = extract_matrix_vars(yaml);
 
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
@@ -228,13 +205,9 @@ fn extract_setup_actions(yaml: &str, source_file: &str) -> Vec<DetectedToolchain
             None => continue,
         };
 
-        // Extract tool name from actions/setup-<tool>@<ref> or <org>/setup-<tool>@<ref>
-        // Matches: actions/setup-go, actions/setup-node, ruby/setup-ruby, etc.
+        // Extract tool name from actions/setup-<tool>@<ref>
         let tool_name = if let Some(rest) = uses_value.strip_prefix("actions/setup-") {
             rest.split('@').next().unwrap_or("").to_string()
-        } else if let Some(pos) = uses_value.find("/setup-") {
-            let after = &uses_value[pos + 7..]; // skip "/setup-"
-            after.split('@').next().unwrap_or("").to_string()
         } else {
             continue;
         };
@@ -260,7 +233,7 @@ fn extract_setup_actions(yaml: &str, source_file: &str) -> Vec<DetectedToolchain
             if let Some(rest) = next_trimmed.strip_prefix(&format!("{version_key}:")) {
                 let ver = rest.trim().trim_matches('\'').trim_matches('"').to_string();
                 if !ver.is_empty() {
-                    version = Some(resolve_matrix_ref(&ver, &matrix_vars));
+                    version = Some(ver);
                 }
                 break;
             }
@@ -275,161 +248,6 @@ fn extract_setup_actions(yaml: &str, source_file: &str) -> Vec<DetectedToolchain
     }
 
     detected
-}
-
-/// Resolve a `${{ matrix.var-name }}` reference against extracted matrix values.
-/// If the value is a matrix reference, returns the highest version from the matrix.
-/// Otherwise returns the value unchanged.
-fn resolve_matrix_ref(
-    value: &str,
-    matrix_vars: &[(String, Vec<String>)],
-) -> String {
-    // Check for ${{ matrix.xxx }} pattern
-    let trimmed = value.trim();
-    if !trimmed.contains("${{") {
-        return value.to_string();
-    }
-
-    // Extract the variable name from ${{ matrix.var-name }}
-    let var_name = trimmed
-        .split("matrix.")
-        .nth(1)
-        .map(|rest| {
-            let end = rest.find(['}', ' ']);
-            rest[..end.unwrap_or(rest.len())].trim()
-        });
-
-    let var_name = match var_name {
-        Some(name) if !name.is_empty() => name,
-        _ => return "latest".to_string(),
-    };
-
-    // Find the matrix variable and pick the highest version
-    for (name, values) in matrix_vars {
-        if name == var_name && !values.is_empty() {
-            // Pick the highest version (last in sorted order, as matrix values
-            // are typically listed ascending)
-            return values.last().unwrap().clone();
-        }
-    }
-
-    "latest".to_string()
-}
-
-/// Extract matrix variable definitions from a GitHub Actions workflow.
-///
-/// Parses patterns like:
-/// ```yaml
-/// strategy:
-///   matrix:
-///     node-version: [18, 20, 22]
-///     java:
-///       - version: 17
-///       - version: 21
-/// ```
-///
-/// Returns (var_name, [values]) pairs.  For nested objects, returns
-/// entries like `("java.version", ["17", "21"])` so that
-/// `${{ matrix.java.version }}` can be resolved.
-fn extract_matrix_vars(yaml: &str) -> Vec<(String, Vec<String>)> {
-    let mut vars = Vec::new();
-    let lines: Vec<&str> = yaml.lines().collect();
-    let mut in_matrix = false;
-    let mut matrix_indent = 0;
-
-    // State for parsing nested object arrays (e.g. java: [{version: 17}, ...])
-    let mut current_key: Option<String> = None;
-    let mut current_key_indent = 0;
-    let mut nested_values: HashMap<String, Vec<String>> = HashMap::new();
-
-    use std::collections::HashMap;
-
-    for line in &lines {
-        let trimmed = line.trim();
-        let indent = line.len() - line.trim_start().len();
-
-        if trimmed == "matrix:" {
-            in_matrix = true;
-            matrix_indent = indent;
-            continue;
-        }
-
-        if !in_matrix {
-            continue;
-        }
-
-        // Stop if we've dedented past the matrix block
-        if !trimmed.is_empty() && indent <= matrix_indent {
-            // Flush any pending nested key
-            if let Some(ref key) = current_key {
-                for (sub_key, values) in &nested_values {
-                    vars.push((format!("{key}.{sub_key}"), values.clone()));
-                }
-            }
-            in_matrix = false;
-            current_key = None;
-            nested_values.clear();
-            continue;
-        }
-
-        if let Some(colon_pos) = trimmed.find(':') {
-            let key = trimmed[..colon_pos].trim();
-            let rest = trimmed[colon_pos + 1..].trim();
-
-            // Check if this is a top-level matrix key (at matrix_indent + standard offset)
-            let is_list_item = trimmed.starts_with("- ");
-            let is_top_level = !is_list_item
-                && indent > matrix_indent
-                && (current_key.is_none() || indent <= current_key_indent);
-
-            if is_top_level {
-                // Flush previous key's nested values
-                if let Some(ref prev_key) = current_key {
-                    for (sub_key, values) in &nested_values {
-                        vars.push((format!("{prev_key}.{sub_key}"), values.clone()));
-                    }
-                    nested_values.clear();
-                }
-
-                // Parse inline array: [18, 20, 22]
-                if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                    let values: Vec<String> = inner
-                        .split(',')
-                        .map(|v| v.trim().trim_matches('\'').trim_matches('"').to_string())
-                        .filter(|v| !v.is_empty())
-                        .collect();
-                    if !values.is_empty() {
-                        vars.push((key.to_string(), values));
-                    }
-                    current_key = None;
-                } else {
-                    // Could be start of a nested object array
-                    current_key = Some(key.to_string());
-                    current_key_indent = indent;
-                }
-            } else if current_key.is_some() {
-                // Inside a nested object — extract sub-key values
-                // Lines like: `- version: 17` or `version: 17`
-                let clean_key = key.trim_start_matches("- ").trim();
-                let value = rest.trim().trim_matches('\'').trim_matches('"');
-                if !clean_key.is_empty() && !value.is_empty() {
-                    nested_values
-                        .entry(clean_key.to_string())
-                        .or_default()
-                        .push(value.to_string());
-                }
-            }
-        }
-    }
-
-    // Flush final key
-    if let Some(ref key) = current_key {
-        for (sub_key, values) in &nested_values {
-            vars.push((format!("{key}.{sub_key}"), values.clone()));
-        }
-    }
-
-    vars
 }
 
 // ---------------------------------------------------------------------------
@@ -487,126 +305,6 @@ impl MiseBackend {
         }
         results
     }
-
-    /// Install tools and activate them by updating the current process PATH.
-    ///
-    /// This writes a temporary `.tool-versions` file in the target directory
-    /// (if one doesn't exist), runs `mise install`, then queries `mise env --json`
-    /// to get the PATH with mise-managed tool directories prepended.
-    /// Sets `std::env::set_var("PATH", ...)` so all child processes inherit
-    /// the mise-managed tools.
-    ///
-    /// Returns the number of tools successfully installed.
-    pub fn install_and_activate(
-        tools: &[DetectedToolchain],
-        target: &Path,
-    ) -> usize {
-        if tools.is_empty() {
-            return 0;
-        }
-
-        // Write a .tool-versions file if the target doesn't have one,
-        // so `mise env` knows what tools to activate in that directory.
-        let tv_path = target.join(".tool-versions");
-        let wrote_tv = if !tv_path.exists() {
-            let content: String = tools
-                .iter()
-                .map(|t| format!("{} {}\n", t.tool, t.version))
-                .collect();
-            std::fs::write(&tv_path, &content).ok();
-            true
-        } else {
-            false
-        };
-
-        // Install each tool
-        let results = Self::ensure_installed(tools);
-        let installed_count = results.iter().filter(|(_, ok)| *ok).count();
-
-        // Query mise for the activated environment
-        let env_output = std::process::Command::new("mise")
-            .args(["env", "--json"])
-            .current_dir(target)
-            .stderr(std::process::Stdio::null())
-            .output();
-
-        if let Ok(output) = env_output {
-            if output.status.success() {
-                if let Ok(json_str) = String::from_utf8(output.stdout) {
-                    // Parse the JSON to extract PATH and other env vars.
-                    // Format: {"PATH": "...", "GOROOT": "...", ...}
-                    Self::apply_mise_env(&json_str);
-                }
-            }
-        }
-
-        // Clean up the temp .tool-versions if we created it
-        if wrote_tv {
-            let _ = std::fs::remove_file(&tv_path);
-        }
-
-        installed_count
-    }
-
-    /// Parse mise's JSON environment output and apply it to the current process.
-    fn apply_mise_env(json_str: &str) {
-        // Minimal JSON parsing — mise outputs a flat {"KEY": "VALUE", ...} object.
-        // Avoid pulling in serde_json just for this.
-        let trimmed = json_str.trim();
-        let inner = trimmed
-            .strip_prefix('{')
-            .and_then(|s| s.strip_suffix('}'))
-            .unwrap_or("");
-
-        for entry in split_json_entries(inner) {
-            let entry = entry.trim();
-            if entry.is_empty() {
-                continue;
-            }
-            // Each entry is: "KEY": "VALUE"
-            let Some(colon_pos) = entry.find(':') else {
-                continue;
-            };
-            let key = entry[..colon_pos]
-                .trim()
-                .trim_matches('"');
-            let value = entry[colon_pos + 1..]
-                .trim()
-                .trim_matches('"');
-
-            if !key.is_empty() && !value.is_empty() {
-                std::env::set_var(key, value);
-            }
-        }
-    }
-}
-
-/// Split a JSON object's inner content into entries, respecting quoted strings.
-fn split_json_entries(s: &str) -> Vec<&str> {
-    let mut entries = Vec::new();
-    let mut start = 0;
-    let mut in_string = false;
-    let mut escape = false;
-
-    for (i, ch) in s.char_indices() {
-        if escape {
-            escape = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_string => escape = true,
-            '"' => in_string = !in_string,
-            ',' if !in_string => {
-                entries.push(&s[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    if start < s.len() {
-        entries.push(&s[start..]);
-    }
-    entries
 }
 
 // ---------------------------------------------------------------------------
@@ -1034,108 +732,6 @@ steps:
     }
 
     #[test]
-    fn test_extract_matrix_vars() {
-        let yaml = r#"
-jobs:
-  build:
-    strategy:
-      matrix:
-        node-version: [18, 20, 22]
-        os: [ubuntu-latest, macos-latest]
-    steps:
-      - uses: actions/setup-node@v4
-"#;
-        let vars = extract_matrix_vars(yaml);
-        assert!(vars.iter().any(|(k, v)| k == "node-version" && v == &["18", "20", "22"]));
-        assert!(vars.iter().any(|(k, v)| k == "os" && v.len() == 2));
-    }
-
-    #[test]
-    fn test_extract_matrix_vars_nested_objects() {
-        let yaml = r#"
-    strategy:
-      matrix:
-        java:
-          - version: 17
-            toolchain: true
-          - version: 21
-            toolchain: true
-"#;
-        let vars = extract_matrix_vars(yaml);
-        assert!(
-            vars.iter().any(|(k, v)| k == "java.version" && v == &["17", "21"]),
-            "Expected java.version=[17,21], got: {:?}",
-            vars
-        );
-    }
-
-    #[test]
-    fn test_resolve_matrix_ref() {
-        let vars = vec![
-            ("node-version".to_string(), vec!["18".to_string(), "20".to_string(), "22".to_string()]),
-        ];
-        // Matrix reference → picks highest version
-        assert_eq!(
-            resolve_matrix_ref("${{ matrix.node-version }}", &vars),
-            "22"
-        );
-        // Non-matrix value → unchanged
-        assert_eq!(resolve_matrix_ref("20", &vars), "20");
-    }
-
-    #[test]
-    fn test_resolve_matrix_ref_nested() {
-        let vars = vec![
-            ("java.version".to_string(), vec!["17".to_string(), "21".to_string()]),
-        ];
-        assert_eq!(
-            resolve_matrix_ref("${{ matrix.java.version }}", &vars),
-            "21"
-        );
-    }
-
-    #[test]
-    fn test_extract_setup_with_matrix() {
-        let yaml = r#"
-jobs:
-  build:
-    strategy:
-      matrix:
-        node-version: [18, 20, 22]
-    steps:
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-"#;
-        let result = extract_setup_actions(yaml, "ci.yml");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].tool, "node");
-        // Should resolve to highest matrix value
-        assert_eq!(result[0].version, "22");
-    }
-
-    #[test]
-    fn test_extract_setup_with_nested_matrix() {
-        let yaml = r#"
-jobs:
-  build:
-    strategy:
-      matrix:
-        java:
-          - version: 17
-          - version: 21
-    steps:
-      - uses: actions/setup-java@v5
-        with:
-          java-version: ${{ matrix.java.version }}
-"#;
-        let result = extract_setup_actions(yaml, "ci.yml");
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].tool, "java");
-        assert_eq!(result[0].version, "21");
-    }
-
-    #[test]
     fn test_setup_action_dotnet() {
         let yaml = r#"
 steps:
@@ -1147,78 +743,5 @@ steps:
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].tool, "dotnet");
         assert_eq!(result[0].version, "8.0");
-    }
-
-    // -- split_json_entries ---
-
-    #[test]
-    fn test_split_json_entries_basic() {
-        let entries = split_json_entries(r#""PATH": "/usr/bin", "GOROOT": "/go""#);
-        assert_eq!(entries.len(), 2);
-        assert!(entries[0].contains("PATH"));
-        assert!(entries[1].contains("GOROOT"));
-    }
-
-    #[test]
-    fn test_split_json_entries_comma_in_value() {
-        // Commas inside quoted strings should NOT split
-        let entries = split_json_entries(r#""PATH": "/a,/b,/c""#);
-        assert_eq!(entries.len(), 1);
-    }
-
-    #[test]
-    fn test_split_json_entries_empty() {
-        let entries = split_json_entries("");
-        // Empty input has no entries (start == s.len())
-        assert!(entries.is_empty() || entries.iter().all(|e| e.is_empty()));
-    }
-
-    // -- apply_mise_env ---
-
-    #[test]
-    fn test_apply_mise_env_sets_var() {
-        let unique_key = "APEX_TEST_MISE_12345";
-        let json = format!(r#"{{"{unique_key}": "hello_from_mise"}}"#);
-        MiseBackend::apply_mise_env(&json);
-        assert_eq!(std::env::var(unique_key).unwrap(), "hello_from_mise");
-        // Clean up
-        std::env::remove_var(unique_key);
-    }
-
-    #[test]
-    fn test_apply_mise_env_path() {
-        let json = r#"{"APEX_TEST_PATH_67890": "/mise/bin:/usr/bin"}"#;
-        MiseBackend::apply_mise_env(json);
-        assert_eq!(
-            std::env::var("APEX_TEST_PATH_67890").unwrap(),
-            "/mise/bin:/usr/bin"
-        );
-        std::env::remove_var("APEX_TEST_PATH_67890");
-    }
-
-    // -- install_and_activate ---
-
-    #[test]
-    fn test_install_and_activate_empty_tools() {
-        let dir = make_temp_dir();
-        let result = MiseBackend::install_and_activate(&[], dir.path());
-        assert_eq!(result, 0);
-    }
-
-    #[test]
-    fn test_install_and_activate_creates_tool_versions() {
-        // When target doesn't have .tool-versions, install_and_activate writes one
-        // temporarily (and removes it after). We can verify the logic by checking
-        // that it doesn't leave the file behind.
-        let dir = make_temp_dir();
-        let tools = vec![DetectedToolchain {
-            tool: "node".into(),
-            version: "20".into(),
-            source: "ci: ci.yml".into(),
-        }];
-        // This will fail to install (mise may not be available or network blocked)
-        // but it should still clean up the temp .tool-versions file.
-        let _ = MiseBackend::install_and_activate(&tools, dir.path());
-        assert!(!dir.path().join(".tool-versions").exists());
     }
 }

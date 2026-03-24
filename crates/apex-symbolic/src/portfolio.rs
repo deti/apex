@@ -1,10 +1,7 @@
 //! Portfolio solver that wraps multiple solver backends.
 //!
 //! Tries each solver sequentially and returns the first SAT result.
-//! An async `solve_parallel` method races all solvers concurrently via
-//! `tokio::task::spawn_blocking`, returning the first SAT/UNSAT answer.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use apex_core::{error::Result, types::InputSeed};
@@ -13,128 +10,32 @@ use crate::gradient::GradientSolver;
 use crate::traits::{Solver, SolverLogic};
 
 /// A solver that wraps multiple backends and returns the first SAT result.
-///
-/// Solvers are stored as `Arc<dyn Solver>` so they can be cloned cheaply
-/// into `tokio::task::spawn_blocking` closures for the parallel racing API.
 pub struct PortfolioSolver {
-    solvers: Vec<Arc<dyn Solver>>,
+    solvers: Vec<Box<dyn Solver>>,
     timeout: Duration,
 }
 
 impl PortfolioSolver {
     /// Create a new portfolio solver with the given backends and per-solver timeout.
     pub fn new(solvers: Vec<Box<dyn Solver>>, timeout: Duration) -> Self {
-        let solvers = solvers.into_iter().map(Arc::from).collect();
         PortfolioSolver { solvers, timeout }
     }
 
     /// Create a portfolio with GradientSolver as the first (fastest) backend.
-    /// When the `bitwuzla` feature is enabled, BitwuzlaSolver is inserted
-    /// before Z3 in the priority order.
+    /// Additional solvers can be added with `add_solver()`.
     pub fn with_gradient_first(timeout: Duration) -> Self {
-        #[allow(unused_mut)]
-        let mut solvers: Vec<Arc<dyn Solver>> =
-            vec![Arc::new(GradientSolver::new(100)) as Arc<dyn Solver>];
-
-        #[cfg(feature = "bitwuzla")]
-        {
-            use crate::bitwuzla_solver::BitwuzlaSolver;
-            use crate::traits::SolverLogic;
-            solvers.push(Arc::new(BitwuzlaSolver::new(SolverLogic::Auto)) as Arc<dyn Solver>);
-        }
-
+        let solvers: Vec<Box<dyn Solver>> = vec![Box::new(GradientSolver::new(100))];
         PortfolioSolver { solvers, timeout }
     }
 
     /// Add a solver backend to the portfolio.
     pub fn add_solver(&mut self, solver: Box<dyn Solver>) {
-        self.solvers.push(Arc::from(solver));
-    }
-
-    /// Add a solver already wrapped in an Arc.
-    pub fn add_solver_arc(&mut self, solver: Arc<dyn Solver>) {
         self.solvers.push(solver);
     }
 
     /// Returns the configured per-solver timeout.
     pub fn timeout(&self) -> Duration {
         self.timeout
-    }
-
-    /// Returns the number of solver backends in the portfolio.
-    pub fn solver_count(&self) -> usize {
-        self.solvers.len()
-    }
-
-    /// Returns the names of all solver backends, in priority order.
-    pub fn solver_names(&self) -> Vec<&str> {
-        self.solvers.iter().map(|s| s.name()).collect()
-    }
-
-    /// Race all solvers in parallel via `tokio::task::spawn_blocking`.
-    ///
-    /// Because SMT solver FFI bindings are not `Send` in the general case,
-    /// each solver runs inside its own `spawn_blocking` thread.  The first
-    /// task that produces a `SAT` (i.e. `Ok(Some(_))`) result wins;
-    /// `UNSAT` / `Ok(None)` results are ignored until all tasks finish.
-    ///
-    /// Returns:
-    /// - `Ok(Some(seed))` — the first satisfying assignment found by any solver.
-    /// - `Ok(None)` — all solvers returned `None` (collectively UNSAT/unknown).
-    /// - `Err(e)` — every solver returned `Err`; the last error is propagated.
-    pub async fn solve_parallel(
-        &self,
-        constraints: &[String],
-    ) -> Result<Option<InputSeed>> {
-        use tokio::task::spawn_blocking;
-
-        if self.solvers.is_empty() {
-            return Ok(None);
-        }
-
-        // Clone constraint list once; each task gets its own owned copy.
-        let constraints_owned: Vec<String> = constraints.to_vec();
-
-        let mut handles = Vec::with_capacity(self.solvers.len());
-        for solver in &self.solvers {
-            let solver = Arc::clone(solver);
-            let cs = constraints_owned.clone();
-            let handle =
-                spawn_blocking(move || solver.solve(&cs, false));
-            handles.push(handle);
-        }
-
-        // Collect results.  Return the first SAT; accumulate the last error
-        // as a fallback.
-        let mut last_err: Option<apex_core::error::ApexError> = None;
-        let mut any_ok = false;
-
-        // Use futures::future::join_all equivalent via manual await loop so
-        // we avoid pulling in extra dependencies.
-        for handle in handles {
-            match handle.await {
-                Ok(Ok(Some(seed))) => return Ok(Some(seed)),
-                Ok(Ok(None)) => {
-                    any_ok = true;
-                }
-                Ok(Err(e)) => {
-                    last_err = Some(e);
-                }
-                Err(join_err) => {
-                    // Task panicked or was cancelled — treat as non-fatal.
-                    tracing::warn!(
-                        error = %join_err,
-                        "portfolio parallel: solver task failed to join"
-                    );
-                    any_ok = true;
-                }
-            }
-        }
-
-        match last_err {
-            Some(e) if !any_ok => Err(e),
-            _ => Ok(None),
-        }
     }
 }
 
@@ -159,12 +60,7 @@ impl Solver for PortfolioSolver {
 
     fn set_logic(&mut self, logic: SolverLogic) {
         for solver in &mut self.solvers {
-            // Arc<dyn Solver> does not give &mut access; set_logic on the
-            // portfolio propagates to solvers that have interior mutability.
-            // For immutable Arc<dyn Solver> references we skip silently —
-            // this is intentional: each solver's logic should be set before
-            // wrapping in the portfolio.
-            let _ = (solver, logic);
+            solver.set_logic(logic);
         }
     }
 
@@ -312,7 +208,7 @@ mod tests {
         let mut portfolio = PortfolioSolver::new(vec![], Duration::from_secs(5));
         portfolio.add_solver(Box::new(NullSolver::new("a")));
         portfolio.add_solver(Box::new(NullSolver::new("b")));
-        assert_eq!(portfolio.solver_count(), 2);
+        assert_eq!(portfolio.solvers.len(), 2);
     }
 
     #[test]
@@ -421,108 +317,10 @@ mod tests {
     #[test]
     fn portfolio_with_gradient_first() {
         let portfolio = PortfolioSolver::with_gradient_first(Duration::from_secs(5));
-        // Without bitwuzla feature: only gradient solver; with it: gradient + bitwuzla.
-        assert!(portfolio.solver_count() >= 1);
-        assert_eq!(portfolio.solver_names()[0], "gradient");
+        assert_eq!(portfolio.solvers.len(), 1);
+        assert_eq!(portfolio.solvers[0].name(), "gradient");
         // Should solve simple constraint
         let result = portfolio.solve(&["(= x 42)".to_string()], false).unwrap();
         assert!(result.is_some());
-    }
-
-    // ------------------------------------------------------------------
-    // solve_parallel tests
-    // ------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn solve_parallel_empty_portfolio_returns_none() {
-        let portfolio = PortfolioSolver::new(vec![], Duration::from_secs(5));
-        let result = portfolio.solve_parallel(&["x > 0".to_string()]).await.unwrap();
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn solve_parallel_all_null_returns_none() {
-        let solvers: Vec<Box<dyn Solver>> = vec![
-            Box::new(NullSolver::new("n1")),
-            Box::new(NullSolver::new("n2")),
-        ];
-        let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));
-        let result = portfolio
-            .solve_parallel(&["x > 0".to_string()])
-            .await
-            .unwrap();
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn solve_parallel_returns_first_sat() {
-        let solvers: Vec<Box<dyn Solver>> = vec![
-            Box::new(NullSolver::new("null")),
-            Box::new(SatSolver::new(vec![7, 8, 9])),
-        ];
-        let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));
-        let result = portfolio.solve_parallel(&["x > 0".to_string()]).await.unwrap();
-        assert!(result.is_some());
-    }
-
-    #[tokio::test]
-    async fn solve_parallel_does_not_deadlock_with_single_solver() {
-        let solvers: Vec<Box<dyn Solver>> = vec![Box::new(SatSolver::new(vec![42]))];
-        let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));
-        let result = portfolio.solve_parallel(&[]).await.unwrap();
-        // Empty constraints: solve() is not called (guard in PortfolioSolver::solve_parallel)
-        // — no, wait: solve_parallel sends constraints to spawn_blocking which calls solver.solve.
-        // SatSolver always returns Some regardless of constraints.
-        assert!(result.is_some());
-    }
-
-    #[tokio::test]
-    async fn solve_parallel_with_multiple_sat_returns_a_result() {
-        // When both solvers are SAT the first one to finish wins.
-        let solvers: Vec<Box<dyn Solver>> = vec![
-            Box::new(SatSolver::new(vec![1])),
-            Box::new(SatSolver::new(vec![2])),
-        ];
-        let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));
-        let result = portfolio
-            .solve_parallel(&["(> x 0)".to_string()])
-            .await
-            .unwrap();
-        assert!(result.is_some());
-    }
-
-    #[tokio::test]
-    async fn solve_parallel_empty_constraints_returns_none() {
-        let solvers: Vec<Box<dyn Solver>> = vec![Box::new(NullSolver::new("null"))];
-        let portfolio = PortfolioSolver::new(solvers, Duration::from_secs(5));
-        let result = portfolio.solve_parallel(&[]).await.unwrap();
-        assert!(result.is_none());
-    }
-
-    // ------------------------------------------------------------------
-    // solver_count / solver_names accessors
-    // ------------------------------------------------------------------
-
-    #[test]
-    fn solver_count_and_names_reflect_contents() {
-        let mut portfolio = PortfolioSolver::new(vec![], Duration::from_secs(5));
-        assert_eq!(portfolio.solver_count(), 0);
-        assert!(portfolio.solver_names().is_empty());
-
-        portfolio.add_solver(Box::new(NullSolver::new("alpha")));
-        assert_eq!(portfolio.solver_count(), 1);
-        assert_eq!(portfolio.solver_names(), vec!["alpha"]);
-
-        portfolio.add_solver(Box::new(NullSolver::new("beta")));
-        assert_eq!(portfolio.solver_count(), 2);
-        assert_eq!(portfolio.solver_names(), vec!["alpha", "beta"]);
-    }
-
-    #[test]
-    fn add_solver_arc_increases_count() {
-        let mut portfolio = PortfolioSolver::new(vec![], Duration::from_secs(5));
-        portfolio.add_solver_arc(Arc::new(NullSolver::new("arc-solver")));
-        assert_eq!(portfolio.solver_count(), 1);
-        assert_eq!(portfolio.solver_names()[0], "arc-solver");
     }
 }

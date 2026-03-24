@@ -10,8 +10,6 @@ description = "Reverse path analysis — call graph + backward traversal to entr
 [dependencies]
 apex-core = { path = "../apex-core" }
 regex = "1"
-serde = { workspace = true }
-serde_json = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

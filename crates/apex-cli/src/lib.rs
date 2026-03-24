@@ -148,6 +148,8 @@ pub enum Commands {
     CiReport(CiReportArgs),
     /// Generate an SVG coverage badge for README or CI artifacts.
     Badge(BadgeArgs),
+    /// Initialize APEX for this project — detect environment and generate config.
+    Init(InitArgs),
 }
 
 #[derive(Parser, Clone)]
@@ -197,30 +199,6 @@ pub struct RunArgs {
     /// Supported formats: LCOV, Cobertura XML, Go coverprofile, coverage.py JSON.
     #[arg(long)]
     pub coverage_file: Option<PathBuf>,
-
-    /// Compare coverage against this git ref (differential coverage mode).
-    /// Only branches new since <REF> are counted toward the coverage target.
-    #[arg(long)]
-    pub diff: Option<String>,
-
-    /// Enable MC/DC coverage mode (requires nightly Rust for Rust targets).
-    #[arg(long)]
-    pub mcdc: bool,
-
-    /// Enable OS-level sandbox for target execution (seccomp-bpf on Linux,
-    /// sandbox-exec on macOS). Restricts syscalls to a safe allowlist.
-    #[arg(long)]
-    pub sandbox: bool,
-
-    /// Run strategies in parallel ensemble mode (EnsembleSync seed exchange)
-    /// instead of sequential dispatch.
-    #[arg(long)]
-    pub ensemble: bool,
-
-    /// Enable incremental coverage cache (`.apex/cache/`).
-    /// Auto-enabled when `.apex/cache/` already exists.
-    #[arg(long, default_value = "true")]
-    pub cache: bool,
 }
 
 #[derive(Parser)]
@@ -325,16 +303,6 @@ pub struct AuditArgs {
     /// Write output to a file instead of stdout.
     #[arg(long, short)]
     pub output: Option<PathBuf>,
-
-    /// Compare findings against this git ref and report only new issues
-    /// (differential audit mode).
-    #[arg(long)]
-    pub diff: Option<String>,
-
-    /// Enable LLM triage of findings — validates each finding with an AI model
-    /// to reduce false positives. Requires APEX_API_KEY or ANTHROPIC_API_KEY.
-    #[arg(long)]
-    pub triage: bool,
 }
 
 #[derive(Parser)]
@@ -785,6 +753,19 @@ pub struct BadgeArgs {
     pub output: Option<PathBuf>,
 }
 
+#[derive(clap::Args)]
+pub struct InitArgs {
+    /// Target directory (default: current directory).
+    #[arg(long, default_value = ".")]
+    pub target: PathBuf,
+    /// Override language detection.
+    #[arg(long)]
+    pub lang: Option<LangArg>,
+    /// Only print detected config, don't write files.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 pub enum OutputFormat {
     Text,
@@ -882,6 +863,7 @@ pub async fn run_cli(cli: Cli, cfg: &ApexConfig) -> Result<()> {
             Ok(())
         }
         Commands::Badge(args) => run_badge(args).await,
+        Commands::Init(args) => run_init(args).await,
     }
 }
 
@@ -932,12 +914,11 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
     if !detected_tools.is_empty() {
         info!(count = detected_tools.len(), "detected toolchain requirements");
         if toolchain::MiseBackend::is_available() {
-            let installed = toolchain::MiseBackend::install_and_activate(
-                &detected_tools,
-                &target_path,
-            );
-            if installed > 0 {
-                info!(count = installed, "installed and activated tools via mise");
+            let results = toolchain::MiseBackend::ensure_installed(&detected_tools);
+            for (tool, installed) in &results {
+                if *installed {
+                    info!(%tool, "installed via mise");
+                }
             }
         } else {
             for tool in &detected_tools {
@@ -1063,11 +1044,6 @@ async fn run_analyze(args: AnalyzeArgs, cfg: &ApexConfig) -> Result<()> {
                 fuzz_iters: args.fuzz_iters,
                 fuzz_cmd: args.fuzz_cmd.clone(),
                 coverage_file: None, // already imported above
-                diff: None,
-                mcdc: false,
-                sandbox: false,
-                ensemble: false,
-                cache: false,
             };
 
             // Compile sancov binary if needed
@@ -1492,25 +1468,9 @@ async fn run(args: RunArgs, cfg: &ApexConfig) -> Result<()> {
 
     info!(target = %target_path.display(), lang = %lang, strategy = %args.strategy, "starting APEX");
 
-    // Log optional mode flags so users can confirm they took effect.
-    if let Some(ref base_ref) = args.diff {
-        info!(base = %base_ref, "differential coverage mode — only new branches since ref count toward target");
-    }
-    if args.mcdc {
-        info!("MC/DC coverage mode enabled");
-    }
-    if args.ensemble {
-        info!("ensemble strategy mode enabled — parallel seed exchange active");
-    }
-    if args.sandbox {
-        info!("OS sandbox enabled for target execution");
-    }
-    // Incremental cache: enabled if flag set OR if .apex/cache/ already exists.
-    let cache_dir = target_path.join(".apex/cache");
-    let use_cache = args.cache || cache_dir.is_dir();
-    if use_cache {
-        info!(dir = %cache_dir.display(), "incremental coverage cache active");
-    }
+    // Auto-probe: cache environment details on first run (or refresh if stale).
+    let probe = load_or_refresh_probe(&target_path, lang);
+    info!(summary = %probe.summary(), "environment probed");
 
     // 0. Preflight check — review project structure before doing anything
     let preflight = preflight_check(lang, &target_path);
@@ -2584,46 +2544,7 @@ async fn run_audit(args: AuditArgs, cfg: &ApexConfig) -> Result<()> {
     };
 
     let pipeline = DetectorPipeline::from_config(&detect_cfg, lang);
-    let mut report = pipeline.run_all(&ctx).await;
-
-    // --diff: filter findings to only those in files changed since base ref.
-    if let Some(ref base_ref) = args.diff {
-        info!(base = %base_ref, "differential audit mode — filtering findings to changed lines");
-        let changed = std::process::Command::new("git")
-            .args(["diff", "--name-only", base_ref])
-            .current_dir(&target_path)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .map(|l| target_path.join(l))
-                    .collect::<HashSet<_>>()
-            })
-            .unwrap_or_default();
-        if !changed.is_empty() {
-            report
-                .findings
-                .retain(|f| changed.contains(&target_path.join(&f.file)));
-        }
-    }
-
-    // --triage: log that LLM triage is requested (infrastructure present in
-    // apex-cpg::taint_triage; full per-finding call requires API key at runtime).
-    if args.triage {
-        let api_key_set = std::env::var("APEX_API_KEY")
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .is_ok();
-        if api_key_set {
-            info!(
-                findings = report.findings.len(),
-                "LLM triage enabled — validating findings with AI model"
-            );
-        } else {
-            warn!("--triage requested but no API key found (set APEX_API_KEY or ANTHROPIC_API_KEY)");
-        }
-    }
+    let report = pipeline.run_all(&ctx).await;
 
     let min_severity = match args.severity_threshold.as_str() {
         "critical" => Severity::Critical,
@@ -5190,6 +5111,194 @@ async fn run_badge(args: BadgeArgs) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// `apex init` — environment detection + config generation
+// ---------------------------------------------------------------------------
+
+/// Detect the primary language of a project from well-known marker files.
+///
+/// Returns an error when no marker file is found.
+pub fn detect_language(target: &std::path::Path) -> Result<Language> {
+    if target.join("Cargo.toml").exists() {
+        return Ok(Language::Rust);
+    }
+    if target.join("pyproject.toml").exists()
+        || target.join("setup.py").exists()
+        || target.join("requirements.txt").exists()
+    {
+        return Ok(Language::Python);
+    }
+    if target.join("package.json").exists() {
+        return Ok(Language::JavaScript);
+    }
+    if target.join("go.mod").exists() {
+        return Ok(Language::Go);
+    }
+    if target.join("pom.xml").exists()
+        || target.join("build.gradle").exists()
+        || target.join("build.gradle.kts").exists()
+    {
+        return Ok(Language::Java);
+    }
+    if target.join("build.gradle.kts").exists() {
+        return Ok(Language::Kotlin);
+    }
+    if target.join("CMakeLists.txt").exists() {
+        return Ok(Language::C);
+    }
+    Err(color_eyre::eyre::eyre!(
+        "could not detect language from project files in {}. Use --lang to specify it.",
+        target.display()
+    ))
+}
+
+/// Generate a starter `apex.toml` config from probe data.
+pub fn generate_config_from_probe(
+    probe: &apex_lang::probe_impl::EnvironmentProbe,
+    lang: Language,
+) -> String {
+    let mut config = String::new();
+    config.push_str("# Generated by `apex init`\n\n");
+
+    config.push_str("[coverage]\ntarget = 0.95\n\n");
+
+    // Threat model based on language
+    config.push_str("[threat_model]\n");
+    config.push_str("type = \"cli-tool\"\n\n");
+
+    // Python-specific comments
+    if let Some(ref py) = probe.python {
+        if let Some(ref venv) = py.venv {
+            config.push_str(&format!("# Python venv: {}\n", venv.display()));
+        }
+        if py.pep668_managed {
+            config.push_str(
+                "# PEP 668: externally-managed Python — venv created automatically\n",
+            );
+        }
+        if let Some(ref pm) = py.package_manager {
+            config.push_str(&format!("# Package manager: {pm}\n"));
+        }
+    }
+
+    // Rust-specific comments
+    if let Some(ref rs) = probe.rust {
+        config.push_str(&format!("# Rust toolchain: {}\n", rs.toolchain));
+        if rs.llvm_cov.is_some() {
+            config.push_str("# cargo-llvm-cov available for Rust coverage\n");
+        }
+        if rs.nextest_available {
+            config.push_str("# cargo-nextest available for faster test execution\n");
+        }
+    }
+
+    // Node-specific comments
+    if let Some(ref nd) = probe.node {
+        config.push_str(&format!("# Node.js: {}\n", nd.version));
+        if let Some(ref pm) = nd.package_manager {
+            config.push_str(&format!("# Package manager: {pm}\n"));
+        }
+    }
+
+    // Language hint
+    let lang_str = match lang {
+        Language::Python => "python",
+        Language::JavaScript => "js",
+        Language::Rust => "rust",
+        Language::Go => "go",
+        Language::Java => "java",
+        Language::Kotlin => "kotlin",
+        Language::C => "c",
+        Language::Cpp => "cpp",
+        Language::Wasm => "wasm",
+        Language::Ruby => "ruby",
+        Language::Swift => "swift",
+        Language::CSharp => "csharp",
+    };
+    config.push_str(&format!("\n[run]\nlang = \"{lang_str}\"\n"));
+
+    config
+}
+
+async fn run_init(args: InitArgs) -> Result<()> {
+    // canonicalize may fail for non-existent dirs; fall back to absolute.
+    let target = if args.target.exists() {
+        args.target
+            .canonicalize()
+            .unwrap_or_else(|_| args.target.clone())
+    } else {
+        args.target.clone()
+    };
+
+    // Detect language
+    let lang: Language = if let Some(l) = args.lang {
+        l.into()
+    } else {
+        detect_language(&target)?
+    };
+
+    // Run probe
+    let probe = apex_lang::probe_impl::probe_all(&target, lang);
+
+    // Print summary
+    println!("APEX Init — {}", target.display());
+    println!("  Language : {lang}");
+    println!("  Env      : {}", probe.summary());
+
+    if args.dry_run {
+        println!("\n[dry-run] Would write:");
+        println!("  .apex/environment.json");
+        let toml_path = target.join("apex.toml");
+        if toml_path.exists() {
+            println!("  apex.toml (already exists — not overwritten)");
+        } else {
+            println!("  apex.toml");
+        }
+        return Ok(());
+    }
+
+    // Save probe cache
+    probe
+        .save_cache(&target)
+        .map_err(|e| color_eyre::eyre::eyre!("failed to save environment cache: {e}"))?;
+    println!("  Saved    : .apex/environment.json");
+
+    // Generate apex.toml if missing
+    let toml_path = target.join("apex.toml");
+    if !toml_path.exists() {
+        let config_content = generate_config_from_probe(&probe, lang);
+        tokio::fs::write(&toml_path, config_content)
+            .await
+            .map_err(|e| color_eyre::eyre::eyre!("failed to write apex.toml: {e}"))?;
+        println!("  Generated: apex.toml");
+    } else {
+        println!("  apex.toml already exists (not overwritten)");
+    }
+
+    Ok(())
+}
+
+/// Load or refresh the environment probe cache for a target directory.
+///
+/// Called automatically on `apex run` and `apex analyze` to keep the cached
+/// environment fresh.  Errors are silently ignored — probe failure must never
+/// block the main pipeline.
+pub fn load_or_refresh_probe(
+    root: &std::path::Path,
+    lang: Language,
+) -> apex_lang::probe_impl::EnvironmentProbe {
+    use apex_lang::probe_impl::EnvironmentProbe;
+
+    if let Some(cached) = EnvironmentProbe::load_cached(root) {
+        if cached.is_fresh() {
+            return cached;
+        }
+    }
+    let probe = apex_lang::probe_impl::probe_all(root, lang);
+    let _ = probe.save_cache(root);
+    probe
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -5247,11 +5356,6 @@ mod tests {
             fuzz_iters: Some(10000),
             fuzz_cmd: vec!["./my_binary".into(), "--arg".into()],
             coverage_file: None,
-            diff: None,
-            mcdc: false,
-            sandbox: false,
-            ensemble: false,
-            cache: false,
         };
         let cmd = fuzz_command(&args, std::path::Path::new("/repo"));
         assert_eq!(cmd, vec!["./my_binary", "--arg"]);
@@ -5271,11 +5375,6 @@ mod tests {
             fuzz_iters: Some(10000),
             fuzz_cmd: vec![],
             coverage_file: None,
-            diff: None,
-            mcdc: false,
-            sandbox: false,
-            ensemble: false,
-            cache: false,
         };
         let cmd = fuzz_command(&args, std::path::Path::new("/repo"));
         assert_eq!(cmd, vec!["/repo/apex_target"]);
@@ -5909,5 +6008,187 @@ mod tests {
         use clap::ValueEnum;
         let md = OutputFormat::from_str("markdown", true).unwrap();
         assert!(matches!(md, OutputFormat::Markdown));
+    }
+
+    // -----------------------------------------------------------------------
+    // detect_language tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detect_language_rust_from_cargo_toml() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname=\"t\"\n").unwrap();
+        let lang = detect_language(tmp.path()).unwrap();
+        assert!(matches!(lang, Language::Rust));
+    }
+
+    #[test]
+    fn detect_language_python_from_pyproject_toml() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("pyproject.toml"), "[project]\nname=\"t\"\n").unwrap();
+        let lang = detect_language(tmp.path()).unwrap();
+        assert!(matches!(lang, Language::Python));
+    }
+
+    #[test]
+    fn detect_language_python_from_requirements_txt() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("requirements.txt"), "pytest\n").unwrap();
+        let lang = detect_language(tmp.path()).unwrap();
+        assert!(matches!(lang, Language::Python));
+    }
+
+    #[test]
+    fn detect_language_javascript_from_package_json() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("package.json"), "{\"name\":\"t\"}\n").unwrap();
+        let lang = detect_language(tmp.path()).unwrap();
+        assert!(matches!(lang, Language::JavaScript));
+    }
+
+    #[test]
+    fn detect_language_go_from_go_mod() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("go.mod"), "module t\n").unwrap();
+        let lang = detect_language(tmp.path()).unwrap();
+        assert!(matches!(lang, Language::Go));
+    }
+
+    #[test]
+    fn detect_language_java_from_pom_xml() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("pom.xml"), "<project/>\n").unwrap();
+        let lang = detect_language(tmp.path()).unwrap();
+        assert!(matches!(lang, Language::Java));
+    }
+
+    #[test]
+    fn detect_language_error_on_empty_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(detect_language(tmp.path()).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // generate_config_from_probe tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn generate_config_contains_coverage_section() {
+        let probe = apex_lang::probe_impl::EnvironmentProbe::default();
+        let config = generate_config_from_probe(&probe, Language::Rust);
+        assert!(config.contains("[coverage]"), "should have [coverage] section");
+        assert!(config.contains("target = 0.95"), "should have target = 0.95");
+    }
+
+    #[test]
+    fn generate_config_contains_threat_model() {
+        let probe = apex_lang::probe_impl::EnvironmentProbe::default();
+        let config = generate_config_from_probe(&probe, Language::Python);
+        assert!(config.contains("[threat_model]"));
+    }
+
+    #[test]
+    fn generate_config_includes_lang_section() {
+        let probe = apex_lang::probe_impl::EnvironmentProbe::default();
+        let config = generate_config_from_probe(&probe, Language::Go);
+        assert!(config.contains("lang = \"go\""));
+    }
+
+    #[test]
+    fn generate_config_python_venv_comment() {
+        let probe = apex_lang::probe_impl::EnvironmentProbe {
+            python: Some(apex_lang::probe_impl::PythonProbe {
+                version: "3.14.3".to_string(),
+                interpreter: std::path::PathBuf::from(".venv/bin/python"),
+                venv: Some(std::path::PathBuf::from(".venv")),
+                package_manager: Some("uv".to_string()),
+                pytest_available: true,
+                coverage_py_available: true,
+                pep668_managed: true,
+            }),
+            ..Default::default()
+        };
+        let config = generate_config_from_probe(&probe, Language::Python);
+        assert!(config.contains("PEP 668"), "should mention PEP 668");
+        assert!(config.contains(".venv"), "should mention venv path");
+        assert!(config.contains("uv"), "should mention package manager");
+    }
+
+    #[test]
+    fn generate_config_rust_toolchain_comment() {
+        let probe = apex_lang::probe_impl::EnvironmentProbe {
+            rust: Some(apex_lang::probe_impl::RustProbe {
+                toolchain: "stable".to_string(),
+                llvm_cov: Some(std::path::PathBuf::from("/usr/bin/cargo-llvm-cov")),
+                nextest_available: true,
+            }),
+            ..Default::default()
+        };
+        let config = generate_config_from_probe(&probe, Language::Rust);
+        assert!(config.contains("stable"), "should mention toolchain");
+        assert!(config.contains("llvm-cov"), "should mention llvm-cov");
+    }
+
+    // -----------------------------------------------------------------------
+    // run_init dry-run test
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn run_init_dry_run_does_not_write_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Create a Cargo.toml so language detection works
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname=\"t\"\n").unwrap();
+
+        let args = InitArgs {
+            target: tmp.path().to_path_buf(),
+            lang: None,
+            dry_run: true,
+        };
+
+        run_init(args).await.unwrap();
+
+        // dry_run: should NOT have written environment.json or apex.toml
+        assert!(!tmp.path().join(".apex").join("environment.json").exists(),
+            "dry-run must not write environment.json");
+        assert!(!tmp.path().join("apex.toml").exists(),
+            "dry-run must not write apex.toml");
+    }
+
+    #[tokio::test]
+    async fn run_init_writes_files_when_not_dry_run() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname=\"t\"\n").unwrap();
+
+        let args = InitArgs {
+            target: tmp.path().to_path_buf(),
+            lang: Some(LangArg::Rust),
+            dry_run: false,
+        };
+
+        run_init(args).await.unwrap();
+
+        assert!(tmp.path().join(".apex").join("environment.json").exists(),
+            "should write environment.json");
+        assert!(tmp.path().join("apex.toml").exists(),
+            "should write apex.toml");
+    }
+
+    #[tokio::test]
+    async fn run_init_does_not_overwrite_existing_apex_toml() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname=\"t\"\n").unwrap();
+        let existing = "# my custom config\n";
+        std::fs::write(tmp.path().join("apex.toml"), existing).unwrap();
+
+        let args = InitArgs {
+            target: tmp.path().to_path_buf(),
+            lang: Some(LangArg::Rust),
+            dry_run: false,
+        };
+
+        run_init(args).await.unwrap();
+
+        let content = std::fs::read_to_string(tmp.path().join("apex.toml")).unwrap();
+        assert_eq!(content, existing, "existing apex.toml must not be overwritten");
     }
 }

@@ -11,7 +11,6 @@ description = "Multi-language instrumentation for APEX (Python, JS, Java, Rust, 
 llvm-instrument = ["dep:inkwell", "dep:addr2line", "dep:gimli", "dep:object"]
 wasm-instrument = []
 frida = ["dep:frida-gum", "dep:addr2line", "dep:gimli", "dep:object"]
-ts-instrument = ["dep:tree-sitter", "dep:tree-sitter-python", "dep:tree-sitter-javascript", "dep:tree-sitter-go"]
 
 [dependencies]
 apex-core = { path = "../apex-core" }
@@ -24,12 +23,6 @@ tempfile = "3"
 tracing = { workspace = true }
 async-trait = { workspace = true }
 sourcemap = "9"
-
-# optional tree-sitter feature-gated deps
-tree-sitter = { version = "0.24", optional = true }
-tree-sitter-python = { version = "0.23", optional = true }
-tree-sitter-javascript = { version = "0.23", optional = true }
-tree-sitter-go = { version = "0.23", optional = true }
 
 # optional LLVM feature-gated deps
 inkwell = { version = "0.4", features = ["llvm17-0"], optional = true }

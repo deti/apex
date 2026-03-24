@@ -16,28 +16,6 @@ static SECURITY_FN: LazyLock<Regex> = LazyLock::new(|| {
         .expect("invalid security function regex")
 });
 
-/// Returns `true` when the `.contains(` call looks like a collection membership check
-/// rather than a string substring match.
-///
-/// Heuristics (any one is sufficient):
-/// 1. The argument starts with `&` — Rust collection `.contains(&item)` uses references.
-/// 2. The receiver appears to be a `Vec`, `HashSet`, `BTreeSet`, or `HashMap` type hint
-///    visible on the same line (e.g. `let allowed: Vec<_>` then `.contains(…)` in one expression).
-///    Because that case is rare on a single trimmed line we rely primarily on heuristic 1.
-///
-/// String `.contains("literal")` or `.contains(var)` (no `&`) are NOT suppressed.
-fn is_collection_contains(line: &str) -> bool {
-    // Find the first `.contains(` and inspect the character immediately following `(`
-    if let Some(pos) = line.find(".contains(") {
-        let after = &line[pos + ".contains(".len()..];
-        let first_char = after.trim_start().chars().next();
-        if first_char == Some('&') {
-            return true;
-        }
-    }
-    false
-}
-
 #[async_trait]
 impl Detector for SubstringSecurityDetector {
     fn name(&self) -> &str {
@@ -92,15 +70,8 @@ impl Detector for SubstringSecurityDetector {
                     }
                 }
 
-                // Flag .contains( calls inside security functions.
-                // Skip collection membership checks (vec.contains(&x), set.contains(&x)):
-                // those are exact lookups, not substring matches, so they pose no CWE-183 risk.
-                // Only flag when the argument has no leading `&` (string literal or bare var).
+                // Flag .contains( calls inside security functions
                 if in_security_fn && trimmed.contains(".contains(") {
-                    if is_collection_contains(trimmed) {
-                        continue;
-                    }
-
                     let line_1based = (line_num + 1) as u32;
 
                     findings.push(Finding {
@@ -264,74 +235,6 @@ mod tests {
         let ctx = make_ctx(files, Language::Rust);
         let findings = SubstringSecurityDetector.analyze(&ctx).await.unwrap();
         assert_eq!(findings.len(), 1);
-    }
-
-    // --- New tests for collection vs string contains disambiguation ---
-
-    #[tokio::test]
-    async fn ignores_vec_contains_ref_in_security_fn() {
-        let mut files = HashMap::new();
-        files.insert(
-            PathBuf::from("src/auth.rs"),
-            r#"fn is_authorized(role: &str) -> bool {
-    let allowed = vec!["viewer", "editor"];
-    allowed.contains(&role)
-}
-"#
-            .into(),
-        );
-        let ctx = make_ctx(files, Language::Rust);
-        let findings = SubstringSecurityDetector.analyze(&ctx).await.unwrap();
-        // vec.contains(&x) is an exact lookup — must not flag
-        assert!(findings.is_empty(), "expected no findings, got {findings:?}");
-    }
-
-    #[tokio::test]
-    async fn ignores_hashset_contains_ref_in_security_fn() {
-        let mut files = HashMap::new();
-        files.insert(
-            PathBuf::from("src/acl.rs"),
-            r#"fn is_trusted(name: &str) -> bool {
-    TRUSTED_NAMES.contains(&name)
-}
-"#
-            .into(),
-        );
-        let ctx = make_ctx(files, Language::Rust);
-        let findings = SubstringSecurityDetector.analyze(&ctx).await.unwrap();
-        assert!(findings.is_empty(), "expected no findings, got {findings:?}");
-    }
-
-    #[tokio::test]
-    async fn flags_string_contains_literal_in_security_fn() {
-        let mut files = HashMap::new();
-        files.insert(
-            PathBuf::from("src/acl.rs"),
-            r#"fn is_trusted(name: &str) -> bool {
-    name.contains("trusted_prefix")
-}
-"#
-            .into(),
-        );
-        let ctx = make_ctx(files, Language::Rust);
-        let findings = SubstringSecurityDetector.analyze(&ctx).await.unwrap();
-        assert_eq!(findings.len(), 1);
-    }
-
-    // --- Unit tests for the heuristic function itself ---
-
-    #[test]
-    fn collection_contains_detects_ref_arg() {
-        assert!(is_collection_contains("allowed.contains(&role)"));
-        assert!(is_collection_contains("TRUSTED.contains( &name )"));
-        assert!(is_collection_contains("set.contains(&item)"));
-    }
-
-    #[test]
-    fn collection_contains_does_not_suppress_string_literal() {
-        assert!(!is_collection_contains(r#"name.contains("admin")"#));
-        assert!(!is_collection_contains("name.contains(s.as_str())"));
-        assert!(!is_collection_contains("name.contains(needle)"));
     }
 
     #[test]

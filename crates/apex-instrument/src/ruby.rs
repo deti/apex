@@ -36,8 +36,6 @@ impl Default for RubyInstrumentor {
 
 // SimpleCov JSON format
 #[derive(Debug, Deserialize)]
-/// Format produced by the `simplecov-json` gem:
-/// `{"coverage": {"file.rb": {"lines": [...]}}}`
 struct SimpleCovJson {
     coverage: HashMap<String, FileCoverage>,
 }
@@ -59,100 +57,43 @@ struct DetailedCoverage {
     lines: Vec<Option<u64>>,
 }
 
-/// Format produced by SimpleCov's built-in JSON formatter:
-/// `{"files": [{"filename": "...", "coverage": {"lines": [...]}}]}`
-#[derive(Debug, Deserialize)]
-struct SimpleCovBuiltinJson {
-    files: Vec<SimpleCovFileEntry>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SimpleCovFileEntry {
-    filename: String,
-    coverage: SimpleCovFileCoverage,
-}
-
-#[derive(Debug, Deserialize)]
-struct SimpleCovFileCoverage {
-    lines: Vec<Option<u64>>,
-}
-
 /// Parse SimpleCov JSON output into branch IDs.
-///
-/// Supports two formats:
-/// 1. `simplecov-json` gem: `{"coverage": {"file.rb": {"lines": [...]}}}`
-/// 2. Built-in JSON formatter: `{"files": [{"filename": "...", "coverage": {"lines": [...]}}]}`
 pub fn parse_simplecov_json(json: &str) -> (Vec<BranchId>, Vec<BranchId>, HashMap<u64, PathBuf>) {
     let mut all_branches = Vec::new();
     let mut executed = Vec::new();
     let mut file_paths = HashMap::new();
 
-    // Try simplecov-json format: {"coverage": {"file.rb": {"lines": [...]}}}
-    if let Ok(data) = serde_json::from_str::<SimpleCovJson>(json) {
-        for (file_path, coverage) in &data.coverage {
-            let lines = match coverage {
-                FileCoverage::Lines(lc) => &lc.lines,
-                FileCoverage::Detailed(dc) => &dc.lines,
-            };
-            collect_line_coverage(file_path, lines, &mut all_branches, &mut executed, &mut file_paths);
-        }
-        return (all_branches, executed, file_paths);
-    }
-
-    // Try .resultset.json format: {"<Framework>": {"coverage": {"file.rb": {"lines": [...]}}}}
-    if let Ok(data) = serde_json::from_str::<HashMap<String, SimpleCovJson>>(json) {
-        for cov_data in data.values() {
-            for (file_path, coverage) in &cov_data.coverage {
-                let lines = match coverage {
-                    FileCoverage::Lines(lc) => &lc.lines,
-                    FileCoverage::Detailed(dc) => &dc.lines,
-                };
-                collect_line_coverage(file_path, lines, &mut all_branches, &mut executed, &mut file_paths);
-            }
-        }
-        if !all_branches.is_empty() {
+    let data: SimpleCovJson = match serde_json::from_str(json) {
+        Ok(d) => d,
+        Err(e) => {
+            warn!(error = %e, "failed to parse SimpleCov JSON");
             return (all_branches, executed, file_paths);
         }
-    }
+    };
 
-    // Try built-in JSON formatter: {"files": [{"filename": "...", "coverage": {"lines": [...]}}]}
-    if let Ok(data) = serde_json::from_str::<SimpleCovBuiltinJson>(json) {
-        for file_entry in &data.files {
-            collect_line_coverage(
-                &file_entry.filename,
-                &file_entry.coverage.lines,
-                &mut all_branches,
-                &mut executed,
-                &mut file_paths,
-            );
-        }
-        return (all_branches, executed, file_paths);
-    }
+    for (file_path, coverage) in &data.coverage {
+        let file_id = fnv1a_hash(file_path);
+        file_paths.insert(file_id, PathBuf::from(file_path));
 
-    warn!("failed to parse SimpleCov JSON in either format");
-    (all_branches, executed, file_paths)
-}
+        let lines = match coverage {
+            FileCoverage::Lines(lc) => &lc.lines,
+            FileCoverage::Detailed(dc) => &dc.lines,
+        };
 
-fn collect_line_coverage(
-    file_path: &str,
-    lines: &[Option<u64>],
-    all_branches: &mut Vec<BranchId>,
-    executed: &mut Vec<BranchId>,
-    file_paths: &mut HashMap<u64, PathBuf>,
-) {
-    let file_id = fnv1a_hash(file_path);
-    file_paths.insert(file_id, PathBuf::from(file_path));
-
-    for (i, count) in lines.iter().enumerate() {
-        if let Some(c) = count {
-            let line = (i + 1) as u32;
-            let branch = BranchId::new(file_id, line, 0, 0);
-            all_branches.push(branch.clone());
-            if *c > 0 {
-                executed.push(branch);
+        for (i, count) in lines.iter().enumerate() {
+            if let Some(c) = count {
+                let line = (i + 1) as u32;
+                let branch = BranchId::new(file_id, line, 0, 0);
+                all_branches.push(branch.clone());
+                if *c > 0 {
+                    executed.push(branch);
+                }
             }
+            // None = non-executable line, skip
         }
     }
+
+    (all_branches, executed, file_paths)
 }
 
 /// Resolve the Ruby binary using the lang runner's resolution logic.
@@ -177,7 +118,6 @@ fn has_bundler() -> bool {
 ///
 /// - If `spec/` exists -> RSpec (`bundle exec rspec`)
 /// - If `test/` exists -> Minitest (`bundle exec rake test`)
-/// - If Rakefile exists with `test` task -> `bundle exec rake test` (monorepos like Rails)
 /// - Fallback: `ruby -Ilib -Itest`
 fn detect_test_command(target_path: &Path, use_bundler: bool) -> Vec<String> {
     let spec_dir = target_path.join("spec");
@@ -195,41 +135,10 @@ fn detect_test_command(target_path: &Path, use_bundler: bool) -> Vec<String> {
         } else {
             vec!["rake".into(), "test".into()]
         }
-    } else if has_rake_test_task(target_path) {
-        // Monorepos (like Rails) have a Rakefile with test tasks but no root test/ dir
-        if use_bundler {
-            vec!["bundle".into(), "exec".into(), "rake".into(), "test".into()]
-        } else {
-            vec!["rake".into(), "test".into()]
-        }
     } else {
         let ruby = resolve_ruby().to_string();
         vec![ruby, "-Ilib".into(), "-Itest".into()]
     }
-}
-
-/// Check if a Rakefile exists and likely has a test task.
-fn has_rake_test_task(target_path: &Path) -> bool {
-    for name in &["Rakefile", "rakefile", "Rakefile.rb"] {
-        let path = target_path.join(name);
-        if path.exists() {
-            // If Rakefile exists AND there are test dirs in subdirectories, assume rake test works
-            if let Ok(entries) = std::fs::read_dir(target_path) {
-                for entry in entries.flatten() {
-                    if entry.path().join("test").is_dir() {
-                        return true;
-                    }
-                }
-            }
-            // Also check Rakefile content for test task definition
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if content.contains("Rake::TestTask") || content.contains(":test") {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 /// SimpleCov helper script content.

@@ -12,8 +12,6 @@ description = "Symbolic constraint solving for APEX (SMT-LIB2, Z3, Kani)"
 z3-solver = ["z3"]
 # Enable Kani bounded model-checking prover integration.
 kani-prover = []
-# Enable Bitwuzla solver backend (bit-vector / floating-point specialised).
-bitwuzla = ["bitwuzla-sys"]
 
 [dependencies]
 apex-core = { path = "../apex-core" }
@@ -26,8 +24,6 @@ tracing = { workspace = true }
 
 # Feature-gated: only enabled with --features z3-solver
 z3 = { version = "0.12", features = ["static-link-z3"], optional = true }
-# Feature-gated: only enabled with --features bitwuzla
-bitwuzla-sys = { version = "0.5", optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

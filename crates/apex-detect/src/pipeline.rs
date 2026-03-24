@@ -313,19 +313,6 @@ impl DetectorPipeline {
             }
         }
 
-        // Self-audit noise filter: when APEX analyzes its own source, detectors
-        // flag string literals inside their own test fixtures (e.g. a substring-security
-        // test file containing `role.contains("admin")`).  Suppress these by marking
-        // findings as noisy when:
-        //   - the finding file is inside a `detectors/` directory, AND
-        //   - the detector name (with `-` normalized to `_`) appears in the file name
-        //     (i.e. the detector is flagging its own source file — self-referential).
-        for finding in &mut findings {
-            if is_self_referential_detector_finding(&finding.file, &finding.detector) {
-                finding.noisy = true;
-            }
-        }
-
         findings.sort_by_key(|f| (f.severity.rank(), f.covered as u8));
 
         AnalysisReport {
@@ -368,38 +355,6 @@ pub fn apply_coverage_rescoring(
             finding.severity = new_severity;
         }
     }
-}
-
-/// Returns `true` when a finding is self-referential: the detector is flagging its own
-/// source file inside a `detectors/` directory.
-///
-/// Example: the `substring-security` detector produces a finding in
-/// `crates/apex-detect/src/detectors/substring_security.rs` — the file IS the detector
-/// implementation, so any hits there are test fixtures, not real vulnerabilities.
-///
-/// The match is done by normalizing the detector name (replacing `-` with `_`) and
-/// checking whether it appears in the file's stem.
-pub fn is_self_referential_detector_finding(
-    file: &std::path::Path,
-    detector: &str,
-) -> bool {
-    // The file must be inside a `detectors/` directory component.
-    let in_detectors_dir = file
-        .components()
-        .any(|c| c.as_os_str() == "detectors");
-
-    if !in_detectors_dir {
-        return false;
-    }
-
-    // Normalize detector name: "substring-security" -> "substring_security"
-    let normalized = detector.replace('-', "_");
-
-    // Check if the file stem contains the normalized detector name.
-    file.file_stem()
-        .and_then(|s| s.to_str())
-        .map(|stem| stem.contains(normalized.as_str()))
-        .unwrap_or(false)
 }
 
 pub fn deduplicate(findings: &mut Vec<Finding>) {
@@ -1726,65 +1681,5 @@ mod tests {
             FindingCategory::Injection,
         );
         assert_eq!(f.coverage_label(), None);
-    }
-
-    // -----------------------------------------------------------------------
-    // Self-audit noise filter tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn self_referential_filter_matches_detector_own_file() {
-        // substring-security flagging its own source file → self-referential
-        let file = PathBuf::from(
-            "crates/apex-detect/src/detectors/substring_security.rs",
-        );
-        assert!(
-            is_self_referential_detector_finding(&file, "substring-security"),
-            "detector should suppress findings in its own source file"
-        );
-    }
-
-    #[test]
-    fn self_referential_filter_does_not_match_other_file() {
-        // substring-security flagging a non-detector source file → NOT self-referential
-        let file = PathBuf::from("crates/apex-core/src/lib.rs");
-        assert!(
-            !is_self_referential_detector_finding(&file, "substring-security"),
-            "should not suppress findings outside detectors/ dir"
-        );
-    }
-
-    #[test]
-    fn self_referential_filter_does_not_match_different_detector_file() {
-        // panic-pattern flagging substring_security.rs → different detector, not self-referential
-        let file = PathBuf::from(
-            "crates/apex-detect/src/detectors/substring_security.rs",
-        );
-        assert!(
-            !is_self_referential_detector_finding(&file, "panic-pattern"),
-            "should not suppress cross-detector findings"
-        );
-    }
-
-    #[test]
-    fn self_referential_filter_handles_dash_underscore_normalization() {
-        // "panic-pattern" detector, "panic_pattern.rs" file — name normalization must match
-        let file = PathBuf::from(
-            "crates/apex-detect/src/detectors/panic_pattern.rs",
-        );
-        assert!(
-            is_self_referential_detector_finding(&file, "panic-pattern"),
-            "dash-to-underscore normalization should match"
-        );
-    }
-
-    #[test]
-    fn self_referential_filter_requires_detectors_dir() {
-        // File with matching name but NOT inside detectors/ → must not suppress
-        let file = PathBuf::from("crates/apex-detect/src/substring_security.rs");
-        assert!(
-            !is_self_referential_detector_finding(&file, "substring-security"),
-            "must require file to be inside a detectors/ directory"
-        );
     }
 }

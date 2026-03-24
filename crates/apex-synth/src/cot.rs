@@ -62,7 +62,6 @@ mod tests {
             function_name: Some("process".into()),
             source_segment: "if x > 0:\n    return x\n".into(),
             uncovered_lines: vec![11],
-            cpg_context: None,
         }
     }
 

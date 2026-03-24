@@ -18,9 +18,12 @@ pub struct ShmBitmap {
     ptr: *mut u8,
 }
 
-// SAFETY: ShmBitmap is Send because the underlying POSIX shared memory
-// region is process-wide and the bitmap is only accessed via atomic
-// operations in the SanitizerCoverage callbacks.
+// SAFETY: The pointer is only accessed through &self methods which are
+// synchronised by the caller (one bitmap per child process lifetime).
+// Send is safe because ownership transfers between threads.
+// Sync is intentionally NOT implemented: concurrent reads through the raw
+// pointer are not guaranteed safe. The single-writer-after-fork pattern
+// means callers must not share &ShmBitmap across threads simultaneously.
 unsafe impl Send for ShmBitmap {}
 
 impl ShmBitmap {

@@ -566,6 +566,32 @@ async fn run_doctor_with_runner(runner: &dyn CommandRunner) -> color_eyre::Resul
         }
     }
 
+    // Environment probe (from cache only — doctor does not create the cache).
+    let cwd_str = cwd.to_string_lossy();
+    if let Some(cached) = apex_lang::probe_impl::EnvironmentProbe::load_cached(&cwd) {
+        let bold = "\x1b[1m";
+        let reset = "\x1b[0m";
+        println!("\n{bold}Environment (cached){reset}");
+        println!("────────────────────");
+        println!("  {}", cached.summary());
+
+        if let Some(ref py) = cached.python {
+            if py.pep668_managed {
+                println!("  PEP 668: managed externally — venv auto-created");
+            }
+            if let Some(ref venv) = py.venv {
+                println!("  venv: {}", venv.display());
+            }
+        }
+    } else {
+        let dim = "\x1b[2m";
+        let reset = "\x1b[0m";
+        println!(
+            "\n{dim}No cached environment probe found for {cwd_str}.{reset}"
+        );
+        println!("{dim}Run `apex init` to generate one.{reset}");
+    }
+
     println!();
 
     if total_failures == 0 {

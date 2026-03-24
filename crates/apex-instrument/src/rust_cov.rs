@@ -11,7 +11,7 @@ use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
     traits::Instrumentor,
-    types::{BranchId, CoverageLevel, InstrumentedTarget, Target},
+    types::{BranchId, InstrumentedTarget, Target},
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -228,82 +228,6 @@ pub async fn run_coverage_for_test_with_runner(
     let bytes = std::fs::read(&json_path)?;
     let (_, executed, _) = parse_llvm_json(&bytes, root)?;
     Ok(executed)
-}
-
-// ---------------------------------------------------------------------------
-// MC/DC instrumentation
-// ---------------------------------------------------------------------------
-
-/// Check whether the active Rust toolchain is nightly.
-///
-/// Runs `rustup show active-toolchain` (or falls back to `rustc --version`)
-/// and looks for the string "nightly" in the output.
-pub async fn is_nightly_toolchain(runner: &dyn CommandRunner, repo: &Path) -> bool {
-    // Try rustup first — more reliable
-    let spec = CommandSpec::new("rustup", repo)
-        .args(["show", "active-toolchain"])
-        .timeout(10_000);
-    if let Ok(out) = runner.run_command(&spec).await {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        if stdout.contains("nightly") {
-            return true;
-        }
-        // Explicit non-nightly result — no need to fall back
-        if out.exit_code == 0 {
-            return false;
-        }
-    }
-
-    // Fallback: rustc --version
-    let spec = CommandSpec::new("rustc", repo)
-        .args(["--version"])
-        .timeout(10_000);
-    runner
-        .run_command(&spec)
-        .await
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("nightly"))
-        .unwrap_or(false)
-}
-
-/// Build the `cargo llvm-cov` args for the requested [`CoverageLevel`].
-///
-/// For MC/DC mode:
-/// - Verifies nightly is active; warns + falls back to branch if not.
-/// - Injects `-Zcoverage-options=mcdc` via `RUSTFLAGS`.
-///
-/// Returns `(extra_cargo_args, extra_env_vars, effective_mode)`.
-pub async fn build_coverage_args(
-    mode: CoverageLevel,
-    runner: &dyn CommandRunner,
-    repo: &Path,
-) -> (Vec<String>, Vec<(String, String)>, CoverageLevel) {
-    match mode {
-        CoverageLevel::Statement | CoverageLevel::Branch => (vec![], vec![], CoverageLevel::Branch),
-        CoverageLevel::Mcdc => {
-            if !is_nightly_toolchain(runner, repo).await {
-                warn!(
-                    "MC/DC coverage requested but nightly Rust is not active. \
-                     Falling back to branch coverage. \
-                     Install nightly with: rustup toolchain install nightly"
-                );
-                return (vec![], vec![], CoverageLevel::Branch);
-            }
-            // `-Zcoverage-options=mcdc` requires nightly rustc.
-            // We append to any existing RUSTFLAGS rather than replacing.
-            let existing = std::env::var("RUSTFLAGS").unwrap_or_default();
-            let rustflags = if existing.is_empty() {
-                "-Zcoverage-options=mcdc".to_string()
-            } else {
-                format!("{existing} -Zcoverage-options=mcdc")
-            };
-            info!("MC/DC coverage enabled: RUSTFLAGS={rustflags:?}");
-            (
-                vec![],
-                vec![("RUSTFLAGS".to_string(), rustflags)],
-                CoverageLevel::Mcdc,
-            )
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1294,89 +1218,5 @@ mod tests {
         assert_eq!(path, &PathBuf::from("src/lib.rs"));
         assert_eq!(all.len(), 1);
         assert_eq!(executed.len(), 1);
-    }
-
-    // -----------------------------------------------------------------------
-    // MC/DC tests
-    // -----------------------------------------------------------------------
-
-    /// Runner that reports a specific toolchain string.
-    struct ToolchainRunner {
-        version_output: String,
-    }
-
-    impl ToolchainRunner {
-        fn nightly() -> Self {
-            ToolchainRunner {
-                version_output: "nightly-2026-03-01 (default)".into(),
-            }
-        }
-        fn stable() -> Self {
-            ToolchainRunner {
-                version_output: "stable-x86_64-unknown-linux-gnu (default)".into(),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl CommandRunner for ToolchainRunner {
-        async fn run_command(
-            &self,
-            _spec: &CommandSpec,
-        ) -> apex_core::error::Result<CommandOutput> {
-            Ok(CommandOutput {
-                exit_code: 0,
-                stdout: self.version_output.as_bytes().to_vec(),
-                stderr: vec![],
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn is_nightly_returns_true_for_nightly_toolchain() {
-        let runner = ToolchainRunner::nightly();
-        assert!(is_nightly_toolchain(&runner, Path::new("/repo")).await);
-    }
-
-    #[tokio::test]
-    async fn is_nightly_returns_false_for_stable_toolchain() {
-        let runner = ToolchainRunner::stable();
-        assert!(!is_nightly_toolchain(&runner, Path::new("/repo")).await);
-    }
-
-    #[tokio::test]
-    async fn build_coverage_args_branch_mode_is_empty() {
-        let runner = ToolchainRunner::stable();
-        let (args, env, mode) =
-            build_coverage_args(CoverageLevel::Branch, &runner, Path::new("/repo")).await;
-        assert!(args.is_empty());
-        assert!(env.is_empty());
-        assert_eq!(mode, CoverageLevel::Branch);
-    }
-
-    #[tokio::test]
-    async fn build_coverage_args_mcdc_on_nightly_adds_rustflags() {
-        let runner = ToolchainRunner::nightly();
-        let (args, env, mode) =
-            build_coverage_args(CoverageLevel::Mcdc, &runner, Path::new("/repo")).await;
-        assert!(args.is_empty());
-        assert_eq!(mode, CoverageLevel::Mcdc);
-        let rustflags = env
-            .iter()
-            .find(|(k, _)| k == "RUSTFLAGS")
-            .map(|(_, v)| v.as_str())
-            .unwrap_or("");
-        assert!(rustflags.contains("-Zcoverage-options=mcdc"));
-    }
-
-    #[tokio::test]
-    async fn build_coverage_args_mcdc_fallback_on_stable() {
-        let runner = ToolchainRunner::stable();
-        let (args, env, mode) =
-            build_coverage_args(CoverageLevel::Mcdc, &runner, Path::new("/repo")).await;
-        // Fallen back to branch — no special flags
-        assert!(args.is_empty());
-        assert!(env.is_empty());
-        assert_eq!(mode, CoverageLevel::Branch);
     }
 }

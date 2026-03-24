@@ -9,7 +9,6 @@ description = "Process and microVM sandbox execution for APEX"
 
 [features]
 firecracker = ["hyper", "hyper-util", "http-body-util", "tokio-vsock"]
-seccomp = ["seccompiler"]
 
 [dependencies]
 apex-core = { path = "../apex-core" }
@@ -29,9 +28,6 @@ hyper = { version = "1", features = ["http1", "client"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 http-body-util = { version = "0.1", optional = true }
 tokio-vsock = { version = "0.5", optional = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-seccompiler = { version = "0.4", optional = true }
 
 [dev-dependencies]
 mockall = { workspace = true }

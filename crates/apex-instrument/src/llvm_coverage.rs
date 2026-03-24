@@ -73,9 +73,7 @@ pub fn parse_llvm_cov_export(
 
     // Canonicalize target_root so strip_prefix works even when the coverage
     // JSON contains symlink-resolved paths (e.g. /private/tmp vs /tmp on macOS).
-    let canon_root = target_root
-        .canonicalize()
-        .unwrap_or_else(|_| target_root.to_path_buf());
+    let canon_root = target_root.canonicalize().unwrap_or_else(|_| target_root.to_path_buf());
 
     let data = v["data"].as_array().ok_or("missing data array")?;
     for entry in data {

@@ -11,38 +11,6 @@ pub use builder::{CpgBuilder, GoCpgBuilder, JsCpgBuilder, PythonCpgBuilder};
 pub mod ts_python;
 #[cfg(feature = "treesitter")]
 pub use ts_python::TreeSitterPythonCpgBuilder;
-
-#[cfg(feature = "treesitter")]
-pub mod ts_javascript;
-#[cfg(feature = "treesitter")]
-pub use ts_javascript::TsJsCpgBuilder;
-
-#[cfg(feature = "treesitter")]
-pub mod ts_go;
-#[cfg(feature = "treesitter")]
-pub use ts_go::TsGoCpgBuilder;
-
-// ─── Default builder aliases ──────────────────────────────────────────────────
-//
-// When the `treesitter` feature is enabled, callers get the high-accuracy AST
-// builders automatically. Without the feature, the lightweight line-based
-// builders remain active — no call-site changes required.
-
-#[cfg(feature = "treesitter")]
-pub use ts_python::TreeSitterPythonCpgBuilder as DefaultPythonCpgBuilder;
-#[cfg(not(feature = "treesitter"))]
-pub use builder::PythonCpgBuilder as DefaultPythonCpgBuilder;
-
-#[cfg(feature = "treesitter")]
-pub use ts_javascript::TsJsCpgBuilder as DefaultJsCpgBuilder;
-#[cfg(not(feature = "treesitter"))]
-pub use builder::JsCpgBuilder as DefaultJsCpgBuilder;
-
-#[cfg(feature = "treesitter")]
-pub use ts_go::TsGoCpgBuilder as DefaultGoCpgBuilder;
-#[cfg(not(feature = "treesitter"))]
-pub use builder::GoCpgBuilder as DefaultGoCpgBuilder;
-
 pub mod deepdfa;
 pub mod model_loader;
 pub mod query;

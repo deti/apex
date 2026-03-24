@@ -1,511 +1,495 @@
-//! Per-language environment probes for APEX.
+//! Environment probe — detects runtime toolchain details for a project.
 //!
-//! Each `probe_*` function returns the typed `*Env` struct from
-//! `apex_core::probe`, wrapping existing detection logic from the language
-//! runners instead of duplicating it.
+//! `probe_all()` gathers language-specific information (interpreter path,
+//! venv, package manager, coverage tools) and returns an `EnvironmentProbe`
+//! that can be cached to `.apex/environment.json` and loaded on future runs.
 
-use apex_core::probe::{
-    CCppEnv, DotnetEnv, EnvironmentProbe, GoEnv, JsEnv, JvmEnv, PythonEnv, RubyEnv, RustEnv,
-    SwiftEnv,
-};
 use apex_core::types::Language;
+use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
-// Module-level helpers (private)
+// Public types
 // ---------------------------------------------------------------------------
 
-/// Run `cmd args` and return the first line of stdout, or empty string on
-/// failure.
-fn get_version(cmd: &str, args: &[&str]) -> String {
-    std::process::Command::new(cmd)
+/// Cached probe result.  Serialised to `.apex/environment.json`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EnvironmentProbe {
+    /// Unix timestamp of when this probe was collected.
+    pub collected_at: u64,
+    /// Python-specific findings, if the project is Python (or Python was detected).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub python: Option<PythonProbe>,
+    /// Rust-specific findings, if the project is Rust.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rust: Option<RustProbe>,
+    /// JavaScript/Node-specific findings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<NodeProbe>,
+    /// Go-specific findings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub go: Option<GoProbe>,
+    /// Java-specific findings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub java: Option<JavaProbe>,
+}
+
+/// How fresh a probe is considered — 7 days in seconds.
+const FRESH_SECONDS: u64 = 7 * 24 * 3600;
+
+impl EnvironmentProbe {
+    /// Returns true when the cached probe is still fresh (collected < 7 days ago).
+    pub fn is_fresh(&self) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        now.saturating_sub(self.collected_at) < FRESH_SECONDS
+    }
+
+    /// Load a cached probe from `<root>/.apex/environment.json`.
+    /// Returns `None` when the file does not exist or cannot be parsed.
+    pub fn load_cached(root: &Path) -> Option<Self> {
+        let path = root.join(".apex").join("environment.json");
+        let bytes = std::fs::read(path).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    /// Persist the probe to `<root>/.apex/environment.json`.
+    /// Creates the `.apex/` directory if necessary.
+    pub fn save_cache(&self, root: &Path) -> std::io::Result<()> {
+        let dir = root.join(".apex");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("environment.json");
+        let json = serde_json::to_string_pretty(self)
+            .map_err(std::io::Error::other)?;
+        std::fs::write(path, json)
+    }
+
+    /// One-line human-readable summary.
+    pub fn summary(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        if let Some(ref py) = self.python {
+            let mut s = format!("Python {}", py.version);
+            if let Some(ref venv) = py.venv {
+                s.push_str(&format!(" via {}", venv.display()));
+            }
+            let mut flags: Vec<&str> = Vec::new();
+            if let Some(ref pm) = py.package_manager {
+                flags.push(pm.as_str());
+            }
+            if py.pytest_available {
+                flags.push("pytest");
+            }
+            if py.coverage_py_available {
+                flags.push("coverage.py");
+            }
+            if py.pep668_managed {
+                flags.push("PEP668");
+            }
+            if !flags.is_empty() {
+                s.push_str(&format!(" ({})", flags.join(", ")));
+            }
+            parts.push(s);
+        }
+
+        if let Some(ref rs) = self.rust {
+            let mut s = format!("Rust {}", rs.toolchain);
+            let mut flags: Vec<&str> = Vec::new();
+            if rs.llvm_cov.is_some() {
+                flags.push("llvm-cov");
+            }
+            if rs.nextest_available {
+                flags.push("nextest");
+            }
+            if !flags.is_empty() {
+                s.push_str(&format!(" ({})", flags.join(", ")));
+            }
+            parts.push(s);
+        }
+
+        if let Some(ref nd) = self.node {
+            let mut s = format!("Node {}", nd.version);
+            if let Some(ref pm) = nd.package_manager {
+                s.push_str(&format!(" ({})", pm));
+            }
+            parts.push(s);
+        }
+
+        if let Some(ref go) = self.go {
+            parts.push(format!("Go {}", go.version));
+        }
+
+        if let Some(ref java) = self.java {
+            parts.push(format!("Java {}", java.version));
+        }
+
+        if parts.is_empty() {
+            "no language toolchain detected".to_string()
+        } else {
+            parts.join("; ")
+        }
+    }
+}
+
+impl fmt::Display for EnvironmentProbe {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.summary())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Language-specific probe structs
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PythonProbe {
+    /// Python version string, e.g. "3.14.3".
+    pub version: String,
+    /// Path to the Python interpreter.
+    pub interpreter: PathBuf,
+    /// Active virtual environment directory (if any).
+    pub venv: Option<PathBuf>,
+    /// Package manager: "pip", "uv", "poetry", "pdm", "conda".
+    pub package_manager: Option<String>,
+    /// Whether pytest is importable.
+    pub pytest_available: bool,
+    /// Whether coverage.py is importable.
+    pub coverage_py_available: bool,
+    /// Whether this is a PEP 668 externally-managed environment.
+    pub pep668_managed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RustProbe {
+    /// Active toolchain name, e.g. "stable" or "1.78.0-x86_64-unknown-linux-gnu".
+    pub toolchain: String,
+    /// Path to cargo-llvm-cov binary if available.
+    pub llvm_cov: Option<PathBuf>,
+    /// Whether cargo-nextest is available.
+    pub nextest_available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeProbe {
+    /// Node.js version string, e.g. "v20.11.0".
+    pub version: String,
+    /// Detected package manager: "npm", "yarn", "pnpm", "bun".
+    pub package_manager: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoProbe {
+    /// Go version string, e.g. "go1.22.1".
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JavaProbe {
+    /// Java version string.
+    pub version: String,
+    /// Build tool: "maven" or "gradle".
+    pub build_tool: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Probe implementation — synchronous, no tokio dependency
+// ---------------------------------------------------------------------------
+
+/// Run the full environment probe for a project root and language hint.
+///
+/// This function is intentionally **synchronous** so it can be called from
+/// both sync and async contexts without spawning a blocking task.  Each
+/// individual check is a fast filesystem/`Command::output()` call.
+pub fn probe_all(root: &Path, lang: Language) -> EnvironmentProbe {
+    let collected_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let python = match lang {
+        Language::Python => Some(probe_python(root)),
+        _ => {
+            // Try Python opportunistically (e.g. mixed repos)
+            if root.join("pyproject.toml").exists()
+                || root.join("setup.py").exists()
+                || root.join("requirements.txt").exists()
+            {
+                Some(probe_python(root))
+            } else {
+                None
+            }
+        }
+    };
+
+    let rust = match lang {
+        Language::Rust => Some(probe_rust(root)),
+        _ => {
+            if root.join("Cargo.toml").exists() {
+                Some(probe_rust(root))
+            } else {
+                None
+            }
+        }
+    };
+
+    let node = match lang {
+        Language::JavaScript => Some(probe_node(root)),
+        _ => {
+            if root.join("package.json").exists() {
+                Some(probe_node(root))
+            } else {
+                None
+            }
+        }
+    };
+
+    let go = match lang {
+        Language::Go => Some(probe_go()),
+        _ => {
+            if root.join("go.mod").exists() {
+                Some(probe_go())
+            } else {
+                None
+            }
+        }
+    };
+
+    let java = match lang {
+        Language::Java | Language::Kotlin => Some(probe_java(root)),
+        _ => None,
+    };
+
+    EnvironmentProbe {
+        collected_at,
+        python,
+        rust,
+        node,
+        go,
+        java,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-language probes
+// ---------------------------------------------------------------------------
+
+fn run_cmd_stdout(program: &str, args: &[&str]) -> Option<String> {
+    std::process::Command::new(program)
         .args(args)
         .output()
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() {
-                // Some tools write version to stderr (e.g. java -version)
-                let se = String::from_utf8_lossy(&o.stderr).trim().to_string();
-                if se.is_empty() { None } else { Some(se.lines().next().unwrap_or("").trim().to_string()) }
-            } else {
-                Some(s.lines().next().unwrap_or("").trim().to_string())
-            }
+            String::from_utf8(o.stdout)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
         })
-        .unwrap_or_default()
 }
 
-/// Run `cmd args` and return first-line of stdout/stderr as `Some`, or `None`
-/// when the command is absent or exits non-zero.
-fn check_tool(cmd: &str, args: &[&str]) -> Option<String> {
-    let o = std::process::Command::new(cmd).args(args).output().ok()?;
-    if !o.status.success() {
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
-    if stdout.is_empty() {
-        let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-        Some(stderr.lines().next().unwrap_or("").trim().to_string())
-    } else {
-        Some(stdout.lines().next().unwrap_or("").trim().to_string())
-    }
-}
-
-/// Return `true` when `name` is found on PATH.
-fn which(name: &str) -> bool {
-    std::process::Command::new("which")
-        .arg(name)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-// ---------------------------------------------------------------------------
-// Python
-// ---------------------------------------------------------------------------
-
-/// Probe Python environment at `target`.
-pub fn probe_python(target: &Path) -> PythonEnv {
-    use super::python::PythonRunner;
-
-    let venv = PythonRunner::<apex_core::command::RealCommandRunner>::find_venv_python(target);
-    let interpreter = venv
-        .as_ref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(
-                PythonRunner::<apex_core::command::RealCommandRunner>::resolve_python(),
-            )
-        });
-
-    let version = get_version(interpreter.to_str().unwrap_or("python3"), &["--version"]);
-    let pep668 =
-        PythonRunner::<apex_core::command::RealCommandRunner>::is_externally_managed(target);
-    let pkg_mgr =
-        PythonRunner::<apex_core::command::RealCommandRunner>::detect_package_manager(target);
-    let coverage_tool = check_tool("coverage", &["--version"]);
-
-    // Determine primary test runner label
-    let test_runner = detect_python_test_runner(target);
-
-    PythonEnv {
-        interpreter,
-        version,
-        venv: venv.map(PathBuf::from),
-        coverage_tool,
-        test_runner,
-        package_manager: Some(format!("{:?}", pkg_mgr).to_lowercase()),
-        pep668_managed: pep668,
-    }
-}
-
-fn detect_python_test_runner(target: &Path) -> Option<String> {
-    // pytest indicators
-    if target.join("pytest.ini").exists() {
-        return Some("pytest".into());
-    }
-    if target.join("pyproject.toml").exists() {
-        let content = std::fs::read_to_string(target.join("pyproject.toml")).unwrap_or_default();
-        if content.contains("[tool.pytest") {
-            return Some("pytest".into());
+fn python_interpreter(root: &Path) -> PathBuf {
+    // Prefer project-local venv
+    for candidate in [".venv/bin/python", "venv/bin/python", ".venv/bin/python3"] {
+        let p = root.join(candidate);
+        if p.exists() {
+            return p;
         }
     }
-    if target.join("setup.cfg").exists() {
-        let content = std::fs::read_to_string(target.join("setup.cfg")).unwrap_or_default();
-        if content.contains("[tool:pytest]") || content.contains("[pytest]") {
-            return Some("pytest".into());
-        }
-    }
-    // Check if pytest is available on PATH
-    if check_tool("pytest", &["--version"]).is_some() {
-        return Some("pytest".into());
-    }
-    Some("unittest".into())
+    // System python3
+    PathBuf::from("python3")
 }
 
-// ---------------------------------------------------------------------------
-// JavaScript / TypeScript
-// ---------------------------------------------------------------------------
+fn probe_python(root: &Path) -> PythonProbe {
+    let interpreter = python_interpreter(root);
+    let interp_str = interpreter.to_string_lossy().to_string();
 
-/// Probe JavaScript/TypeScript environment at `target`.
-pub fn probe_javascript(target: &Path) -> JsEnv {
-    use super::js_env::{self, JsEnvironment, JsTestRunner};
+    let version = run_cmd_stdout(&interp_str, &["-c", "import sys; print(sys.version.split()[0])"])
+        .unwrap_or_else(|| "unknown".to_string());
 
-    let env = JsEnvironment::detect(target);
-
-    // Determine runtime
-    let (runtime_name, runtime_version) = if target.join("bun.lockb").exists()
-        || target.join("bunfig.toml").exists()
-    {
-        let v = get_version("bun", &["--version"]);
-        ("bun".to_string(), v)
-    } else if target.join("deno.json").exists() || target.join("deno.jsonc").exists() {
-        let v = get_version("deno", &["--version"]);
-        ("deno".to_string(), v)
-    } else {
-        let v = get_version("node", &["--version"]);
-        ("node".to_string(), v)
-    };
+    // Detect venv
+    let venv: Option<PathBuf> = [".venv", "venv", ".env"]
+        .iter()
+        .map(|v| root.join(v))
+        .find(|p| p.join("bin/python").exists() || p.join("bin/python3").exists());
 
     // Package manager
-    let package_manager = if let Some(ref e) = env {
-        js_env::install_command(e).to_string()
-    } else {
-        // Fallback: inspect lockfiles
-        if target.join("yarn.lock").exists() {
-            "yarn".to_string()
-        } else if target.join("pnpm-lock.yaml").exists() {
-            "pnpm".to_string()
-        } else {
-            "npm".to_string()
-        }
-    };
-
-    // Test runner
-    let test_runner = if let Some(ref e) = env {
-        let (bin, args) = js_env::test_command(e);
-        let runner_name = args.first().cloned().unwrap_or(bin);
-        Some(match e.test_runner {
-            JsTestRunner::Jest => "jest".to_string(),
-            JsTestRunner::Mocha => "mocha".to_string(),
-            JsTestRunner::Vitest => "vitest".to_string(),
-            JsTestRunner::BunTest => "bun-test".to_string(),
-            JsTestRunner::DenoTest => "deno-test".to_string(),
-            JsTestRunner::NpmScript => runner_name,
-        })
+    let package_manager: Option<String> = if run_cmd_stdout("uv", &["--version"]).is_some() {
+        Some("uv".to_string())
+    } else if run_cmd_stdout("poetry", &["--version"]).is_some() {
+        Some("poetry".to_string())
+    } else if run_cmd_stdout("pdm", &["--version"]).is_some() {
+        Some("pdm".to_string())
+    } else if run_cmd_stdout("pip", &["--version"]).is_some() {
+        Some("pip".to_string())
     } else {
         None
     };
 
-    // Coverage tool: v8 for node >= 16, istanbul otherwise
-    let coverage_tool = if runtime_name == "node" {
-        let major: Option<u32> = runtime_version
-            .trim_start_matches('v')
-            .split('.')
-            .next()
-            .and_then(|s| s.parse().ok());
-        if major.map(|m| m >= 16).unwrap_or(false) {
-            Some("v8".to_string())
-        } else {
-            Some("istanbul".to_string())
-        }
-    } else if runtime_name == "bun" {
-        Some("bun-coverage".to_string())
-    } else if runtime_name == "deno" {
-        Some("deno-coverage".to_string())
-    } else {
-        None
-    };
+    // pytest availability
+    let pytest_available = std::process::Command::new(&interp_str)
+        .args(["-c", "import pytest"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
-    JsEnv {
-        runtime: runtime_name,
-        version: runtime_version,
+    // coverage.py
+    let coverage_py_available = std::process::Command::new(&interp_str)
+        .args(["-c", "import coverage"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    // PEP 668 — check for EXTERNALLY-MANAGED marker
+    let pep668_managed = run_cmd_stdout(
+        &interp_str,
+        &[
+            "-c",
+            "import sysconfig, os; print(os.path.exists(os.path.join(sysconfig.get_path('stdlib'), '..', 'EXTERNALLY-MANAGED')))",
+        ],
+    )
+    .map(|s| s.trim() == "True")
+    .unwrap_or(false);
+
+    PythonProbe {
+        version,
+        interpreter,
+        venv,
         package_manager,
-        test_runner,
-        coverage_tool,
+        pytest_available,
+        coverage_py_available,
+        pep668_managed,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Rust
-// ---------------------------------------------------------------------------
+fn probe_rust(root: &Path) -> RustProbe {
+    // Active toolchain
+    let toolchain = run_cmd_stdout("rustup", &["show", "active-toolchain"])
+        .map(|s| {
+            // "stable-x86_64-apple-darwin (default)" → keep first word
+            s.split_whitespace()
+                .next()
+                .unwrap_or("stable")
+                .to_string()
+        })
+        .or_else(|| run_cmd_stdout("rustc", &["--version"]))
+        .unwrap_or_else(|| "unknown".to_string());
 
-/// Probe Rust environment at `target`.
-pub fn probe_rust(_target: &Path) -> RustEnv {
-    // rustc --version → "rustc 1.76.0 (07dca489a 2024-02-04)"
-    let version_line = get_version("rustc", &["--version"]);
-    let version = version_line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or(&version_line)
-        .to_string();
+    // cargo-llvm-cov
+    let llvm_cov = which_bin("cargo-llvm-cov")
+        .or_else(|| which_bin_path(root, "cargo-llvm-cov"));
 
-    // toolchain: e.g. "stable-aarch64-apple-darwin" via rustup show active-toolchain
-    let toolchain = get_version("rustup", &["show", "active-toolchain"])
-        .split_whitespace()
-        .next()
-        .unwrap_or("stable")
-        .to_string();
+    // cargo-nextest
+    let nextest_available = run_cmd_stdout("cargo", &["nextest", "--version"]).is_some();
 
-    let llvm_cov = check_tool("cargo-llvm-cov", &["--version"]).or_else(|| {
-        // cargo-llvm-cov may be invoked as subcommand
-        check_tool("cargo", &["llvm-cov", "--version"])
-    });
-
-    let nextest = check_tool("cargo-nextest", &["--version"]).or_else(|| {
-        check_tool("cargo", &["nextest", "--version"])
-    });
-
-    RustEnv {
-        toolchain: if toolchain.is_empty() {
-            "stable".into()
-        } else {
-            toolchain
-        },
-        version,
+    RustProbe {
+        toolchain,
         llvm_cov,
-        nextest,
+        nextest_available,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Go
-// ---------------------------------------------------------------------------
+fn probe_node(root: &Path) -> NodeProbe {
+    let version = run_cmd_stdout("node", &["--version"]).unwrap_or_else(|| "unknown".to_string());
 
-/// Probe Go environment at `target`.
-pub fn probe_go(_target: &Path) -> GoEnv {
-    let version_line = get_version("go", &["version"]);
-    // "go version go1.21.5 linux/amd64" → "go1.21.5"
-    let version = version_line
-        .split_whitespace()
-        .nth(2)
-        .unwrap_or(&version_line)
-        .to_string();
-
-    GoEnv {
-        version,
-        go_cover: which("go"),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// JVM (Java + Kotlin)
-// ---------------------------------------------------------------------------
-
-/// Probe JVM environment at `target`.
-pub fn probe_jvm(target: &Path) -> JvmEnv {
-    // java -version writes to stderr
-    let java_version = check_tool("java", &["-version"]).map(|s| {
-        // First line: `java version "21.0.1"` or `openjdk version "21.0.1"`
-        s.split('"').nth(1).unwrap_or(&s).to_string()
-    });
-
-    let kotlin_version = check_tool("kotlinc", &["-version"]).map(|s| {
-        // "kotlinc-jvm 1.9.22 (JRE 21.0.1+...)"
-        s.split_whitespace().nth(1).unwrap_or(&s).to_string()
-    });
-
-    let build_tool = Some(super::java::detect_build_tool(target).to_string());
-
-    // Coverage: kover (Kotlin) or jacoco (Java)
-    let coverage_tool = if kotlin_version.is_some() {
-        if super::kotlin::detect_kover_plugin(target) {
-            Some("kover".to_string())
-        } else {
-            Some("jacoco".to_string())
-        }
+    // Detect package manager from lockfile
+    let package_manager: Option<String> = if root.join("yarn.lock").exists() {
+        Some("yarn".to_string())
+    } else if root.join("pnpm-lock.yaml").exists() {
+        Some("pnpm".to_string())
+    } else if root.join("bun.lockb").exists() || root.join("bun.lock").exists() {
+        Some("bun".to_string())
+    } else if root.join("package-lock.json").exists() {
+        Some("npm".to_string())
     } else {
-        Some("jacoco".to_string())
-    };
-
-    JvmEnv {
-        java_version,
-        kotlin_version,
-        build_tool,
-        coverage_tool,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Ruby
-// ---------------------------------------------------------------------------
-
-/// Probe Ruby environment at `target`.
-pub fn probe_ruby(target: &Path) -> RubyEnv {
-    use super::ruby::RubyRunner;
-
-    let ruby_bin = RubyRunner::<apex_core::command::RealCommandRunner>::resolve_ruby();
-    let version = get_version(ruby_bin, &["--version"])
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("")
-        .to_string();
-
-    let test_runner = if target.join("spec").exists() || target.join(".rspec").exists() {
-        Some("rspec".to_string())
-    } else {
-        Some("minitest".to_string())
-    };
-
-    // Version manager
-    let version_manager = if std::process::Command::new("mise")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
-        Some("mise".to_string())
-    } else if std::process::Command::new("rbenv")
-        .arg("--version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
-        Some("rbenv".to_string())
-    } else {
-        None
-    };
-
-    // simplecov is always "available" as a gem; check if it's in Gemfile
-    let coverage_tool = if target.join("Gemfile").exists() {
-        let content = std::fs::read_to_string(target.join("Gemfile")).unwrap_or_default();
-        if content.contains("simplecov") {
-            Some("simplecov".to_string())
+        // Fallback: check what's in PATH
+        if run_cmd_stdout("yarn", &["--version"]).is_some() {
+            Some("yarn".to_string())
+        } else if run_cmd_stdout("pnpm", &["--version"]).is_some() {
+            Some("pnpm".to_string())
         } else {
             None
         }
+    };
+
+    NodeProbe {
+        version,
+        package_manager,
+    }
+}
+
+fn probe_go() -> GoProbe {
+    let version =
+        run_cmd_stdout("go", &["version"])
+            .map(|s| {
+                // "go version go1.22.1 linux/amd64" → "go1.22.1"
+                s.split_whitespace()
+                    .nth(2)
+                    .unwrap_or("unknown")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+    GoProbe { version }
+}
+
+fn probe_java(root: &Path) -> JavaProbe {
+    let version = run_cmd_stdout("java", &["-version"])
+        .or_else(|| {
+            // java -version often prints to stderr
+            std::process::Command::new("java")
+                .arg("-version")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stderr).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let build_tool: Option<String> = if root.join("pom.xml").exists() {
+        Some("maven".to_string())
+    } else if root.join("build.gradle").exists() || root.join("build.gradle.kts").exists() {
+        Some("gradle".to_string())
     } else {
         None
     };
 
-    RubyEnv {
+    JavaProbe {
         version,
-        test_runner,
-        coverage_tool,
-        version_manager,
+        build_tool,
     }
 }
 
 // ---------------------------------------------------------------------------
-// C / C++
+// Helpers
 // ---------------------------------------------------------------------------
 
-/// Probe C/C++ environment at `target`.
-pub fn probe_c_cpp(target: &Path) -> CCppEnv {
-    // Detect compiler: prefer clang, fall back to gcc
-    let (compiler, version) = if which("clang") {
-        let v = get_version("clang", &["--version"]);
-        ("clang".to_string(), v)
-    } else if which("gcc") {
-        let v = get_version("gcc", &["--version"]);
-        ("gcc".to_string(), v)
-    } else {
-        ("cc".to_string(), String::new())
-    };
-
-    // Build system: check common markers
-    let build_system = if target.join("xmake.lua").exists() {
-        Some("xmake".to_string())
-    } else if target.join("CMakeLists.txt").exists() {
-        Some("cmake".to_string())
-    } else if target.join("meson.build").exists() {
-        Some("meson".to_string())
-    } else if target.join("Makefile").exists() || target.join("makefile").exists() {
-        Some("make".to_string())
-    } else if target.join("configure.ac").exists() || target.join("configure").exists() {
-        Some("autoconf".to_string())
-    } else {
-        None
-    };
-
-    // Coverage tool
-    let coverage_tool = if which("llvm-cov") {
-        Some("llvm-cov".to_string())
-    } else if which("gcov") {
-        Some("gcov".to_string())
-    } else {
-        None
-    };
-
-    CCppEnv {
-        compiler,
-        version,
-        build_system,
-        coverage_tool,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Swift
-// ---------------------------------------------------------------------------
-
-/// Probe Swift environment at `target`.
-pub fn probe_swift(_target: &Path) -> SwiftEnv {
-    let version_line = get_version("swift", &["--version"]);
-    // "swift-driver version: 1.87.3 Apple Swift version 5.9.2 ..."
-    // or "Swift version 5.9.2 (swift-5.9.2-RELEASE)"
-    let version = version_line
-        .split("version ")
-        .nth(1)
-        .and_then(|s| s.split_whitespace().next())
-        .unwrap_or(&version_line)
-        .to_string();
-
-    let spm = which("swift");
-    let coverage = check_tool("xcrun", &["llvm-cov", "--version"]).is_some();
-
-    SwiftEnv {
-        version,
-        spm,
-        coverage,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// C# / .NET
-// ---------------------------------------------------------------------------
-
-/// Probe .NET/C# environment at `target`.
-pub fn probe_dotnet(target: &Path) -> DotnetEnv {
-    let version = get_version("dotnet", &["--version"]);
-
-    // Check coverlet
-    let coverage_tool = if has_coverlet(target) {
-        Some("coverlet".to_string())
-    } else {
-        None
-    };
-
-    DotnetEnv {
-        version,
-        coverage_tool,
-    }
-}
-
-fn has_coverlet(target: &Path) -> bool {
-    if let Ok(entries) = std::fs::read_dir(target) {
-        for entry in entries.flatten() {
-            if entry.path().extension().and_then(|e| e.to_str()) == Some("csproj") {
-                if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                    if content.contains("coverlet") || content.contains("Coverlet") {
-                        return true;
-                    }
+fn which_bin(name: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH")
+        .as_deref()
+        .and_then(|path| {
+            std::env::split_paths(path).find_map(|dir| {
+                let candidate = dir.join(name);
+                if candidate.is_file() {
+                    Some(candidate)
+                } else {
+                    None
                 }
-            }
-        }
-    }
-    false
+            })
+        })
 }
 
-// ---------------------------------------------------------------------------
-// Full probe
-// ---------------------------------------------------------------------------
-
-/// Build a complete `EnvironmentProbe` for a target directory, populating
-/// the field that corresponds to `lang`.
-pub fn probe_all(target: &Path, lang: Language) -> EnvironmentProbe {
-    let mut probe = EnvironmentProbe::empty(target);
-    probe.primary_language = Some(lang.to_string());
-
-    match lang {
-        Language::Python => probe.python = Some(probe_python(target)),
-        Language::JavaScript => probe.javascript = Some(probe_javascript(target)),
-        Language::Rust => probe.rust = Some(probe_rust(target)),
-        Language::Go => probe.go = Some(probe_go(target)),
-        Language::Java | Language::Kotlin => probe.java = Some(probe_jvm(target)),
-        Language::Ruby => probe.ruby = Some(probe_ruby(target)),
-        Language::C | Language::Cpp => probe.c_cpp = Some(probe_c_cpp(target)),
-        Language::Swift => probe.swift = Some(probe_swift(target)),
-        Language::CSharp => probe.csharp = Some(probe_dotnet(target)),
-        Language::Wasm => {} // no env struct for Wasm
+fn which_bin_path(root: &Path, name: &str) -> Option<PathBuf> {
+    let candidate = root.join("target").join("release").join(name);
+    if candidate.is_file() {
+        Some(candidate)
+    } else {
+        None
     }
-
-    probe
 }
 
 // ---------------------------------------------------------------------------
@@ -515,163 +499,131 @@ pub fn probe_all(target: &Path, lang: Language) -> EnvironmentProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apex_core::types::Language;
-    use std::path::Path;
-
-    // -----------------------------------------------------------------------
-    // get_version helper
-    // -----------------------------------------------------------------------
+    use tempfile::TempDir;
 
     #[test]
-    fn get_version_nonexistent_command_returns_empty() {
-        let v = get_version("__apex_no_such_binary__", &["--version"]);
-        assert_eq!(v, "");
+    fn probe_default_is_empty() {
+        let probe = EnvironmentProbe::default();
+        assert!(probe.python.is_none());
+        assert!(probe.rust.is_none());
+        assert!(probe.node.is_none());
+        assert_eq!(probe.summary(), "no language toolchain detected");
     }
 
     #[test]
-    fn get_version_known_tool_returns_nonempty() {
-        // `true` is always on PATH and exits 0, but produces no output —
-        // use `echo` as an always-present command that writes stdout.
-        let v = get_version("echo", &["hello"]);
-        assert_eq!(v, "hello");
-    }
-
-    // -----------------------------------------------------------------------
-    // check_tool helper
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn check_tool_nonexistent_returns_none() {
-        let r = check_tool("__apex_no_such_binary__", &["--version"]);
-        assert!(r.is_none());
+    fn is_fresh_for_new_probe() {
+        let probe = EnvironmentProbe {
+            collected_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            ..Default::default()
+        };
+        assert!(probe.is_fresh());
     }
 
     #[test]
-    fn check_tool_present_tool_returns_some() {
-        let r = check_tool("echo", &["world"]);
-        assert!(r.is_some());
-        assert_eq!(r.unwrap(), "world");
+    fn is_stale_for_old_probe() {
+        let probe = EnvironmentProbe {
+            collected_at: 0, // epoch
+            ..Default::default()
+        };
+        assert!(!probe.is_fresh());
     }
 
-    // -----------------------------------------------------------------------
-    // probe_rust: returns a populated RustEnv
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn probe_rust_returns_toolchain_string() {
-        let env = probe_rust(Path::new("/tmp"));
-        // In a CI environment rustc is present; version should be non-empty.
-        // We can't assert exact values, just structural correctness.
-        // If rustc is absent the version will be "".
-        let _ = &env.toolchain; // just access it
-        let _ = &env.version;
+    fn save_and_load_cache_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let probe = EnvironmentProbe {
+            collected_at: 9999,
+            rust: Some(RustProbe {
+                toolchain: "stable".to_string(),
+                llvm_cov: None,
+                nextest_available: true,
+            }),
+            ..Default::default()
+        };
+
+        probe.save_cache(root).unwrap();
+        let loaded = EnvironmentProbe::load_cached(root).unwrap();
+        assert_eq!(loaded.collected_at, 9999);
+        let rs = loaded.rust.unwrap();
+        assert_eq!(rs.toolchain, "stable");
+        assert!(rs.nextest_available);
     }
 
-    // -----------------------------------------------------------------------
-    // probe_python: returns a PythonEnv with at least interpreter set
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn probe_python_returns_populated_env() {
-        let tmp = tempfile::tempdir().unwrap();
-        let env = probe_python(tmp.path());
-        // interpreter must be non-empty PathBuf
-        assert!(!env.interpreter.as_os_str().is_empty());
+    fn load_cache_returns_none_when_missing() {
+        let tmp = TempDir::new().unwrap();
+        assert!(EnvironmentProbe::load_cached(tmp.path()).is_none());
     }
 
-    // -----------------------------------------------------------------------
-    // probe_go: version string from `go version`
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn probe_go_returns_env() {
-        let env = probe_go(Path::new("/tmp"));
-        // go_cover is true only when `go` is on PATH; just check no panic
-        let _ = env.go_cover;
-        let _ = &env.version;
+    fn summary_python_only() {
+        let probe = EnvironmentProbe {
+            collected_at: 0,
+            python: Some(PythonProbe {
+                version: "3.14.3".to_string(),
+                interpreter: PathBuf::from(".venv/bin/python"),
+                venv: Some(PathBuf::from(".venv")),
+                package_manager: Some("uv".to_string()),
+                pytest_available: true,
+                coverage_py_available: true,
+                pep668_managed: false,
+            }),
+            ..Default::default()
+        };
+        let s = probe.summary();
+        assert!(s.contains("3.14.3"), "version in summary");
+        assert!(s.contains("uv"), "package manager in summary");
+        assert!(s.contains("pytest"), "pytest in summary");
     }
 
-    // -----------------------------------------------------------------------
-    // probe_all: primary_language matches input
-    // -----------------------------------------------------------------------
-
     #[test]
-    fn probe_all_primary_language_matches_input() {
-        let tmp = tempfile::tempdir().unwrap();
-        let probe = probe_all(tmp.path(), Language::Python);
-        assert_eq!(probe.primary_language.as_deref(), Some("python"));
+    fn summary_rust_only() {
+        let probe = EnvironmentProbe {
+            collected_at: 0,
+            rust: Some(RustProbe {
+                toolchain: "stable".to_string(),
+                llvm_cov: Some(PathBuf::from("/usr/bin/cargo-llvm-cov")),
+                nextest_available: true,
+            }),
+            ..Default::default()
+        };
+        let s = probe.summary();
+        assert!(s.contains("stable"), "toolchain in summary");
+        assert!(s.contains("llvm-cov"), "llvm-cov in summary");
+        assert!(s.contains("nextest"), "nextest in summary");
     }
 
-    // -----------------------------------------------------------------------
-    // probe_all: Python language → python field is Some
-    // -----------------------------------------------------------------------
+    #[test]
+    fn probe_all_rust_project_detects_rust_section() {
+        let tmp = TempDir::new().unwrap();
+        // Create a minimal Cargo.toml so the opportunistic detection fires.
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]\nname=\"test\"\n").unwrap();
+        let probe = probe_all(tmp.path(), Language::Rust);
+        // We may or may not have rustc in PATH in CI, but the section should exist.
+        assert!(probe.rust.is_some(), "Rust section should be populated for a Rust project");
+    }
 
     #[test]
-    fn probe_all_python_populates_python_field() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn probe_all_python_project_detects_python_section() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("pyproject.toml"), "[project]\nname=\"test\"\n").unwrap();
         let probe = probe_all(tmp.path(), Language::Python);
         assert!(probe.python.is_some());
-        assert!(probe.javascript.is_none());
+    }
+
+    #[test]
+    fn probe_all_no_project_files_is_language_driven() {
+        let tmp = TempDir::new().unwrap();
+        // No files at all, language = Go
+        let probe = probe_all(tmp.path(), Language::Go);
+        // go section should still be populated (we always try for the explicit lang)
+        assert!(probe.go.is_some());
         assert!(probe.rust.is_none());
-    }
-
-    // -----------------------------------------------------------------------
-    // probe_all: Rust language → rust field is Some
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn probe_all_rust_populates_rust_field() {
-        let tmp = tempfile::tempdir().unwrap();
-        let probe = probe_all(tmp.path(), Language::Rust);
-        assert!(probe.rust.is_some());
         assert!(probe.python.is_none());
-    }
-
-    // -----------------------------------------------------------------------
-    // probe_all: Kotlin → java field (shared JvmEnv)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn probe_all_kotlin_populates_java_field() {
-        let tmp = tempfile::tempdir().unwrap();
-        let probe = probe_all(tmp.path(), Language::Kotlin);
-        assert!(probe.java.is_some());
-    }
-
-    // -----------------------------------------------------------------------
-    // probe_all: Wasm → no crash, no language field set
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn probe_all_unknown_language_wasm_no_crash() {
-        let tmp = tempfile::tempdir().unwrap();
-        let probe = probe_all(tmp.path(), Language::Wasm);
-        assert!(probe.python.is_none());
-        assert!(probe.rust.is_none());
-        assert!(probe.javascript.is_none());
-        assert_eq!(probe.primary_language.as_deref(), Some("wasm"));
-    }
-
-    // -----------------------------------------------------------------------
-    // probe_all: C → c_cpp field
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn probe_all_c_populates_c_cpp_field() {
-        let tmp = tempfile::tempdir().unwrap();
-        let probe = probe_all(tmp.path(), Language::C);
-        assert!(probe.c_cpp.is_some());
-    }
-
-    // -----------------------------------------------------------------------
-    // probe_dotnet: version field populated (dotnet may not be on PATH)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn probe_dotnet_does_not_panic() {
-        let tmp = tempfile::tempdir().unwrap();
-        let env = probe_dotnet(tmp.path());
-        // coverage_tool None is fine when no csproj present
-        assert!(env.coverage_tool.is_none());
     }
 }

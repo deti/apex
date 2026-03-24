@@ -110,22 +110,6 @@ fn select_coverage_tool(env: &JsEnvironment, target: &Path) -> CoverageToolConfi
                     };
                 }
             }
-
-            // NpmScript: use NODE_V8_COVERAGE env var to collect V8 coverage
-            // without wrapping the test command.  This is the safest approach
-            // for projects with custom test harnesses (TypeScript, Angular, etc.)
-            // — Node.js writes V8 coverage JSON files to the specified dir.
-            if env.test_runner == JsTestRunner::NpmScript {
-                let v8_dir = target.join(".apex_coverage_js").join("v8_raw");
-                return CoverageToolConfig {
-                    tool: CoverageTool::C8,
-                    command: vec!["npm".into(), "test".into()],
-                    output_path: CoverageOutput::FilePath(v8_dir.clone()),
-                    format: CoverageFormat::V8,
-                    node_v8_coverage_dir: Some(v8_dir),
-                };
-            }
-
             match env.module_system {
                 ModuleSystem::ESM | ModuleSystem::Mixed => {
                     let report_dir = target.join(".apex_coverage_js");
@@ -507,22 +491,21 @@ impl Instrumentor for JavaScriptInstrumentor {
             CoverageFormat::V8 => {
                 match &config.output_path {
                     CoverageOutput::FilePath(p) if config.node_v8_coverage_dir.is_some() => {
-                        // NODE_V8_COVERAGE path: dir contains multiple V8 JSON files,
+                        // Bun path: NODE_V8_COVERAGE dir contains multiple V8 JSON files,
                         // one per script.  Collect and merge them all.
-                        // Used by Bun and NpmScript (any NODE_V8_COVERAGE consumer).
                         let v8_dir = p;
                         if !v8_dir.exists() {
                             return Err(ApexError::Instrumentation(format!(
-                                "V8 coverage directory not found at {}; \
-                                 ensure the test command ran successfully",
+                                "Bun V8 coverage directory not found at {}; \
+                                 ensure bun test ran successfully",
                                 v8_dir.display()
                             )));
                         }
 
-                        // Gather all .json files written into the coverage dir.
+                        // Gather all .json files written by bun into the coverage dir.
                         let json_files: Vec<PathBuf> = std::fs::read_dir(v8_dir)
                             .map_err(|e| {
-                                ApexError::Instrumentation(format!("read V8 coverage dir: {e}"))
+                                ApexError::Instrumentation(format!("read bun v8 coverage dir: {e}"))
                             })?
                             .filter_map(|entry| entry.ok())
                             .map(|e| e.path())
@@ -531,8 +514,8 @@ impl Instrumentor for JavaScriptInstrumentor {
 
                         if json_files.is_empty() {
                             return Err(ApexError::Instrumentation(
-                                "no V8 coverage JSON files found; \
-                                 check that NODE_V8_COVERAGE was honoured by the test runner"
+                                "no V8 coverage JSON files produced by bun test; \
+                                 check that NODE_V8_COVERAGE was honoured"
                                     .into(),
                             ));
                         }
@@ -540,7 +523,7 @@ impl Instrumentor for JavaScriptInstrumentor {
                         info!(
                             files = json_files.len(),
                             dir = %v8_dir.display(),
-                            "collecting NODE_V8_COVERAGE files"
+                            "collecting Bun NODE_V8_COVERAGE files"
                         );
 
                         // Merge results across all per-script JSON files.

@@ -9,7 +9,6 @@ description = "Template-based test synthesis for APEX"
 
 [dependencies]
 apex-core = { path = "../apex-core" }
-apex-cpg = { path = "../apex-cpg" }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

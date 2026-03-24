@@ -4,7 +4,6 @@
 //! Each section maps to a domain-specific sub-struct with serde defaults.
 //! The precedence chain is: CLI args > config file > struct defaults.
 
-use crate::probe::EnvironmentProbe;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -27,9 +26,6 @@ pub struct ApexConfig {
     pub reach: ReachConfig,
     pub cpg: CpgConfig,
     pub synth: SynthConfig,
-    /// Populated by `apex init` or an automatic probe run.
-    /// Absent until probing has been performed.
-    pub environment: Option<EnvironmentProbe>,
 }
 
 impl ApexConfig {
@@ -1163,21 +1159,5 @@ omit_patterns = ["vendor", "third_party"]
         assert_eq!(cfg.swift_test_ms, 600_000);
         assert_eq!(cfg.swift_codecov_ms, 60_000);
         assert_eq!(cfg.jvm_build_ms, 600_000);
-    }
-
-    // -----------------------------------------------------------------------
-    // environment field (Task 1.2)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn environment_field_absent_by_default() {
-        let cfg = ApexConfig::default();
-        assert!(cfg.environment.is_none());
-    }
-
-    #[test]
-    fn environment_field_absent_from_empty_toml() {
-        let cfg = ApexConfig::parse_toml("").unwrap();
-        assert!(cfg.environment.is_none());
     }
 }

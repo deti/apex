@@ -1,9 +1,8 @@
 //! Symbolic constraint solving for APEX.
 //!
 //! Includes an SMT-LIB2 solver, portfolio strategies, caching,
-//! and optional Z3/Kani/Bitwuzla integration behind feature flags.
+//! and optional Z3/Kani integration behind feature flags.
 
-pub mod bitwuzla_solver;
 pub mod bmc;
 pub mod cache;
 pub mod diversity;
@@ -17,7 +16,6 @@ pub mod solver;
 pub mod summaries;
 pub mod traits;
 
-pub use bitwuzla_solver::BitwuzlaSolver;
 pub use cache::CachingSolver;
 pub use diversity::DiversitySolver;
 pub use gradient::GradientSolver;
