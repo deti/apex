@@ -4,14 +4,8 @@ All notable changes to APEX will be documented in this file.
 
 ## [Unreleased]
 
-### Added
-- **Plugin `commands/` directory** — top-level `commands/` with all APEX slash commands, enabling Claude Code plugin discovery when repo is installed via `claude plugin install`
-- **`.claude-plugin/plugin.json`** — proper plugin manifest with name, version, description, and metadata for Claude Code plugin registry
-- **Agent files at `agents/` root** — agent `.md` files now live directly in `agents/` (alongside the legacy `agents/agents/` subdirectory) for plugin auto-discovery
-
-### Changed
-- **`agents/install.sh`** — updated to use new top-level `commands/` and `agents/` paths; suggests plugin install as preferred method
-- **`agents/README.md`** — documents plugin install (`claude plugin install github:sahajamoth/apex`) as recommended method, with full plugin directory structure
+### Fixed
+- **Claude Code plugin install** — repo was missing top-level `commands/` directory, so `claude plugin install` found zero slash commands; added `commands/` with all 9 APEX commands (`/apex`, `/apex-run`, `/apex-index`, etc.) and promoted agent `.md` files from `agents/agents/` to `agents/` root for auto-dispatch; added `.claude-plugin/plugin.json` manifest so the plugin registry picks up name, version, and metadata
 
 ## [0.5.0] — 2026-03-24
 
