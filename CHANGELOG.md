@@ -4,6 +4,9 @@ All notable changes to APEX will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Claude Code plugin install** — repo was missing top-level `commands/` directory, so `claude plugin install` found zero slash commands; added `commands/` with all 9 APEX commands (`/apex`, `/apex-run`, `/apex-index`, etc.) and promoted agent `.md` files from `agents/agents/` to `agents/` root for auto-dispatch; added `.claude-plugin/plugin.json` manifest so the plugin registry picks up name, version, and metadata
+
 ## [0.5.0] — 2026-03-24
 
 ### Added

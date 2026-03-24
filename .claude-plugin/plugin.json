@@ -1,0 +1,23 @@
+{
+  "name": "apex",
+  "version": "0.5.0",
+  "description": "APEX — Autonomous Path EXploration. Coverage-guided bug hunting, security detection (63 detectors), AI-driven test generation, and SDLC intelligence for 11 languages.",
+  "author": {
+    "name": "sahajamoth",
+    "email": "allexdav@gmail.com",
+    "url": "https://github.com/sahajamoth"
+  },
+  "repository": "https://github.com/sahajamoth/apex",
+  "homepage": "https://github.com/sahajamoth/apex",
+  "license": "MIT",
+  "keywords": [
+    "coverage",
+    "security",
+    "testing",
+    "static-analysis",
+    "fuzzing",
+    "detectors",
+    "mcp",
+    "agents"
+  ]
+}
