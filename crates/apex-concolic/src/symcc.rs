@@ -520,6 +520,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             input: None,
+            resource_metrics: None,
         };
         assert!(s.observe(&result).await.is_ok());
     }

@@ -297,6 +297,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             input: None,
+            resource_metrics: None,
         }
     }
 
@@ -334,6 +335,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             input: Some(b"interesting_input".to_vec()),
+            resource_metrics: None,
         };
         strategy.observe(&result).await.unwrap();
         assert_eq!(strategy.corpus.lock().unwrap().len(), 1);

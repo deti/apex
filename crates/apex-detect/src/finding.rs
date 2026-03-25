@@ -134,6 +134,7 @@ pub enum FindingCategory {
     ServiceDependency,
     SchemaMigrationRisk,
     TestDataQuality,
+    PerformanceRisk,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +166,14 @@ pub enum Evidence {
     ReachabilityChain {
         tool: String,
         paths: Vec<String>,
+    },
+    PerformanceProfile {
+        function: String,
+        metric: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        baseline_value: Option<f64>,
+        measured_value: f64,
+        input_description: String,
     },
 }
 

@@ -1052,6 +1052,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             input: None,
+            resource_metrics: None,
         };
         s.observe(&result).await.unwrap();
     }
@@ -2700,6 +2701,7 @@ mod tests {
             stdout: "output".to_string(),
             stderr: "error".to_string(),
             input: None,
+            resource_metrics: None,
         };
         s.observe(&result).await.unwrap();
     }
@@ -2716,6 +2718,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             input: None,
+            resource_metrics: None,
         };
         s.observe(&result).await.unwrap();
     }

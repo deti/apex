@@ -456,6 +456,17 @@ pub struct ExecutionTrace {
     pub lines_hit: Vec<(u64, u32)>, // (file_id, line)
 }
 
+/// System-level resource usage captured after a sandboxed execution.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct ResourceMetrics {
+    /// Wall-clock time from spawn to exit, in milliseconds.
+    pub wall_time_ms: u64,
+    /// User-mode CPU time consumed by the child process, in milliseconds.
+    pub cpu_time_ms: u64,
+    /// Peak resident set size of the child process, in bytes.
+    pub peak_memory_bytes: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionResult {
     pub seed_id: SeedId,
@@ -469,6 +480,9 @@ pub struct ExecutionResult {
     /// The input bytes that produced this result (for corpus feedback).
     #[serde(default)]
     pub input: Option<Vec<u8>>,
+    /// System-level resource measurements captured after the child exits.
+    #[serde(default)]
+    pub resource_metrics: Option<ResourceMetrics>,
 }
 
 // ---------------------------------------------------------------------------
@@ -688,6 +702,64 @@ pub struct AgentCoverageResult {
     pub errors_encountered: Vec<String>,
     pub tools_used: Vec<String>,
     pub duration_secs: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Complexity estimation
+// ---------------------------------------------------------------------------
+
+/// Asymptotic complexity class fitted from empirical measurements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ComplexityClass {
+    /// O(1) — constant time
+    Constant,
+    /// O(log n)
+    Logarithmic,
+    /// O(n)
+    Linear,
+    /// O(n log n)
+    LinearLogarithmic,
+    /// O(n²)
+    Quadratic,
+    /// O(n³)
+    Cubic,
+    /// O(2^n)
+    Exponential,
+}
+
+impl std::fmt::Display for ComplexityClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ComplexityClass::Constant => write!(f, "O(1)"),
+            ComplexityClass::Logarithmic => write!(f, "O(log n)"),
+            ComplexityClass::Linear => write!(f, "O(n)"),
+            ComplexityClass::LinearLogarithmic => write!(f, "O(n log n)"),
+            ComplexityClass::Quadratic => write!(f, "O(n\u{00b2})"),
+            ComplexityClass::Cubic => write!(f, "O(n\u{00b3})"),
+            ComplexityClass::Exponential => write!(f, "O(2^n)"),
+        }
+    }
+}
+
+/// Result of empirical complexity estimation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComplexityEstimate {
+    /// Best-fitting asymptotic complexity class.
+    pub complexity: ComplexityClass,
+    /// R² coefficient of determination for the best-fitting model (0.0–1.0).
+    pub confidence: f64,
+    /// Number of (size, measurement) samples used.
+    pub sample_count: usize,
+}
+
+impl ComplexityEstimate {
+    pub fn new(complexity: ComplexityClass, confidence: f64, sample_count: usize) -> Self {
+        ComplexityEstimate {
+            complexity,
+            confidence,
+            sample_count,
+        }
+    }
 }
 
 impl Default for AgentCoverageResult {

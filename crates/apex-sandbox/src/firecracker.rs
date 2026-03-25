@@ -518,6 +518,7 @@ impl Sandbox for FirecrackerSandbox {
             stdout: String::from_utf8_lossy(&response.stdout).to_string(),
             stderr: String::from_utf8_lossy(&response.stderr).to_string(),
             input: None,
+            resource_metrics: None,
         })
     }
 

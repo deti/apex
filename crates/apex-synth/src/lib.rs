@@ -21,6 +21,7 @@ pub mod kotlin;
 pub mod llm;
 pub mod mutation_gen;
 pub mod mutation_hint;
+pub mod perf_prompts;
 pub mod prompt_registry;
 pub mod property;
 pub mod python;

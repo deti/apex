@@ -164,6 +164,7 @@ impl Sandbox for RubyTestSandbox {
                     stdout: String::new(),
                     stderr: String::new(),
                     input: None,
+                    resource_metrics: None,
                 });
             }
             Ok(Err(e)) => return Err(ApexError::Sandbox(format!("ruby wait: {e}"))),
@@ -214,6 +215,7 @@ impl Sandbox for RubyTestSandbox {
             stdout,
             stderr,
             input: None,
+            resource_metrics: None,
         })
     }
 

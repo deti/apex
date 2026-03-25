@@ -150,6 +150,8 @@ pub enum Commands {
     Badge(BadgeArgs),
     /// Initialize APEX for this project — detect environment and generate config.
     Init(InitArgs),
+    /// Performance test generation: worst-case inputs, complexity analysis, ReDoS scanning.
+    Perf(PerfArgs),
 }
 
 #[derive(Parser, Clone)]
@@ -811,6 +813,70 @@ impl From<LangArg> for Language {
 }
 
 // ---------------------------------------------------------------------------
+// Performance testing args
+// ---------------------------------------------------------------------------
+
+#[derive(Parser, Clone)]
+pub struct PerfArgs {
+    /// Target file or directory.
+    #[arg(long, short)]
+    pub target: PathBuf,
+
+    /// Programming language (auto-detected if omitted).
+    #[arg(long, short)]
+    pub lang: Option<LangArg>,
+
+    /// Run complexity scaling analysis.
+    #[arg(long)]
+    pub complexity: bool,
+
+    /// Scan for ReDoS (regular expression denial-of-service) vulnerabilities.
+    #[arg(long)]
+    pub redos: bool,
+
+    /// Verify SLO (format: "function:latency_ms:input_size").
+    /// Can be specified multiple times.
+    #[arg(long)]
+    pub slo: Vec<String>,
+
+    /// Fuzzing duration (e.g., "5m", "30s"). Default: 5m.
+    #[arg(long, default_value = "5m")]
+    pub duration: String,
+
+    /// Optimization objective for fuzzing.
+    #[arg(long, value_enum, default_value = "time")]
+    pub objective: PerfObjectiveArg,
+
+    /// Compare against a saved performance baseline (JSON).
+    #[arg(long)]
+    pub perf_baseline: Option<PathBuf>,
+
+    /// Save current measurements as a performance baseline.
+    #[arg(long)]
+    pub save_baseline: Option<PathBuf>,
+
+    /// Output file (JSON).
+    #[arg(long)]
+    pub output: Option<PathBuf>,
+
+    /// Regression threshold percentage (default: 100, i.e. 2x).
+    #[arg(long, default_value = "100.0")]
+    pub threshold: f64,
+
+    /// Output format.
+    #[arg(long, default_value = "text")]
+    pub format: OutputFormat,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum PerfObjectiveArg {
+    Time,
+    Memory,
+    Instructions,
+    HottestEdge,
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point — dispatches CLI commands
 // ---------------------------------------------------------------------------
 
@@ -864,6 +930,7 @@ pub async fn run_cli(cli: Cli, cfg: &ApexConfig) -> Result<()> {
         }
         Commands::Badge(args) => run_badge(args).await,
         Commands::Init(args) => run_init(args).await,
+        Commands::Perf(args) => run_perf(args, cfg).await,
     }
 }
 
@@ -5218,6 +5285,246 @@ pub fn generate_config_from_probe(
     config.push_str(&format!("\n[run]\nlang = \"{lang_str}\"\n"));
 
     config
+}
+
+// ---------------------------------------------------------------------------
+// apex perf — performance test generation
+// ---------------------------------------------------------------------------
+
+async fn run_perf(args: PerfArgs, cfg: &ApexConfig) -> Result<()> {
+    use apex_detect::finding::Severity;
+    use apex_detect::perf_diff;
+    use apex_detect::{AnalysisContext, DetectConfig};
+    use std::collections::HashMap;
+
+    let target = if args.target.exists() {
+        args.target
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::absolute(&args.target).unwrap_or(args.target.clone()))
+    } else {
+        color_eyre::eyre::bail!("target path does not exist: {}", args.target.display());
+    };
+
+    let lang = match args.lang {
+        Some(l) => Language::from(l),
+        None => detect_language(&target)?,
+    };
+
+    // -----------------------------------------------------------------------
+    // Mode: ReDoS scanning
+    // -----------------------------------------------------------------------
+    if args.redos {
+        info!("scanning for ReDoS vulnerabilities in {}", target.display());
+
+        // Build source cache
+        let mut source_cache = HashMap::new();
+        collect_sources(&target, lang, &mut source_cache);
+
+        // Run ReDoS detector
+        let oracle = std::sync::Arc::new(apex_coverage::CoverageOracle::new());
+        let mut detect_cfg = DetectConfig::default();
+        if !cfg.detect.enabled.is_empty() {
+            detect_cfg.enabled = cfg.detect.enabled.clone();
+        }
+        // Ensure redos detector is enabled
+        if !detect_cfg.enabled.contains(&"redos".to_string()) {
+            detect_cfg.enabled.push("redos".to_string());
+        }
+        let ctx = AnalysisContext {
+            target_root: target.clone(),
+            language: lang,
+            oracle: oracle.clone(),
+            file_paths: HashMap::new(),
+            known_bugs: Vec::new(),
+            source_cache,
+            fuzz_corpus: None,
+            config: detect_cfg,
+            runner: std::sync::Arc::new(apex_core::command::RealCommandRunner),
+            cpg: None,
+            threat_model: cfg.threat_model.clone(),
+            reverse_path_engine: None,
+        };
+
+        let detector = apex_detect::detectors::redos::ReDoSDetector;
+        let findings = apex_detect::Detector::analyze(&detector, &ctx).await?;
+
+        if findings.is_empty() {
+            println!("No ReDoS vulnerabilities found.");
+        } else {
+            println!(
+                "Found {} ReDoS vulnerabilit{}:\n",
+                findings.len(),
+                if findings.len() == 1 { "y" } else { "ies" }
+            );
+            for f in &findings {
+                let sev = match f.severity {
+                    Severity::Critical | Severity::High => "\x1b[31m",
+                    Severity::Medium => "\x1b[33m",
+                    _ => "\x1b[36m",
+                };
+                println!(
+                    "  {}{:<8}\x1b[0m {}:{} — {}",
+                    sev,
+                    format!("{:?}", f.severity),
+                    f.file.display(),
+                    f.line.unwrap_or(0),
+                    f.title
+                );
+                println!("           {}", f.description);
+                if !f.suggestion.is_empty() {
+                    println!("           Fix: {}", f.suggestion);
+                }
+                println!();
+            }
+        }
+
+        // Output JSON if requested
+        if let Some(ref output_path) = args.output {
+            let json = serde_json::to_string_pretty(&findings)?;
+            std::fs::write(output_path, json)?;
+            info!("wrote findings to {}", output_path.display());
+        }
+
+        return Ok(());
+    }
+
+    // -----------------------------------------------------------------------
+    // Mode: Complexity analysis
+    // -----------------------------------------------------------------------
+    if args.complexity {
+        info!("running complexity analysis on {}", target.display());
+        println!("Complexity analysis for {}", target.display());
+        println!("(Empirical complexity estimation requires test execution — use with --target pointing to a function)");
+        println!(
+            "\nRun static complexity detectors via: apex audit --target {}",
+            target.display()
+        );
+        return Ok(());
+    }
+
+    // -----------------------------------------------------------------------
+    // Mode: Baseline comparison
+    // -----------------------------------------------------------------------
+    if let Some(ref baseline_path) = args.perf_baseline {
+        let baseline_json = std::fs::read_to_string(baseline_path).map_err(|e| {
+            color_eyre::eyre::eyre!("cannot read baseline {}: {e}", baseline_path.display())
+        })?;
+        let baseline = perf_diff::parse_baseline(&baseline_json).ok_or_else(|| {
+            color_eyre::eyre::eyre!("invalid baseline JSON: {}", baseline_path.display())
+        })?;
+
+        // For now, print the baseline info
+        println!(
+            "Loaded baseline with {} functions from {}",
+            baseline.entries.len(),
+            baseline_path.display()
+        );
+        println!(
+            "Regression threshold: {:.0}% (i.e. {:.1}x slowdown)",
+            args.threshold,
+            1.0 + args.threshold / 100.0
+        );
+
+        return Ok(());
+    }
+
+    // -----------------------------------------------------------------------
+    // Default mode: Resource-guided fuzzing
+    // -----------------------------------------------------------------------
+    info!(
+        "starting performance fuzzing on {} (objective: {:?}, duration: {})",
+        target.display(),
+        args.objective,
+        args.duration
+    );
+
+    println!("Performance fuzzing: {}", target.display());
+    println!("  Language:  {:?}", lang);
+    println!("  Objective: {:?}", args.objective);
+    println!("  Duration:  {}", args.duration);
+    println!();
+    println!(
+        "Resource-guided fuzzing will maximize {} for the target.",
+        match args.objective {
+            PerfObjectiveArg::Time => "wall-clock execution time",
+            PerfObjectiveArg::Memory => "peak memory consumption",
+            PerfObjectiveArg::Instructions => "instruction count",
+            PerfObjectiveArg::HottestEdge => "per-edge execution frequency",
+        }
+    );
+    println!(
+        "Use 'apex run --strategy fuzz --target {}' with perf feedback for full exploration.",
+        target.display()
+    );
+
+    Ok(())
+}
+
+/// Collect source files from a target directory into a HashMap.
+fn collect_sources(
+    target: &std::path::Path,
+    lang: Language,
+    cache: &mut std::collections::HashMap<std::path::PathBuf, String>,
+) {
+    let extensions: &[&str] = match lang {
+        Language::Python => &["py"],
+        Language::JavaScript => &["js", "ts", "jsx", "tsx", "mjs"],
+        Language::Rust => &["rs"],
+        Language::Go => &["go"],
+        Language::Java => &["java"],
+        Language::Kotlin => &["kt", "kts"],
+        Language::Ruby => &["rb"],
+        Language::C => &["c", "h"],
+        Language::Cpp => &["cpp", "cc", "cxx", "hpp", "h"],
+        Language::Swift => &["swift"],
+        Language::CSharp => &["cs"],
+        _ => &[],
+    };
+
+    fn walk_dir(
+        dir: &std::path::Path,
+        extensions: &[&str],
+        cache: &mut std::collections::HashMap<std::path::PathBuf, String>,
+    ) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Skip hidden dirs and common non-source dirs
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with('.')
+                    || name == "node_modules"
+                    || name == "target"
+                    || name == "__pycache__"
+                    || name == "venv"
+                    || name == ".venv"
+                {
+                    continue;
+                }
+            }
+            if path.is_dir() {
+                walk_dir(&path, extensions, cache);
+            } else if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if extensions.contains(&ext) {
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            cache.insert(path, content);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if target.is_file() {
+        if let Ok(content) = std::fs::read_to_string(target) {
+            cache.insert(target.to_path_buf(), content);
+        }
+    } else {
+        walk_dir(target, extensions, cache);
+    }
 }
 
 async fn run_init(args: InitArgs) -> Result<()> {

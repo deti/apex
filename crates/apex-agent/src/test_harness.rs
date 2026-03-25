@@ -149,6 +149,7 @@ pub fn pass_result(seed_id: SeedId) -> ExecutionResult {
         stdout: String::new(),
         stderr: String::new(),
         input: None,
+        resource_metrics: None,
     }
 }
 
@@ -163,6 +164,7 @@ pub fn crash_result(seed_id: SeedId) -> ExecutionResult {
         stdout: String::new(),
         stderr: "segfault".into(),
         input: None,
+        resource_metrics: None,
     }
 }
 
@@ -180,6 +182,7 @@ pub fn pass_with_branches(
         stdout: String::new(),
         stderr: String::new(),
         input: None,
+        resource_metrics: None,
     }
 }
 

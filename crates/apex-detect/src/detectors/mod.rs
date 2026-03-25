@@ -84,6 +84,11 @@ pub mod connection_in_loop;
 pub mod missing_shutdown_handler;
 pub mod poisoned_mutex_recovery;
 
+// Performance detectors
+pub mod algorithmic_complexity;
+pub mod hash_collision_risk;
+pub mod redos;
+
 // Type-state analysis
 pub mod typestate;
 
@@ -160,6 +165,11 @@ pub use xss::XssDetector;
 pub use connection_in_loop::ConnectionInLoopDetector;
 pub use missing_shutdown_handler::MissingShutdownHandlerDetector;
 pub use poisoned_mutex_recovery::PoisonedMutexRecoveryDetector;
+
+// Performance detectors
+pub use algorithmic_complexity::AlgorithmicComplexityDetector;
+pub use hash_collision_risk::HashCollisionRiskDetector;
+pub use redos::ReDoSDetector;
 
 // Type-state analysis
 pub use typestate::TypeStateDetector;

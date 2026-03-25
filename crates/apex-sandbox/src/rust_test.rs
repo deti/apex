@@ -128,6 +128,7 @@ impl Sandbox for RustTestSandbox {
             stdout,
             stderr,
             input: None,
+            resource_metrics: None,
         })
     }
 

@@ -241,6 +241,7 @@ impl Sandbox for PythonTestSandbox {
                     stdout: String::new(),
                     stderr: String::new(),
                     input: None,
+                    resource_metrics: None,
                 });
             }
             Ok(Err(e)) => return Err(e),
@@ -374,6 +375,7 @@ impl Sandbox for PythonTestSandbox {
             stdout,
             stderr,
             input: None,
+            resource_metrics: None,
         })
     }
 

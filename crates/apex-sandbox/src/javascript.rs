@@ -146,6 +146,7 @@ impl Sandbox for JavaScriptTestSandbox {
             stdout,
             stderr,
             input: None,
+            resource_metrics: None,
         })
     }
 

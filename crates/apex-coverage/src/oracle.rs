@@ -340,6 +340,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             input: None,
+            resource_metrics: None,
         };
         let delta = oracle.merge_from_result(&result);
         assert_eq!(delta.newly_covered.len(), 1);
@@ -600,6 +601,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             input: None,
+            resource_metrics: None,
         };
         let delta = oracle.merge_from_result(&result);
         assert!(delta.newly_covered.is_empty());

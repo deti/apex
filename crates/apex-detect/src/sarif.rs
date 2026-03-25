@@ -134,6 +134,7 @@ fn category_to_cwes(category: &FindingCategory) -> Vec<String> {
         FindingCategory::ServiceDependency => vec!["CWE-1127".into()],
         FindingCategory::SchemaMigrationRisk => vec!["CWE-1066".into()],
         FindingCategory::TestDataQuality => vec!["CWE-1007".into()],
+        FindingCategory::PerformanceRisk => vec!["CWE-400".into()],
     }
 }
 

@@ -3,10 +3,15 @@ use apex_core::{
     command::{CommandRunner, CommandSpec, RealCommandRunner},
     error::{ApexError, Result},
     traits::Sandbox,
-    types::{BranchId, ExecutionResult, ExecutionStatus, InputSeed, Language, SnapshotId},
+    types::{
+        BranchId, ExecutionResult, ExecutionStatus, InputSeed, Language, ResourceMetrics,
+        SnapshotId,
+    },
 };
 use apex_coverage::CoverageOracle;
 use async_trait::async_trait;
+#[cfg(unix)]
+use libc;
 use std::{path::PathBuf, sync::Arc, time::Instant};
 use tracing::{debug, error, instrument, warn};
 
@@ -133,6 +138,55 @@ impl<R: CommandRunner> ProcessSandbox<R> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Resource measurement helpers
+// ---------------------------------------------------------------------------
+
+/// Collect resource usage for child processes via `getrusage(RUSAGE_CHILDREN)`.
+///
+/// Called immediately after the child process exits so that the kernel's
+/// accumulated child accounting reflects (at least) the just-reaped child.
+#[cfg(unix)]
+fn collect_rusage(wall_time_ms: u64) -> ResourceMetrics {
+    // SAFETY: rusage is a plain C struct; zeroing it is a valid initialiser.
+    let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
+    // SAFETY: RUSAGE_CHILDREN is a valid flag; &mut ru is a valid pointer.
+    let rc = unsafe { libc::getrusage(libc::RUSAGE_CHILDREN, &mut ru) };
+    if rc != 0 {
+        // getrusage failed — return what we know.
+        return ResourceMetrics {
+            wall_time_ms,
+            cpu_time_ms: 0,
+            peak_memory_bytes: 0,
+        };
+    }
+
+    // ru_utime: user CPU time as { tv_sec, tv_usec }
+    let cpu_time_ms = ru.ru_utime.tv_sec as u64 * 1_000 + ru.ru_utime.tv_usec as u64 / 1_000;
+
+    // ru_maxrss semantics differ by platform:
+    //   Linux  — kilobytes  → multiply by 1024
+    //   macOS  — bytes      → use directly
+    #[cfg(target_os = "linux")]
+    let peak_memory_bytes = ru.ru_maxrss as u64 * 1_024;
+    #[cfg(not(target_os = "linux"))]
+    let peak_memory_bytes = ru.ru_maxrss as u64;
+
+    ResourceMetrics {
+        wall_time_ms,
+        cpu_time_ms,
+        peak_memory_bytes,
+    }
+}
+
+#[cfg(not(unix))]
+fn collect_rusage(wall_time_ms: u64) -> ResourceMetrics {
+    ResourceMetrics {
+        wall_time_ms,
+        ..Default::default()
+    }
+}
+
 #[async_trait]
 impl<R: CommandRunner> Sandbox for ProcessSandbox<R> {
     #[instrument(skip(self, input), fields(seed_id = ?input.id))]
@@ -163,6 +217,10 @@ impl<R: CommandRunner> Sandbox for ProcessSandbox<R> {
         // Read bitmap before returning, regardless of exit status.
         let bitmap = shm.as_ref().map(|s| s.read());
 
+        // Collect resource usage immediately after the child exits (before any
+        // further work that could perturb the kernel's child accounting).
+        let resource_metrics = Some(collect_rusage(duration_ms));
+
         match result {
             Err(ApexError::Timeout(_)) => {
                 warn!(timeout_ms = self.timeout_ms, "Process timed out");
@@ -175,6 +233,7 @@ impl<R: CommandRunner> Sandbox for ProcessSandbox<R> {
                     stdout: String::new(),
                     stderr: String::new(),
                     input: None,
+                    resource_metrics,
                 })
             }
             Err(e) => {
@@ -222,6 +281,7 @@ impl<R: CommandRunner> Sandbox for ProcessSandbox<R> {
                     stdout: String::from_utf8_lossy(&output.stdout).to_string(),
                     stderr: String::from_utf8_lossy(&output.stderr).to_string(),
                     input: None,
+                    resource_metrics,
                 })
             }
         }
@@ -1259,6 +1319,116 @@ mod tests {
         assert!(
             result.input.is_none(),
             "BUG: input is never populated in ExecutionResult"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // resource_metrics tests
+    // -----------------------------------------------------------------------
+
+    /// After a successful run, resource_metrics must be Some and wall_time_ms
+    /// must equal duration_ms (both derived from the same wall-clock elapsed time).
+    #[tokio::test]
+    async fn run_populates_resource_metrics_on_success() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_spec| {
+            Ok(CommandOutput {
+                exit_code: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        });
+
+        let sb = ProcessSandbox::with_runner(
+            Language::Python,
+            PathBuf::from("/tmp"),
+            vec!["python3".into()],
+            mock,
+        );
+
+        let input = make_input(b"test");
+        let result = sb.run(&input).await.unwrap();
+
+        let metrics = result
+            .resource_metrics
+            .expect("resource_metrics must be Some after execution");
+        assert_eq!(
+            metrics.wall_time_ms, result.duration_ms,
+            "wall_time_ms must equal duration_ms"
+        );
+    }
+
+    /// After a timeout, resource_metrics must also be Some with wall_time_ms > 0
+    /// when the mock returns immediately (wall_time_ms can be 0 for near-instant
+    /// mocks, but the field must be populated).
+    #[tokio::test]
+    async fn run_populates_resource_metrics_on_timeout() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command()
+            .returning(|_spec| Err(ApexError::Timeout(5000)));
+
+        let sb = ProcessSandbox::with_runner(
+            Language::Python,
+            PathBuf::from("/tmp"),
+            vec!["python3".into()],
+            mock,
+        )
+        .with_timeout(5000);
+
+        let input = make_input(b"input");
+        let result = sb.run(&input).await.unwrap();
+        assert_eq!(result.status, ExecutionStatus::Timeout);
+
+        let metrics = result
+            .resource_metrics
+            .expect("resource_metrics must be Some even on timeout");
+        assert_eq!(
+            metrics.wall_time_ms, result.duration_ms,
+            "wall_time_ms must equal duration_ms on timeout"
+        );
+    }
+
+    /// resource_metrics.wall_time_ms is non-negative (u64 invariant) and
+    /// peak_memory_bytes / cpu_time_ms are also non-negative (u64 invariant).
+    /// This test uses a mock that returns immediately and verifies all three
+    /// fields are present and have sensible types.
+    #[tokio::test]
+    async fn run_resource_metrics_fields_are_present() {
+        let mut mock = MockCmdRunner::new();
+        mock.expect_run_command().returning(|_spec| {
+            Ok(CommandOutput {
+                exit_code: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        });
+
+        let sb = ProcessSandbox::with_runner(
+            Language::C,
+            PathBuf::from("/tmp"),
+            vec!["./a.out".into()],
+            mock,
+        );
+
+        let input = make_input(b"data");
+        let result = sb.run(&input).await.unwrap();
+
+        let metrics = result
+            .resource_metrics
+            .expect("resource_metrics must be populated");
+        // All fields are u64 so always >= 0; just verify they are present and
+        // wall_time_ms is consistent with the top-level duration_ms field.
+        assert_eq!(metrics.wall_time_ms, result.duration_ms);
+        // cpu_time_ms and peak_memory_bytes should be reasonable (not absurdly large).
+        assert!(
+            metrics.cpu_time_ms < 3_600_000,
+            "cpu_time_ms should not be hours: {}",
+            metrics.cpu_time_ms
+        );
+        assert!(
+            metrics.peak_memory_bytes < 256 * 1024 * 1024 * 1024,
+            "peak_memory_bytes should not be > 256 GiB: {}",
+            metrics.peak_memory_bytes
         );
     }
 }

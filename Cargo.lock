@@ -132,7 +132,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "apex-agent"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "apex-cli"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-agent",
  "apex-concolic",
@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "apex-concolic"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -205,7 +205,7 @@ dependencies = [
 
 [[package]]
 name = "apex-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -222,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "apex-coverage"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "dashmap",
@@ -235,7 +235,7 @@ dependencies = [
 
 [[package]]
 name = "apex-cpg"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "apex-core",
@@ -244,12 +244,14 @@ dependencies = [
  "tempfile",
  "toml",
  "tree-sitter",
+ "tree-sitter-go",
+ "tree-sitter-javascript",
  "tree-sitter-python",
 ]
 
 [[package]]
 name = "apex-detect"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -274,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "apex-fuzz"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -295,11 +297,12 @@ dependencies = [
 
 [[package]]
 name = "apex-index"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "async-trait",
  "quick-xml",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
@@ -311,7 +314,7 @@ dependencies = [
 
 [[package]]
 name = "apex-instrument"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "addr2line 0.21.0",
  "apex-core",
@@ -330,11 +333,15 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tree-sitter",
+ "tree-sitter-go",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
 ]
 
 [[package]]
 name = "apex-lang"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "async-trait",
@@ -349,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "apex-mir"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "proptest",
@@ -358,16 +365,18 @@ dependencies = [
 
 [[package]]
 name = "apex-reach"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "regex",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
 [[package]]
 name = "apex-rpc"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -387,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "apex-sandbox"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "apex-coverage",
@@ -400,6 +409,7 @@ dependencies = [
  "mockall",
  "nix 0.27.1",
  "proptest",
+ "seccompiler",
  "serde",
  "serde_json",
  "serial_test",
@@ -413,10 +423,11 @@ dependencies = [
 
 [[package]]
 name = "apex-symbolic"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
  "async-trait",
+ "bitwuzla-sys",
  "proptest",
  "serde",
  "serde_json",
@@ -428,9 +439,10 @@ dependencies = [
 
 [[package]]
 name = "apex-synth"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "apex-core",
+ "apex-cpg",
  "async-trait",
  "serde",
  "serde_json",
@@ -678,6 +690,15 @@ dependencies = [
  "radium",
  "tap",
  "wyz",
+]
+
+[[package]]
+name = "bitwuzla-sys"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b94d1edd30589c93fe14bfcfe614ae0ac83a6e3626e0e8afa7c8578bd520b579"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -3522,6 +3543,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 
 [[package]]
+name = "seccompiler"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "345a3e4dddf721a478089d4697b83c6c0a8f5bf16086f6c13397e4534eb6e2e5"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "security-framework"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4275,6 +4305,26 @@ dependencies = [
  "regex",
  "regex-syntax",
  "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-go"
+version = "0.23.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b13d476345220dbe600147dd444165c5791bf85ef53e28acbedd46112ee18431"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-javascript"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf40bf599e0416c16c125c3cec10ee5ddc7d1bb8b0c60fa5c4de249ad34dc1b1"
+dependencies = [
+ "cc",
  "tree-sitter-language",
 ]
 

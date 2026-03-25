@@ -147,6 +147,7 @@ mod tests {
             stdout: String::new(),
             stderr: stderr.into(),
             input: None,
+            resource_metrics: None,
         }
     }
 

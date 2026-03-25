@@ -4,6 +4,22 @@ All notable changes to APEX will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`apex perf`** — new CLI subcommand for performance test generation with modes: `--redos` (scan for catastrophic backtracking in regex), `--complexity` (empirical algorithmic complexity estimation), `--slo` (SLO verification against latency/input-size bounds), and default resource-guided fuzzing (PerfFuzz approach)
+- **ReDoS detector** (`redos`) — static analysis of regular expressions for nested quantifiers and overlapping alternatives that cause exponential backtracking; emits CWE-1333 / CWE-400 findings with concrete worst-case pump strings
+- **Algorithmic complexity detector** (`algorithmic-complexity`) — identifies nested loops over same collection (O(n²)), recursive functions without memoization (O(2^n)), and quadratic list building patterns; emits CWE-400 findings
+- **Hash collision risk detector** (`hash-collision-risk`) — flags user-controlled input used as hash map keys in request handlers, enabling hash collision DoS (Crosby & Wallach 2003); emits CWE-400 findings
+- **`PerfFuzzStrategy`** — resource-guided fuzzing that maximizes wall-clock time, peak memory, instruction count, or per-edge execution frequency instead of branch coverage (PerfFuzz ISSTA 2018 approach)
+- **`PerfFeedback`** — multi-dimensional performance feedback tracker with per-edge execution count maximization
+- **`ComplexityEstimator`** — empirical complexity estimation from execution traces using least-squares curve fitting to O(1), O(log n), O(n), O(n log n), O(n²), O(n³), O(2^n) models (Goldsmith et al. 2007)
+- **`ResourceMetrics`** type — captures wall-clock time, CPU time, peak memory, allocation count, instruction count, and per-edge execution counts from test execution
+- **`ComplexityClass`** / **`ComplexityEstimate`** types — represent asymptotic complexity classifications with confidence scores
+- **`FindingCategory::PerformanceRisk`** — new finding category for performance-class defects
+- **`Evidence::PerformanceProfile`** — new evidence variant with function, metric, baseline/measured values, and worst-case input description
+- **Performance synthesis prompts** — LLM prompt strategies for worst-case input generation, ReDoS proof-of-concept tests, and SLO verification tests with per-language timing instrumentation
+- **Regex extraction** — structured multi-language regex pattern extraction from source code (Python, JavaScript, Rust, Go, Java, Ruby) for the ReDoS analysis pipeline
+- **Resource measurement in sandboxes** — `ProcessSandbox` now populates `ExecutionResult.resource_metrics` via `getrusage(RUSAGE_CHILDREN)` (wall time, CPU time, peak RSS)
+
 ### Fixed
 - **Claude Code plugin install** — repo was missing top-level `commands/` directory, so `claude plugin install` found zero slash commands; added `commands/` with all 9 APEX commands (`/apex`, `/apex-run`, `/apex-index`, etc.) and promoted agent `.md` files from `agents/agents/` to `agents/` root for auto-dispatch; added `.claude-plugin/plugin.json` manifest so the plugin registry picks up name, version, and metadata
 

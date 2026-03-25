@@ -173,6 +173,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             input,
+            resource_metrics: None,
         }
     }
 

@@ -236,6 +236,7 @@ mod tests {
                 stdout: String::new(),
                 stderr: String::new(),
                 input: None,
+                resource_metrics: None,
             })
         }
         async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -722,6 +723,7 @@ mod tests {
                 stdout: String::new(),
                 stderr: String::new(),
                 input: None,
+                resource_metrics: None,
             })
         }
         async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -1177,6 +1179,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: String::new(),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -1256,6 +1259,7 @@ mod tests {
                 stdout: String::new(),
                 stderr: "segfault".into(),
                 input: None,
+                resource_metrics: None,
             })
         }
         async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -1898,6 +1902,7 @@ mod tests {
                         stdout: String::new(),
                         stderr: String::new(),
                         input: None,
+                        resource_metrics: None,
                     })
                 } else {
                     Err(apex_core::error::ApexError::Other("sandbox err".into()))
@@ -1968,6 +1973,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: "assertion failed at src/lib.rs:42".into(),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -2044,6 +2050,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: "killed by oom at src/alloc.rs:99".into(),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -2397,6 +2404,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: String::new(),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -2561,6 +2569,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: String::new(),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -2646,6 +2655,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: String::new(),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -2762,6 +2772,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: "crash at src/x.rs:1".into(),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -2869,6 +2880,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: String::new(),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -3137,6 +3149,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: format!("crash at src/f{}.rs:{}", n, n + 1),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -3206,6 +3219,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: "crash at src/same.rs:1".into(),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -3333,6 +3347,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: "crash at src/combined.rs:10".into(),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -4081,6 +4096,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             input: None,
+            resource_metrics: None,
         };
         strategy.observe(&result).await.unwrap();
     }
@@ -4105,6 +4121,7 @@ mod tests {
                     stdout: String::new(),
                     stderr: String::new(),
                     input: None,
+                    resource_metrics: None,
                 })
             }
             async fn snapshot(&self) -> apex_core::error::Result<SnapshotId> {
@@ -4155,6 +4172,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             input: None,
+            resource_metrics: None,
         };
         // Direct call exercises the previously-uncovered observe() body
         strategy.observe(&result).await.unwrap();

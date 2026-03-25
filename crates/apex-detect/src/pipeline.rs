@@ -217,8 +217,19 @@ impl DetectorPipeline {
         if cfg.enabled.contains(&"connection-in-loop".into()) {
             detectors.push(Box::new(ConnectionInLoopDetector));
         }
+        if cfg.enabled.contains(&"redos".into()) {
+            detectors.push(Box::new(ReDoSDetector));
+        }
         if cfg.enabled.contains(&"poisoned-mutex-recovery".into()) && lang == Language::Rust {
             detectors.push(Box::new(PoisonedMutexRecoveryDetector));
+        }
+
+        // Performance detectors
+        if cfg.enabled.contains(&"algorithmic-complexity".into()) {
+            detectors.push(Box::new(AlgorithmicComplexityDetector));
+        }
+        if cfg.enabled.contains(&"hash-collision-risk".into()) {
+            detectors.push(Box::new(HashCollisionRiskDetector));
         }
 
         // Type-state analysis

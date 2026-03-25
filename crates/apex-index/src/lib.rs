@@ -11,6 +11,7 @@ pub mod java;
 pub mod kotlin;
 pub mod prioritize;
 pub mod python;
+pub mod regex_extract;
 pub mod ruby;
 pub mod rust;
 pub mod spec_mining;
