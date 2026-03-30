@@ -313,6 +313,27 @@ apex verify-boundaries --target . --lang python \
 
 </details>
 
+<details>
+<summary><strong>Pack G: Supply Chain Security</strong></summary>
+
+```bash
+# Full transitive dependency tree snapshot (Cargo, npm, Go, PyPI, +4 more)
+apex enterprise supply-chain-snapshot
+
+# Diff two snapshots — detect what changed deep in the dependency tree
+apex enterprise supply-chain-diff --from 1 --to 0
+
+# Risk scoring with 9 signal types (checksum mutation, coordinated updates, etc.)
+apex enterprise supply-chain-audit --threshold 5.0
+```
+
+Detects transitive dependency poisoning: A uses B, B uses C, C uses D — attacker
+compromises D, and months later D propagates into A through natural update cycles.
+Tree snapshots capture the full resolved dependency graph with depth, propagation
+paths, checksums, and provenance per node.
+
+</details>
+
 ---
 
 ## Claude Code Integration

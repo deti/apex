@@ -37,6 +37,7 @@ pub mod sarif;
 pub mod sbom;
 pub mod sca;
 pub mod schema_check;
+pub mod supply_chain;
 pub mod service_map;
 pub mod slo_check;
 pub mod test_data;
