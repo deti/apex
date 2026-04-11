@@ -16,8 +16,10 @@ links:
     type: references
   - target: 01KNWGA5G5JNAQP0QEYZXN6T2H
     type: supports
+  - target: 01KNZ2ZDM1XWWE840ADNCGKBMP
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 ---
 
 # Quadratic Accumulation and the Schlemiel-the-Painter Anti-pattern

@@ -8,8 +8,12 @@ links:
     type: related
   - target: 01KNWE2QACWYZJXRJ8QE78T043
     type: references
+  - target: 01KNZ2ZDMC9YQR6MDJ9FZJGSEZ
+    type: references
+  - target: 01KNZ2ZDN167V89N6CR6ZNRWYR
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://bheisler.github.io/criterion.rs/book/analysis.html"
 ---
 

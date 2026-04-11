@@ -14,8 +14,12 @@ links:
     type: related
   - target: 01KNWGA5GYY1GE3G957BDNKX3D
     type: related
+  - target: 01KNZ2ZDM8YHSYRFSJ399TWDWY
+    type: references
+  - target: 01KNZ2ZDMA4SCFK7QSPAJTPTGP
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 ---
 
 # Performance SLO Assertion and Regression Detection

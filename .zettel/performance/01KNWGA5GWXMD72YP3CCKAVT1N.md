@@ -8,8 +8,10 @@ links:
     type: references
   - target: 01KNWEGYB8807ET2427V3VCRJ3
     type: related
+  - target: 01KNZ2ZDKXQR1QP854KBJGKVEC
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://en.wikipedia.org/wiki/SipHash"
 ---
 

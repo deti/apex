@@ -22,8 +22,12 @@ links:
     type: references
   - target: 01KNWGA5F9YTQ01C15QNFHQGPT
     type: references
+  - target: 01KNZ2ZDMGGV8NPY88N04STZ6W
+    type: references
+  - target: 01KNZ3XK3QDTG1BB60XBMTNYFE
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 ---
 
 # Algorithmic Complexity Attacks

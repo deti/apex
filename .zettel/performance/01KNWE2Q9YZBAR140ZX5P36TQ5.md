@@ -48,8 +48,12 @@ links:
     type: references
   - target: 01KNWGA5FEAC0QN3PK6CAYP7T8
     type: references
+  - target: 01KNZ2ZDM5DNHY26MRQ9V2BPKT
+    type: references
+  - target: 01KNZ2ZDMGGV8NPY88N04STZ6W
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: docs/gaps/specs/performance-test-generation.md
 ---
 

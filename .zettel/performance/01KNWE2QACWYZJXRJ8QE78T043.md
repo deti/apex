@@ -14,8 +14,14 @@ links:
     type: references
   - target: 01KNWGA5GYY1GE3G957BDNKX3D
     type: references
+  - target: 01KNZ2ZDMC9YQR6MDJ9FZJGSEZ
+    type: references
+  - target: 01KNZ2ZDMVRHZNDNG62H2HTAQY
+    type: references
+  - target: 01KNZ2ZDN167V89N6CR6ZNRWYR
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 ---
 
 # Resource Measurement Methodology and Noise Mitigation

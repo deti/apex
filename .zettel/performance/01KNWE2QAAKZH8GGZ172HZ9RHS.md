@@ -16,8 +16,12 @@ links:
     type: references
   - target: 01KNWGA5GWXMD72YP3CCKAVT1N
     type: references
+  - target: 01KNZ2ZDKVZ6WW8VF9NXDW0XWG
+    type: references
+  - target: 01KNZ2ZDKXQR1QP854KBJGKVEC
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 ---
 
 # Hash Collision DoS and Modern Defences

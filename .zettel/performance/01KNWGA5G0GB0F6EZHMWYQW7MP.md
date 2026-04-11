@@ -12,8 +12,10 @@ links:
     type: references
   - target: 01KNWGA5GJ1VC19DXXAX3SS947
     type: references
+  - target: 01KNZ2ZDMJNCKQ2AZEYXENBX53
+    type: related
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://en.wikipedia.org/wiki/Billion_laughs_attack"
 ---
 

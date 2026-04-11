@@ -12,8 +12,14 @@ links:
     type: references
   - target: 01KNYZ7YKF7DHTFHJ50C7AE403
     type: related
+  - target: 01KNZ2ZDMQETAMQ5HSCZMW4R2G
+    type: references
+  - target: 01KNZ2ZDMSA9FAT4B6C0SXEY33
+    type: references
+  - target: 01KNZ3XK3T426EQQRP19CW2G82
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://swtch.com/~rsc/regexp/regexp1.html"
 ---
 

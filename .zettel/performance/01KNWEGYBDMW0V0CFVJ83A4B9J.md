@@ -12,8 +12,10 @@ links:
     type: references
   - target: 01KNWGA5GMWKV6AKP04D964G5H
     type: references
+  - target: 01KNZ2ZDMZM2PTFEAZ18TAJ3V0
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://dl.acm.org/doi/10.1145/3236024.3236027"
 venue: ESEC/FSE 2018
 authors: [James C. Davis, Christy A. Coghlan, Francisco Servant, Dongyoon Lee]

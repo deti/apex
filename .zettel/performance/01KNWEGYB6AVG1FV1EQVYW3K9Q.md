@@ -10,8 +10,10 @@ links:
     type: extends
   - target: 01KNWE2QA8H1GKHCVNHYS5QW1F
     type: extends
+  - target: 01KNZ2ZDM3M3BK0EBZPM968915
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://www.ndss-symposium.org/ndss-paper/hotfuzz-discovering-algorithmic-denial-of-service-vulnerabilities-through-guided-micro-fuzzing/"
 venue: NDSS 2020
 authors: [William Blair, Andrea Mambretti, Sajjad Arshad, Michael Weissbacher, William Robertson, Engin Kirda, Manuel Egele]

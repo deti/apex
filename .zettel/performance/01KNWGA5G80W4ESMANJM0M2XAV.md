@@ -8,8 +8,10 @@ links:
     type: related
   - target: 01KNWGA5G3XDK746J4N59G6VVW
     type: references
+  - target: 01KNZ2ZDMNY2HD6E56EBXDHMRE
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://github.com/google/re2"
 ---
 
