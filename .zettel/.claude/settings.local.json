@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(zettel --help)",
+      "Bash(zettel info:*)",
+      "Bash(python3 -c \"from zettel import Zettelkasten; print\\('ok'\\)\")",
+      "Bash(python3:*)",
+      "Bash(mkdir -p /Users/deti/Sources/apex/.zettel/performance/.zettel)",
+      "WebFetch(domain:cwe.mitre.org)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:www.carolemieux.com)",
+      "WebFetch(domain:www.ndss-symposium.org)",
+      "WebFetch(domain:www.usenix.org)",
+      "WebFetch(domain:theory.stanford.edu)",
+      "WebFetch(domain:dl.acm.org)",
+      "WebFetch(domain:davisjam.github.io)",
+      "WebFetch(domain:owasp.org)",
+      "WebFetch(domain:cheatsheetseries.owasp.org)",
+      "WebFetch(domain:en.wikipedia.org)",
+      "WebFetch(domain:capec.mitre.org)",
+      "WebFetch(domain:blog.cloudflare.com)",
+      "WebFetch(domain:stackstatus.tumblr.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:aflplus.plus)",
+      "WebFetch(domain:google.github.io)",
+      "WebFetch(domain:hypothesis.readthedocs.io)",
+      "WebFetch(domain:www.cs.rice.edu)",
+      "WebFetch(domain:people.csail.mit.edu)",
+      "WebFetch(domain:bheisler.github.io)",
+      "WebFetch(domain:k6.io)",
+      "WebFetch(domain:www.semanticscholar.org)",
+      "WebFetch(domain:openjdk.org)",
+      "WebFetch(domain:grafana.com)",
+      "Bash(zettel sync:*)",
+      "Bash(uv run:*)",
+      "Read(//Users/deti/Sources/zettel/**)",
+      "Read(//Users/deti/Sources/zettel/scripts/**)",
+      "Bash(zettel search:*)"
+    ]
+  }
+}
