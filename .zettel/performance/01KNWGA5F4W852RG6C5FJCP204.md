@@ -24,8 +24,16 @@ links:
     type: references
   - target: 01KNWGA5G0GB0F6EZHMWYQW7MP
     type: references
+  - target: 01KNYZ7YKMA92CCFZ16HD1H8J5
+    type: references
+  - target: 01KNZ301FV1M4DYXV6PN9BD1YZ
+    type: references
+  - target: 01KNZ2ZDMJNCKQ2AZEYXENBX53
+    type: references
+  - target: 01KNZ2ZDM5DNHY26MRQ9V2BPKT
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://cwe.mitre.org/data/definitions/400.html"
 ---
 

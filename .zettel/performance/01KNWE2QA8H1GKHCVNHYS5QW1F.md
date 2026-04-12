@@ -18,8 +18,22 @@ links:
     type: extends
   - target: 01KNWEGYB8807ET2427V3VCRJ3
     type: related
+  - target: 01KNZ301FV5ET9FFP6QX0RPPH8
+    type: extends
+  - target: 01KNZ301FVK668YHRW0HKF82BZ
+    type: extends
+  - target: 01KNZ301FVVKJ3YGQC55B3N754
+    type: extends
+  - target: 01KNZ301FV7BZB2X9338XPDNK0
+    type: extends
+  - target: 01KNZ301FVSD3QCQM0KD2Y1M1K
+    type: extends
+  - target: 01KNZ301FVNJ1JA9TKGG46472T
+    type: extends
+  - target: 01KNZ3XK3QDTG1BB60XBMTNYFE
+    type: related
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 ---
 
 # Worst-Case Input Generation Strategies

@@ -16,6 +16,8 @@ links:
     type: related
   - target: 01KNZ301FVEJEFXWZQRNCB36SS
     type: related
+  - target: 01KNZ2ZDMZM2PTFEAZ18TAJ3V0
+    type: related
 created: 2026-04-12
 modified: 2026-04-12
 source: "https://davisjam.github.io/publications/"

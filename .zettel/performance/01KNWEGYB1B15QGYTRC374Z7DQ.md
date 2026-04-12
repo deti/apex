@@ -14,8 +14,16 @@ links:
     type: extends
   - target: 01KNWE2QA8H1GKHCVNHYS5QW1F
     type: extends
+  - target: 01KNZ301FV5ET9FFP6QX0RPPH8
+    type: related
+  - target: 01KNZ301FVK668YHRW0HKF82BZ
+    type: related
+  - target: 01KNZ301FVSD3QCQM0KD2Y1M1K
+    type: related
+  - target: 01KNZ301FVNJ1JA9TKGG46472T
+    type: related
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://arxiv.org/abs/1708.08437"
 venue: ACM CCS 2017
 authors: [Theofilos Petsios, Jason Zhao, Angelos D. Keromytis, Suman Jana]

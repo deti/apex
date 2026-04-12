@@ -14,6 +14,16 @@ links:
     type: related
   - target: 01KNZ301FV584G004E2SRNW97Z
     type: related
+  - target: 01KNZ301FVAC85VSD6QSXHBTBN
+    type: related
+  - target: 01KNZ301FVV2BBBW67QZV0MWTM
+    type: related
+  - target: 01KNZ301FVQZCT0JNP97SDY1MH
+    type: related
+  - target: 01KNZ301FV9DXAXN39MPPAG9JV
+    type: related
+  - target: 01KNWEGYBDMW0V0CFVJ83A4B9J
+    type: related
 created: 2026-04-12
 modified: 2026-04-12
 source: "https://nvd.nist.gov/vuln/detail/CVE-2020-5243"

@@ -18,8 +18,26 @@ links:
     type: references
   - target: 01KNWGA5G5JNAQP0QEYZXN6T2H
     type: references
+  - target: 01KNZ301FVXKKT846W2GFQ6QZN
+    type: references
+  - target: 01KNZ301FVQZCT0JNP97SDY1MH
+    type: references
+  - target: 01KNZ301FV9DXAXN39MPPAG9JV
+    type: references
+  - target: 01KNZ301FVEJEFXWZQRNCB36SS
+    type: references
+  - target: 01KNZ301FV584G004E2SRNW97Z
+    type: references
+  - target: 01KNZ301FVAC85VSD6QSXHBTBN
+    type: references
+  - target: 01KNZ301FVRCH0P2GZS4CNGJ23
+    type: references
+  - target: 01KNZ301FVV2BBBW67QZV0MWTM
+    type: references
+  - target: 01KNZ2ZDM5DNHY26MRQ9V2BPKT
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://cwe.mitre.org/data/definitions/1333.html"
 ---
 

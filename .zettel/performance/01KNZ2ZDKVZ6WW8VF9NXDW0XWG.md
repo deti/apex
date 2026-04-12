@@ -10,6 +10,8 @@ links:
     type: extends
   - target: 01KNYZ7YKS8ARHAT2C0GPQCDPX
     type: related
+  - target: 01KNYZ7YKMA92CCFZ16HD1H8J5
+    type: related
 created: 2026-04-12
 modified: 2026-04-12
 source: "https://fahrplan.events.ccc.de/congress/2011/Fahrplan/events/4680.en.html"

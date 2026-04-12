@@ -12,6 +12,8 @@ links:
     type: related
   - target: 01KNWE2QA2KV1NN8QH32RA5EPA
     type: related
+  - target: 01KNZ4RPD1HFN3PDXPR09VY5Q8
+    type: references
 created: 2026-04-12
 modified: 2026-04-12
 source: "https://www.brendangregg.com/flamegraphs.html"

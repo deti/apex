@@ -10,6 +10,14 @@ links:
     type: related
   - target: 01KNWEGYB8807ET2427V3VCRJ3
     type: related
+  - target: 01KNYZ7YKMA92CCFZ16HD1H8J5
+    type: references
+  - target: 01KNZ2ZDMJNCKQ2AZEYXENBX53
+    type: references
+  - target: 01KNZ301FV5ET9FFP6QX0RPPH8
+    type: related
+  - target: 01KNZ3XK3QDTG1BB60XBMTNYFE
+    type: references
 created: 2026-04-12
 modified: 2026-04-12
 source: "https://en.wikipedia.org/wiki/Algorithmic_complexity_attack"

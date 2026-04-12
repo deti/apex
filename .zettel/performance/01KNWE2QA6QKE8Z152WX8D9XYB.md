@@ -26,8 +26,16 @@ links:
     type: related
   - target: 01KNWGA5GJ1VC19DXXAX3SS947
     type: related
+  - target: 01KNYZ7YKMA92CCFZ16HD1H8J5
+    type: related
+  - target: 01KNZ301FV1M4DYXV6PN9BD1YZ
+    type: related
+  - target: 01KNZ2ZDMJNCKQ2AZEYXENBX53
+    type: related
+  - target: 01KNZ301FVNJ1JA9TKGG46472T
+    type: related
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 ---
 
 # Resource Exhaustion Patterns (CWE-400 Family)

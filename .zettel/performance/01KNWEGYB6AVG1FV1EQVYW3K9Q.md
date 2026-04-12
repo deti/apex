@@ -12,6 +12,12 @@ links:
     type: extends
   - target: 01KNZ2ZDM3M3BK0EBZPM968915
     type: references
+  - target: 01KNZ301FV5ET9FFP6QX0RPPH8
+    type: related
+  - target: 01KNZ301FVSD3QCQM0KD2Y1M1K
+    type: related
+  - target: 01KNZ301FVK668YHRW0HKF82BZ
+    type: related
 created: 2026-04-10
 modified: 2026-04-12
 source: "https://www.ndss-symposium.org/ndss-paper/hotfuzz-discovering-algorithmic-denial-of-service-vulnerabilities-through-guided-micro-fuzzing/"

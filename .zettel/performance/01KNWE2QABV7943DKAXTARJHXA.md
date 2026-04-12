@@ -18,6 +18,8 @@ links:
     type: supports
   - target: 01KNZ2ZDM1XWWE840ADNCGKBMP
     type: references
+  - target: 01KNZ301FVY7EPHSBBT9VZKVQT
+    type: related
 created: 2026-04-10
 modified: 2026-04-12
 ---

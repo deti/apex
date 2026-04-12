@@ -10,6 +10,8 @@ links:
     type: references
   - target: 01KNWGA5FEAC0QN3PK6CAYP7T8
     type: references
+  - target: 01KNZ4RPD07XQ5DS86VV8XB7VW
+    type: references
 created: 2026-04-12
 modified: 2026-04-12
 source: "https://en.wikipedia.org/wiki/Zip_bomb"

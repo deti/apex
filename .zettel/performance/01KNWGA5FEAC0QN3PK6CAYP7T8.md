@@ -10,8 +10,12 @@ links:
     type: references
   - target: 01KNWGA5F4W852RG6C5FJCP204
     type: references
+  - target: 01KNZ301FV1M4DYXV6PN9BD1YZ
+    type: references
+  - target: 01KNZ2ZDMJNCKQ2AZEYXENBX53
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://cwe.mitre.org/data/definitions/789.html"
 ---
 

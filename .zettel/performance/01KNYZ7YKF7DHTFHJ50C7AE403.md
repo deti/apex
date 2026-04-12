@@ -10,8 +10,16 @@ links:
     type: references
   - target: 01KNYZ7YKH344XCTAFQAHQNYHG
     type: references
+  - target: 01KNZ2ZDMQETAMQ5HSCZMW4R2G
+    type: references
+  - target: 01KNZ3XK3T426EQQRP19CW2G82
+    type: references
+  - target: 01KNZ301FVXKKT846W2GFQ6QZN
+    type: related
+  - target: 01KNZ301FVQZCT0JNP97SDY1MH
+    type: related
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://en.wikipedia.org/wiki/ReDoS"
 ---
 

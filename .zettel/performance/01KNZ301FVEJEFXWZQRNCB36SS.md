@@ -14,6 +14,10 @@ links:
     type: related
   - target: 01KNWEGYBDMW0V0CFVJ83A4B9J
     type: related
+  - target: 01KNZ2ZDMZM2PTFEAZ18TAJ3V0
+    type: related
+  - target: 01KNZ301FVXKKT846W2GFQ6QZN
+    type: related
 created: 2026-04-12
 modified: 2026-04-12
 source: "https://semgrep.dev/blog/2020/improving-redos-detection-with-dlint-and-r2c/"

@@ -10,6 +10,10 @@ links:
     type: related
   - target: 01KNZ2ZDMQETAMQ5HSCZMW4R2G
     type: related
+  - target: 01KNZ301FVY7EPHSBBT9VZKVQT
+    type: related
+  - target: 01KNZ3XK3T426EQQRP19CW2G82
+    type: related
 created: 2026-04-12
 modified: 2026-04-12
 source: "https://research.swtch.com/glob"

@@ -6,8 +6,12 @@ tags: [owasp, dos, cheat-sheet, defence, mitigation, rate-limiting]
 links:
   - target: 01KNWE2QA6QKE8Z152WX8D9XYB
     type: references
+  - target: 01KNYZ7YKMA92CCFZ16HD1H8J5
+    type: references
+  - target: 01KNZ301FV1M4DYXV6PN9BD1YZ
+    type: references
 created: 2026-04-10
-modified: 2026-04-10
+modified: 2026-04-12
 source: "https://cheatsheetseries.owasp.org/cheatsheets/Denial_of_Service_Cheat_Sheet.html"
 ---
 
